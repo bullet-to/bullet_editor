@@ -56,6 +56,35 @@ void main() {
     });
   });
 
+  group('Document.stylesAt', () {
+    test('returns styles from segment at offset', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment('abc '),
+          const StyledSegment('bold', {InlineStyle.bold}),
+          const StyledSegment(' xyz'),
+        ]),
+      ]);
+      // Inside unstyled "abc "
+      expect(doc.stylesAt(0), <InlineStyle>{});
+      expect(doc.stylesAt(2), <InlineStyle>{});
+      // Inside bold "bold"
+      expect(doc.stylesAt(5), {InlineStyle.bold});
+      expect(doc.stylesAt(7), {InlineStyle.bold});
+      // At end of bold segment (offset 8 = boundary)
+      expect(doc.stylesAt(8), {InlineStyle.bold});
+      // Inside unstyled " xyz"
+      expect(doc.stylesAt(9), <InlineStyle>{});
+    });
+
+    test('returns empty for empty block', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: const []),
+      ]);
+      expect(doc.stylesAt(0), <InlineStyle>{});
+    });
+  });
+
   group('mergeSegments', () {
     test('merges adjacent same-style segments', () {
       final result = mergeSegments([

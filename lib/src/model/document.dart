@@ -1,4 +1,5 @@
 import 'block.dart';
+import 'inline_style.dart';
 
 /// Result of mapping a global TextField offset to a block + local offset.
 class BlockPosition {
@@ -82,6 +83,24 @@ class Document {
     final newBlocks = List<TextBlock>.from(blocks);
     newBlocks.removeAt(index);
     return Document(newBlocks);
+  }
+
+  /// Get the inline styles at a global TextField offset.
+  /// Returns the styles of the segment the offset falls within.
+  /// At a segment boundary, returns the styles of the preceding segment.
+  Set<InlineStyle> stylesAt(int globalOffset) {
+    final pos = blockAt(globalOffset);
+    final block = blocks[pos.blockIndex];
+
+    var offset = 0;
+    for (final seg in block.segments) {
+      final segEnd = offset + seg.text.length;
+      if (pos.localOffset <= segEnd && (pos.localOffset > offset || offset == 0)) {
+        return Set.of(seg.styles);
+      }
+      offset = segEnd;
+    }
+    return {};
   }
 
   @override
