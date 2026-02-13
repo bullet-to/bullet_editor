@@ -1,6 +1,6 @@
+import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:bullet_editor/bullet_editor.dart';
 
 void main() {
   group('EditorController', () {
@@ -39,9 +39,12 @@ void main() {
       // Start with a document that already has bold text.
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('hello', {InlineStyle.bold}),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('hello', {InlineStyle.bold}),
+            ],
+          ),
         ]),
       );
 
@@ -58,7 +61,9 @@ void main() {
       // The space should be bold.
       expect(controller.document.blocks[0].plainText, 'hello ');
       expect(controller.document.blocks[0].segments.length, 1);
-      expect(controller.document.blocks[0].segments[0].styles, {InlineStyle.bold});
+      expect(controller.document.blocks[0].segments[0].styles, {
+        InlineStyle.bold,
+      });
 
       // User types "w".
       controller.value = const TextEditingValue(
@@ -68,18 +73,23 @@ void main() {
 
       expect(controller.document.blocks[0].plainText, 'hello w');
       expect(controller.document.blocks[0].segments.length, 1);
-      expect(controller.document.blocks[0].segments[0].styles, {InlineStyle.bold});
+      expect(controller.document.blocks[0].segments[0].styles, {
+        InlineStyle.bold,
+      });
     });
 
     test('space typed at bold/unstyled boundary inherits bold', () {
       // "abc trigger bold" where "trigger" is bold.
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('abc '),
-            const StyledSegment('trigger', {InlineStyle.bold}),
-            const StyledSegment(' bold'),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('abc '),
+              const StyledSegment('trigger', {InlineStyle.bold}),
+              const StyledSegment(' bold'),
+            ],
+          ),
         ]),
       );
 
@@ -110,15 +120,21 @@ void main() {
         }
         pos += seg.text.length;
       }
-      expect(styleAtInsert, contains(InlineStyle.bold),
-          reason: 'Space typed after bold text should inherit bold');
+      expect(
+        styleAtInsert,
+        contains(InlineStyle.bold),
+        reason: 'Space typed after bold text should inherit bold',
+      );
     });
     test('Enter splits block and preserves styles on both halves', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('hello world', {InlineStyle.bold}),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('hello world', {InlineStyle.bold}),
+            ],
+          ),
         ]),
       );
 
@@ -138,8 +154,12 @@ void main() {
       expect(controller.document.blocks[0].plainText, 'hello');
       expect(controller.document.blocks[1].plainText, ' world');
       // Both halves should remain bold.
-      expect(controller.document.blocks[0].segments[0].styles, {InlineStyle.bold});
-      expect(controller.document.blocks[1].segments[0].styles, {InlineStyle.bold});
+      expect(controller.document.blocks[0].segments[0].styles, {
+        InlineStyle.bold,
+      });
+      expect(controller.document.blocks[1].segments[0].styles, {
+        InlineStyle.bold,
+      });
     });
 
     test('Backspace at block start merges blocks', () {
@@ -177,16 +197,19 @@ void main() {
       );
 
       expect(controller.document.blocks[0].plainText, 'hello');
-      expect(controller.document.blocks[0].segments[0].styles, {InlineStyle.bold});
+      expect(controller.document.blocks[0].segments[0].styles, {
+        InlineStyle.bold,
+      });
       expect(controller.value.selection.baseOffset, 5);
     });
 
     test('Multiple bold segments in one block', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('**one** and **two*'),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [const StyledSegment('**one** and **two*')],
+          ),
         ]),
         inputRules: [BoldWrapRule()],
       );
@@ -212,11 +235,14 @@ void main() {
     test('Deleting bold text keeps model consistent', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('abc '),
-            const StyledSegment('bold', {InlineStyle.bold}),
-            const StyledSegment(' xyz'),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('abc '),
+              const StyledSegment('bold', {InlineStyle.bold}),
+              const StyledSegment(' xyz'),
+            ],
+          ),
         ]),
       );
 
@@ -240,10 +266,13 @@ void main() {
 
     test('# space converts paragraph to H1 via controller', () {
       final controller = EditorController(
-        document: Document([
-          TextBlock(id: 'a', segments: const []),
-        ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), BoldWrapRule()],
+        document: Document([TextBlock(id: 'a', segments: const [])]),
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          BoldWrapRule(),
+        ],
       );
 
       // Type '#'
@@ -264,10 +293,13 @@ void main() {
 
     test('- space converts paragraph to list item via controller', () {
       final controller = EditorController(
-        document: Document([
-          TextBlock(id: 'a', segments: const []),
-        ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), BoldWrapRule()],
+        document: Document([TextBlock(id: 'a', segments: const [])]),
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          BoldWrapRule(),
+        ],
       );
 
       controller.value = const TextEditingValue(
@@ -291,10 +323,7 @@ void main() {
             blockType: BlockType.h1,
             segments: [const StyledSegment('Title')],
           ),
-          TextBlock(
-            id: 'b',
-            segments: [const StyledSegment('paragraph')],
-          ),
+          TextBlock(id: 'b', segments: [const StyledSegment('paragraph')]),
         ]),
         inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
       );
@@ -372,11 +401,7 @@ void main() {
     test('Enter on empty list item converts to paragraph', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(
-            id: 'a',
-            blockType: BlockType.listItem,
-            segments: const [],
-          ),
+          TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
         ]),
         inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
       );
@@ -392,30 +417,103 @@ void main() {
       expect(controller.document.blocks[0].blockType, BlockType.paragraph);
     });
 
+    test('outdent works on nested paragraph (not just list items)', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('parent')],
+            children: [
+              TextBlock(
+                id: 'b',
+                blockType: BlockType.paragraph,
+                segments: [const StyledSegment('nested para')],
+              ),
+            ],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), BoldWrapRule()],
+      );
+
+      // Cursor in nested paragraph.
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: TextSelection.collapsed(offset: controller.document.globalOffset(1, 0)),
+      );
+
+      controller.outdent();
+
+      // Should be outdented to root level.
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[1].id, 'b');
+      expect(controller.document.blocks[1].blockType, BlockType.paragraph);
+    });
+
+    test('backspace on empty list item keeps cursor in place', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.listItem,
+            segments: const [],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), BoldWrapRule()],
+      );
+
+      // "above\n" — cursor at start of empty list item (offset 6).
+      expect(controller.text, 'above\n');
+
+      controller.value = const TextEditingValue(
+        text: 'above\n',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+
+      // Backspace removes the \n — Flutter sends "above" with cursor at 5.
+      controller.value = const TextEditingValue(
+        text: 'above',
+        selection: TextSelection.collapsed(offset: 5),
+      );
+
+      // The list item should become a paragraph, NOT merge.
+      // Cursor should stay at offset 6 (start of the now-paragraph block).
+      expect(controller.document.allBlocks.length, 2);
+      expect(controller.document.allBlocks[1].blockType, BlockType.paragraph);
+      expect(controller.value.selection.baseOffset, 6);
+    });
+
     test('bold rule in second block of example doc', () {
       // Matches the example app's initial document.
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'b1', segments: [
-            const StyledSegment('Hello '),
-            const StyledSegment('bold world', {InlineStyle.bold}),
-            const StyledSegment('! This is the POC.'),
-          ]),
-          TextBlock(id: 'b2', segments: [
-            const StyledSegment(
-              'Type two asterisks, then text, then two more asterisks to **trigger* bold.',
-            ),
-          ]),
+          TextBlock(
+            id: 'b1',
+            segments: [
+              const StyledSegment('Hello '),
+              const StyledSegment('bold world', {InlineStyle.bold}),
+              const StyledSegment('! This is the POC.'),
+            ],
+          ),
+          TextBlock(
+            id: 'b2',
+            segments: [
+              const StyledSegment(
+                'Type two asterisks, then text, then two more asterisks to **trigger* bold.',
+              ),
+            ],
+          ),
         ]),
         inputRules: [BoldWrapRule()],
       );
 
       // Block 0 text: "Hello bold world! This is the POC." (34 chars)
-      // Block 1 text: "...to **trigger* bold." 
+      // Block 1 text: "...to **trigger* bold."
       // Full text: block0 + \n + block1
       final block0Len = controller.document.blocks[0].plainText.length;
       final block1Text = controller.document.blocks[1].plainText;
-      
+
       // Find where the second * should go (completing **trigger**)
       final closingStarLocal = block1Text.indexOf('* bold');
       // closingStarLocal points to the * before " bold"
@@ -423,8 +521,10 @@ void main() {
       final insertLocalOffset = closingStarLocal + 1;
       final insertGlobalOffset = block0Len + 1 + insertLocalOffset; // +1 for \n
 
-      final newBlock1Text = '${block1Text.substring(0, insertLocalOffset)}*${block1Text.substring(insertLocalOffset)}';
-      final newFullText = '${controller.document.blocks[0].plainText}\n$newBlock1Text';
+      final newBlock1Text =
+          '${block1Text.substring(0, insertLocalOffset)}*${block1Text.substring(insertLocalOffset)}';
+      final newFullText =
+          '${controller.document.blocks[0].plainText}\n$newBlock1Text';
 
       controller.value = TextEditingValue(
         text: newFullText,
@@ -440,7 +540,7 @@ void main() {
       );
 
       // Cursor should be right after "trigger" in block 1, not at end of doc.
-      // "...to trigger bold." — "trigger" ends at local offset = 
+      // "...to trigger bold." — "trigger" ends at local offset =
       //   block1 text without asterisks: "Type two asterisks, then text, then two more asterisks to trigger bold."
       //   "trigger" starts where "**trigger**" started, i.e. at the same position as fullMatchStart
       // Cursor should not be at the end of the document.

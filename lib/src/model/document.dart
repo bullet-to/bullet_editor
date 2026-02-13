@@ -4,6 +4,8 @@ import 'inline_style.dart';
 /// Result of mapping a global TextField offset to a block + local offset.
 class BlockPosition {
   const BlockPosition(this.blockIndex, this.localOffset);
+
+  /// Index into [Document.allBlocks] (the flat, depth-first list).
   final int blockIndex;
   final int localOffset;
 
@@ -12,85 +14,70 @@ class BlockPosition {
       'BlockPosition(block: $blockIndex, offset: $localOffset)';
 }
 
-/// The document model: an ordered list of [TextBlock]s.
+/// The document model: a tree of [TextBlock]s.
 ///
 /// Immutable. Operations return a new [Document].
-/// Blocks are joined by '\n' in the TextField, so the global offset
-/// space is: block0.length + 1 + block1.length + 1 + ... + blockN.length.
+///
+/// [blocks] is the top-level list (the tree roots).
+/// [allBlocks] is a depth-first flattening — what the TextField sees.
+/// All offset mapping uses [allBlocks].
 class Document {
   const Document(this.blocks);
 
-  /// Start with a single empty paragraph.
   factory Document.empty() =>
       Document([TextBlock(id: _nextId(), segments: const [])]);
 
+  /// Top-level blocks (tree roots). May have children.
   final List<TextBlock> blocks;
 
-  /// The full plain text as it appears in the TextField.
-  /// Blocks are separated by '\n'.
-  String get plainText => blocks.map((b) => b.plainText).join('\n');
+  /// Depth-first flattening of the entire tree.
+  /// This is the linear sequence the TextField renders.
+  List<TextBlock> get allBlocks {
+    final result = <TextBlock>[];
+    void walk(List<TextBlock> nodes) {
+      for (final node in nodes) {
+        result.add(node);
+        walk(node.children);
+      }
+    }
+    walk(blocks);
+    return result;
+  }
 
-  /// Total length of the TextField text.
+  /// Plain text as it appears in the TextField. Blocks separated by '\n'.
+  String get plainText => allBlocks.map((b) => b.plainText).join('\n');
+
   int get textLength => plainText.length;
 
-  /// Map a global TextField offset to (blockIndex, localOffset).
-  ///
-  /// Global layout: block0text \n block1text \n block2text
-  /// Each '\n' separator counts as 1 character.
+  /// Map a global TextField offset to (flatIndex, localOffset).
   BlockPosition blockAt(int globalOffset) {
+    final flat = allBlocks;
     var remaining = globalOffset;
-    for (var i = 0; i < blocks.length; i++) {
-      final blockLen = blocks[i].length;
+    for (var i = 0; i < flat.length; i++) {
+      final blockLen = flat[i].length;
       if (remaining <= blockLen) {
         return BlockPosition(i, remaining);
       }
-      remaining -= blockLen + 1; // +1 for the '\n' separator
+      remaining -= blockLen + 1;
     }
-    // Clamp to end of last block
-    return BlockPosition(blocks.length - 1, blocks.last.length);
+    return BlockPosition(flat.length - 1, flat.last.length);
   }
 
-  /// Reverse mapping: block index + local offset -> global TextField offset.
-  int globalOffset(int blockIndex, int localOffset) {
+  /// Reverse mapping: flat index + local offset -> global TextField offset.
+  int globalOffset(int flatIndex, int localOffset) {
+    final flat = allBlocks;
     var offset = 0;
-    for (var i = 0; i < blockIndex; i++) {
-      offset += blocks[i].length + 1; // +1 for '\n'
+    for (var i = 0; i < flatIndex; i++) {
+      offset += flat[i].length + 1;
     }
     return offset + localOffset;
   }
 
-  /// Find a block by its ID. Returns the index, or -1 if not found.
-  int indexOfBlock(String blockId) {
-    return blocks.indexWhere((b) => b.id == blockId);
-  }
-
-  /// Return a new Document with the block at [index] replaced.
-  Document replaceBlock(int index, TextBlock newBlock) {
-    final newBlocks = List<TextBlock>.from(blocks);
-    newBlocks[index] = newBlock;
-    return Document(newBlocks);
-  }
-
-  /// Return a new Document with a block inserted at [index].
-  Document insertBlock(int index, TextBlock block) {
-    final newBlocks = List<TextBlock>.from(blocks);
-    newBlocks.insert(index, block);
-    return Document(newBlocks);
-  }
-
-  /// Return a new Document with the block at [index] removed.
-  Document removeBlock(int index) {
-    final newBlocks = List<TextBlock>.from(blocks);
-    newBlocks.removeAt(index);
-    return Document(newBlocks);
-  }
-
   /// Get the inline styles at a global TextField offset.
-  /// Returns the styles of the segment the offset falls within.
-  /// At a segment boundary, returns the styles of the preceding segment.
   Set<InlineStyle> stylesAt(int globalOffset) {
+    final flat = allBlocks;
     final pos = blockAt(globalOffset);
-    final block = blocks[pos.blockIndex];
+    final block = flat[pos.blockIndex];
 
     var offset = 0;
     for (final seg in block.segments) {
@@ -103,11 +90,148 @@ class Document {
     return {};
   }
 
+  // -- Tree mutation helpers --
+  // All return a new Document with the tree immutably updated.
+
+  /// Replace a block found by flat index.
+  Document replaceBlockByFlatIndex(int flatIndex, TextBlock newBlock) {
+    final targetId = allBlocks[flatIndex].id;
+    return Document(_replaceInTree(blocks, targetId, newBlock));
+  }
+
+  /// Remove a block found by flat index.
+  Document removeBlockByFlatIndex(int flatIndex) {
+    final targetId = allBlocks[flatIndex].id;
+    return Document(_removeFromTree(blocks, targetId));
+  }
+
+  /// Insert a block as a sibling after the block at flat index.
+  Document insertAfterFlatIndex(int flatIndex, TextBlock newBlock) {
+    final targetId = allBlocks[flatIndex].id;
+    return Document(_insertAfterInTree(blocks, targetId, newBlock));
+  }
+
+  /// Add [child] as the last child of the block at [flatIndex].
+  Document addChild(int flatIndex, TextBlock child) {
+    final flat = allBlocks;
+    final parent = flat[flatIndex];
+    final updatedParent = parent.copyWith(
+      children: [...parent.children, child],
+    );
+    return replaceBlockByFlatIndex(flatIndex, updatedParent);
+  }
+
+  /// Find the depth (nesting level) of a block by its flat index.
+  /// Root-level blocks have depth 0.
+  int depthOf(int flatIndex) {
+    final targetId = allBlocks[flatIndex].id;
+    return _depthInTree(blocks, targetId, 0) ?? 0;
+  }
+
+  /// Find the parent of a block by flat index. Returns null if root-level.
+  TextBlock? parentOf(int flatIndex) {
+    final targetId = allBlocks[flatIndex].id;
+    return _findParent(blocks, targetId, null);
+  }
+
+  /// Find the index of a block in its parent's children list (or in root blocks).
+  /// Returns -1 if not found.
+  int siblingIndex(int flatIndex) {
+    final targetId = allBlocks[flatIndex].id;
+    final parent = parentOf(flatIndex);
+    final siblings = parent?.children ?? blocks;
+    return siblings.indexWhere((b) => b.id == targetId);
+  }
+
+  /// Previous sibling of the block at flat index, or null if first.
+  TextBlock? previousSibling(int flatIndex) {
+    final idx = siblingIndex(flatIndex);
+    if (idx <= 0) return null;
+    final parent = parentOf(flatIndex);
+    final siblings = parent?.children ?? blocks;
+    return siblings[idx - 1];
+  }
+
+  // Legacy convenience methods (used by operations via flat index).
+
+  Document replaceBlock(int flatIndex, TextBlock newBlock) =>
+      replaceBlockByFlatIndex(flatIndex, newBlock);
+
+  Document insertBlock(int flatIndex, TextBlock block) =>
+      insertAfterFlatIndex(flatIndex - 1 >= 0 ? flatIndex - 1 : 0, block);
+
+  Document removeBlock(int flatIndex) =>
+      removeBlockByFlatIndex(flatIndex);
+
+  int indexOfBlock(String blockId) =>
+      allBlocks.indexWhere((b) => b.id == blockId);
+
   @override
-  String toString() => 'Document(${blocks.length} blocks)';
+  String toString() => 'Document(${blocks.length} roots, ${allBlocks.length} total)';
 }
 
-// Simple incrementing ID generator. Fine for POC.
+// -- Tree manipulation internals --
+
+List<TextBlock> _replaceInTree(List<TextBlock> nodes, String targetId, TextBlock replacement) {
+  return nodes.map((node) {
+    if (node.id == targetId) return replacement;
+    final newChildren = _replaceInTree(node.children, targetId, replacement);
+    if (identical(newChildren, node.children)) return node;
+    return node.copyWith(children: newChildren);
+  }).toList();
+}
+
+List<TextBlock> _removeFromTree(List<TextBlock> nodes, String targetId) {
+  final result = <TextBlock>[];
+  for (final node in nodes) {
+    if (node.id == targetId) continue; // skip this node
+    final newChildren = _removeFromTree(node.children, targetId);
+    if (identical(newChildren, node.children)) {
+      result.add(node);
+    } else {
+      result.add(node.copyWith(children: newChildren));
+    }
+  }
+  return result;
+}
+
+List<TextBlock> _insertAfterInTree(List<TextBlock> nodes, String targetId, TextBlock newBlock) {
+  final result = <TextBlock>[];
+  for (final node in nodes) {
+    if (node.id == targetId) {
+      result.add(node);
+      result.add(newBlock); // insert after
+    } else {
+      final newChildren = _insertAfterInTree(node.children, targetId, newBlock);
+      if (identical(newChildren, node.children)) {
+        result.add(node);
+      } else {
+        result.add(node.copyWith(children: newChildren));
+      }
+    }
+  }
+  return result;
+}
+
+int? _depthInTree(List<TextBlock> nodes, String targetId, int currentDepth) {
+  for (final node in nodes) {
+    if (node.id == targetId) return currentDepth;
+    final found = _depthInTree(node.children, targetId, currentDepth + 1);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+TextBlock? _findParent(List<TextBlock> nodes, String targetId, TextBlock? parent) {
+  for (final node in nodes) {
+    if (node.id == targetId) return parent;
+    final found = _findParent(node.children, targetId, node);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+// Simple incrementing ID generator.
 int _idCounter = 0;
 String generateBlockId() => _nextId();
 String _nextId() => 'block_${_idCounter++}';

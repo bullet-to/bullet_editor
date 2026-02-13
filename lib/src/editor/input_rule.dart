@@ -1,3 +1,5 @@
+import 'package:flutter/widgets.dart';
+
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
@@ -34,8 +36,8 @@ class BoldWrapRule extends InputRule {
     final resultDoc = pending.apply(doc);
 
     // Check each block for a completed **text** pattern.
-    for (var i = 0; i < resultDoc.blocks.length; i++) {
-      final block = resultDoc.blocks[i];
+    for (var i = 0; i < resultDoc.allBlocks.length; i++) {
+      final block = resultDoc.allBlocks[i];
       final text = block.plainText;
 
       // Look for a **content** pattern whose closing ** was just completed
@@ -113,13 +115,17 @@ class HeadingRule extends InputRule {
 
     final resultDoc = pending.apply(doc);
     final i = insertOp.blockIndex;
-    if (i >= resultDoc.blocks.length) return null;
+    if (i >= resultDoc.allBlocks.length) return null;
 
-    final block = resultDoc.blocks[i];
-    if (block.plainText != '# ' || block.blockType != BlockType.paragraph)
+    final block = resultDoc.allBlocks[i];
+    if (!block.plainText.startsWith('# ') || block.blockType != BlockType.paragraph) {
       return null;
+    }
+    // Only fire if the space was typed at position 1 (right after #).
+    if (insertOp.offset != 1) return null;
 
-    // Transform: apply original ops, then delete "# ", then change type to H1.
+    // Delete "# " prefix and change type. Cursor lands at start of block.
+    final blockStart = resultDoc.globalOffset(i, 0);
     return Transaction(
       operations: [
         ...pending.operations,
@@ -127,8 +133,8 @@ class HeadingRule extends InputRule {
         ChangeBlockType(i, BlockType.h1),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
-        baseOffset: resultDoc.globalOffset(i, 0),
-        extentOffset: resultDoc.globalOffset(i, 0),
+        baseOffset: blockStart,
+        extentOffset: blockStart,
       ),
     );
   }
@@ -143,12 +149,16 @@ class ListItemRule extends InputRule {
 
     final resultDoc = pending.apply(doc);
     final i = insertOp.blockIndex;
-    if (i >= resultDoc.blocks.length) return null;
+    if (i >= resultDoc.allBlocks.length) return null;
 
-    final block = resultDoc.blocks[i];
-    if (block.plainText != '- ' || block.blockType != BlockType.paragraph)
+    final block = resultDoc.allBlocks[i];
+    if (!block.plainText.startsWith('- ') || block.blockType != BlockType.paragraph) {
       return null;
+    }
+    // Only fire if the space was typed at position 1 (right after -).
+    if (insertOp.offset != 1) return null;
 
+    final blockStart = resultDoc.globalOffset(i, 0);
     return Transaction(
       operations: [
         ...pending.operations,
@@ -173,7 +183,7 @@ class EmptyListItemRule extends InputRule {
     final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
     if (splitOp == null) return null;
 
-    final block = doc.blocks[splitOp.blockIndex];
+    final block = doc.allBlocks[splitOp.blockIndex];
     if (block.blockType != BlockType.listItem) return null;
     if (block.plainText.isNotEmpty) return null;
 
@@ -181,6 +191,33 @@ class EmptyListItemRule extends InputRule {
     return Transaction(
       operations: [ChangeBlockType(splitOp.blockIndex, BlockType.paragraph)],
       selectionAfter: pending.selectionAfter,
+    );
+  }
+}
+
+/// Backspace at start of a list item converts it to a paragraph (keeps nesting).
+///
+/// Detects a MergeBlocks where the second block is a list item, and replaces
+/// it with a ChangeBlockType to paragraph. The block stays in its current
+/// position in the tree — only the type changes.
+class ListItemBackspaceRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
+    if (mergeOp == null) return null;
+
+    final flat = doc.allBlocks;
+    if (mergeOp.secondBlockIndex >= flat.length) return null;
+
+    final block = flat[mergeOp.secondBlockIndex];
+    if (block.blockType != BlockType.listItem) return null;
+
+    // Convert to paragraph instead of merging.
+    // Cursor should stay at the start of this block, not jump to the previous one.
+    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
+    return Transaction(
+      operations: [ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph)],
+      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
   }
 }

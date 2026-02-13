@@ -204,6 +204,56 @@ void main() {
     });
   });
 
+  group('IndentBlock', () {
+    test('makes block a child of its previous sibling', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+        TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+      ]);
+      final result = IndentBlock(1).apply(doc);
+      // 'b' should now be a child of 'a'.
+      expect(result.blocks.length, 1);
+      expect(result.blocks[0].id, 'a');
+      expect(result.blocks[0].children.length, 1);
+      expect(result.blocks[0].children[0].id, 'b');
+      // allBlocks still has both.
+      expect(result.allBlocks.length, 2);
+    });
+
+    test('no-op when block has no previous sibling', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('only')]),
+      ]);
+      final result = IndentBlock(0).apply(doc);
+      expect(result.blocks.length, 1);
+      expect(result.blocks[0].children, isEmpty);
+    });
+  });
+
+  group('OutdentBlock', () {
+    test('moves nested block to parent level', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('parent')], children: [
+          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+        ]),
+      ]);
+      final result = OutdentBlock(1).apply(doc);
+      // 'b' should now be a sibling after 'a' at root level.
+      expect(result.blocks.length, 2);
+      expect(result.blocks[0].id, 'a');
+      expect(result.blocks[0].children, isEmpty);
+      expect(result.blocks[1].id, 'b');
+    });
+
+    test('no-op when block is already at root', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('root')]),
+      ]);
+      final result = OutdentBlock(0).apply(doc);
+      expect(result.blocks.length, 1);
+    });
+  });
+
   group('Transaction', () {
     test('applies multiple operations in sequence', () {
       final doc = Document([

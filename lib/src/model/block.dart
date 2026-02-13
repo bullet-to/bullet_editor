@@ -42,11 +42,13 @@ class TextBlock {
     required this.id,
     this.blockType = BlockType.paragraph,
     this.segments = const [],
+    this.children = const [],
   });
 
   final String id;
   final BlockType blockType;
   final List<StyledSegment> segments;
+  final List<TextBlock> children;
 
   /// Plain text content of this block (no formatting).
   String get plainText => segments.map((s) => s.text).join();
@@ -58,11 +60,13 @@ class TextBlock {
     String? id,
     BlockType? blockType,
     List<StyledSegment>? segments,
+    List<TextBlock>? children,
   }) {
     return TextBlock(
       id: id ?? this.id,
       blockType: blockType ?? this.blockType,
       segments: segments ?? this.segments,
+      children: children ?? this.children,
     );
   }
 

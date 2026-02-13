@@ -56,6 +56,57 @@ void main() {
     });
   });
 
+  group('Document tree / allBlocks', () {
+    test('allBlocks flattens tree depth-first', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('A')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('B')], children: [
+          TextBlock(id: 'b1', segments: [const StyledSegment('B1')]),
+          TextBlock(id: 'b2', segments: [const StyledSegment('B2')]),
+        ]),
+        TextBlock(id: 'c', segments: [const StyledSegment('C')]),
+      ]);
+      final ids = doc.allBlocks.map((b) => b.id).toList();
+      expect(ids, ['a', 'b', 'b1', 'b2', 'c']);
+    });
+
+    test('plainText flattens tree correctly', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('A')], children: [
+          TextBlock(id: 'a1', segments: [const StyledSegment('A1')]),
+        ]),
+        TextBlock(id: 'b', segments: [const StyledSegment('B')]),
+      ]);
+      expect(doc.plainText, 'A\nA1\nB');
+    });
+
+    test('blockAt works with nested blocks', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('AB')], children: [
+          TextBlock(id: 'a1', segments: [const StyledSegment('CD')]),
+        ]),
+        TextBlock(id: 'b', segments: [const StyledSegment('EF')]),
+      ]);
+      // "AB\nCD\nEF" — offsets: A=0, B=1, \n=2, C=3, D=4, \n=5, E=6, F=7
+      expect(doc.blockAt(0).blockIndex, 0); // 'a'
+      expect(doc.blockAt(3).blockIndex, 1); // 'a1'
+      expect(doc.blockAt(6).blockIndex, 2); // 'b'
+    });
+
+    test('depthOf returns correct nesting level', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: const [], children: [
+          TextBlock(id: 'a1', segments: const [], children: [
+            TextBlock(id: 'a1a', segments: const []),
+          ]),
+        ]),
+      ]);
+      expect(doc.depthOf(0), 0); // 'a'
+      expect(doc.depthOf(1), 1); // 'a1'
+      expect(doc.depthOf(2), 2); // 'a1a'
+    });
+  });
+
   group('Document.stylesAt', () {
     test('returns styles from segment at offset', () {
       final doc = Document([

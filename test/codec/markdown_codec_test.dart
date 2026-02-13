@@ -104,6 +104,34 @@ void main() {
       );
     });
 
+    test('encode nested list items with indentation', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('parent')],
+          children: [
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('child')],
+            ),
+          ],
+        ),
+      ]);
+      expect(codec.encode(doc), '- parent\n\n  - child');
+    });
+
+    test('decode nested list items', () {
+      final doc = codec.decode('- parent\n\n  - child');
+      expect(doc.blocks.length, 1);
+      expect(doc.blocks[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].plainText, 'parent');
+      expect(doc.blocks[0].children.length, 1);
+      expect(doc.blocks[0].children[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].children[0].plainText, 'child');
+    });
+
     test('round-trip: encode then decode preserves content', () {
       final original = Document([
         TextBlock(

@@ -16,11 +16,9 @@ import 'transaction.dart';
 /// Tracks [activeStyles] — the formatting applied to the next typed
 /// character, derived from the segment at the cursor position.
 class EditorController extends TextEditingController {
-  EditorController({
-    Document? document,
-    List<InputRule>? inputRules,
-  })  : _document = document ?? Document.empty(),
-        _inputRules = inputRules ?? [] {
+  EditorController({Document? document, List<InputRule>? inputRules})
+    : _document = document ?? Document.empty(),
+      _inputRules = inputRules ?? [] {
     _syncToTextField();
     _activeStyles = _document.stylesAt(value.selection.baseOffset);
     addListener(_onValueChanged);
@@ -35,13 +33,34 @@ class EditorController extends TextEditingController {
   Document get document => _document;
   Set<InlineStyle> get activeStyles => _activeStyles;
 
+  /// Indent the block at the current cursor position (make it a child of previous sibling).
+  void indent() {
+    if (!value.selection.isValid || !value.selection.isCollapsed) return;
+    final pos = _document.blockAt(value.selection.baseOffset);
+
+    _document = IndentBlock(pos.blockIndex).apply(_document);
+    _syncToTextField(selection: value.selection);
+    _activeStyles = _document.stylesAt(value.selection.baseOffset);
+  }
+
+  /// Outdent the block at the current cursor position (move to parent's level).
+  void outdent() {
+    if (!value.selection.isValid || !value.selection.isCollapsed) return;
+    final pos = _document.blockAt(value.selection.baseOffset);
+
+    _document = OutdentBlock(pos.blockIndex).apply(_document);
+    _syncToTextField(selection: value.selection);
+    _activeStyles = _document.stylesAt(value.selection.baseOffset);
+  }
+
   // -- Edit pipeline --
 
   void _onValueChanged() {
     if (_isSyncing) return;
 
     // Skip IME composition — process only on final commit.
-    if (value.composing.isValid && value.composing.start != value.composing.end) {
+    if (value.composing.isValid &&
+        value.composing.start != value.composing.end) {
       _previousValue = value;
       return;
     }
@@ -80,13 +99,28 @@ class EditorController extends TextEditingController {
   Transaction? _transactionFromDiff(TextDiff diff, TextSelection selection) {
     if (diff.deletedLength == 0 && diff.insertedText.isEmpty) return null;
 
-    final deletedText = _previousValue.text
-        .substring(diff.start, diff.start + diff.deletedLength);
+    final deletedText = _previousValue.text.substring(
+      diff.start,
+      diff.start + diff.deletedLength,
+    );
+
+    // Tab character → indent/outdent list item.
+    if (diff.insertedText == '\t' && diff.deletedLength == 0) {
+      final pos = _document.blockAt(diff.start);
+      final block = _document.allBlocks[pos.blockIndex];
+      if (block.blockType == BlockType.listItem) {
+        return Transaction(
+          operations: [IndentBlock(pos.blockIndex)],
+          selectionAfter: selection,
+        );
+      }
+      return null; // Ignore tab on non-list blocks.
+    }
 
     // Newline in deleted text → merge blocks.
     if (deletedText.contains('\n') && diff.insertedText.isEmpty) {
       final pos = _document.blockAt(diff.start);
-      if (pos.blockIndex + 1 >= _document.blocks.length) return null;
+      if (pos.blockIndex + 1 >= _document.allBlocks.length) return null;
       return Transaction(
         operations: [MergeBlocks(pos.blockIndex + 1)],
         selectionAfter: selection,
@@ -108,8 +142,12 @@ class EditorController extends TextEditingController {
       if (diff.deletedLength > 0)
         DeleteText(pos.blockIndex, pos.localOffset, diff.deletedLength),
       if (diff.insertedText.isNotEmpty)
-        InsertText(pos.blockIndex, pos.localOffset, diff.insertedText,
-            styles: _activeStyles),
+        InsertText(
+          pos.blockIndex,
+          pos.localOffset,
+          diff.insertedText,
+          styles: _activeStyles,
+        ),
     ];
 
     return ops.isEmpty
@@ -144,25 +182,27 @@ class EditorController extends TextEditingController {
   }) {
     final children = <InlineSpan>[];
 
-    for (var i = 0; i < _document.blocks.length; i++) {
+    final flat = _document.allBlocks;
+
+    for (var i = 0; i < flat.length; i++) {
       if (i > 0) {
-        // Give the \n the previous block's style so the cursor height
-        // stays consistent at the end of lines with larger fonts (e.g. H1).
-        final prevBlockStyle = _blockBaseStyle(_document.blocks[i - 1].blockType, style);
+        final prevBlockStyle = _blockBaseStyle(flat[i - 1].blockType, style);
         children.add(TextSpan(text: '\n', style: prevBlockStyle));
       }
 
-      final block = _document.blocks[i];
+      final block = flat[i];
       final blockStyle = _blockBaseStyle(block.blockType, style);
 
       if (block.segments.isEmpty) {
         children.add(TextSpan(text: '', style: blockStyle));
       } else {
         for (final seg in block.segments) {
-          children.add(TextSpan(
-            text: seg.text,
-            style: _resolveStyle(seg.styles, blockStyle),
-          ));
+          children.add(
+            TextSpan(
+              text: seg.text,
+              style: _resolveStyle(seg.styles, blockStyle),
+            ),
+          );
         }
       }
     }

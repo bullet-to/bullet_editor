@@ -161,6 +161,26 @@ void main() {
       expect(newDoc.blocks[0].plainText, '');
     });
 
+    test('# space at start of paragraph with existing text converts to H1', () {
+      final rule = HeadingRule();
+      // User typed # at the start of "hello", then space. Block has "# hello".
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('#hello')]),
+      ]);
+
+      final pending = Transaction(
+        operations: [InsertText(0, 1, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 2),
+      );
+
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+
+      final newDoc = result!.apply(doc);
+      expect(newDoc.blocks[0].blockType, BlockType.h1);
+      expect(newDoc.blocks[0].plainText, 'hello');
+    });
+
     test('does not fire on # mid-text', () {
       final rule = HeadingRule();
       final doc = Document([
@@ -247,6 +267,48 @@ void main() {
       final pending = Transaction(
         operations: [SplitBlock(0, 7)],
         selectionAfter: const TextSelection.collapsed(offset: 8),
+      );
+
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
+  group('ListItemBackspaceRule', () {
+    test('backspace at start of list item converts to paragraph', () {
+      final rule = ListItemBackspaceRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('item')],
+        ),
+      ]);
+
+      final pending = Transaction(
+        operations: [MergeBlocks(1)],
+        selectionAfter: const TextSelection.collapsed(offset: 5),
+      );
+
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+
+      final newDoc = result!.apply(doc);
+      expect(newDoc.allBlocks.length, 2);
+      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
+      expect(newDoc.allBlocks[1].plainText, 'item');
+    });
+
+    test('does not fire on non-list-item merge', () {
+      final rule = ListItemBackspaceRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('below')]),
+      ]);
+
+      final pending = Transaction(
+        operations: [MergeBlocks(1)],
+        selectionAfter: const TextSelection.collapsed(offset: 5),
       );
 
       expect(rule.tryTransform(pending, doc), isNull);

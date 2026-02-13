@@ -25,18 +25,11 @@ class InsertText extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    final block = doc.blocks[blockIndex];
+    final block = doc.allBlocks[blockIndex];
     final List<StyledSegment> newSegments;
     if (styles != null) {
-      // Explicit styles from active style set — splice in with those styles.
-      newSegments = _spliceInsertWithStyle(
-        block.segments,
-        offset,
-        text,
-        styles!,
-      );
+      newSegments = _spliceInsertWithStyle(block.segments, offset, text, styles!);
     } else {
-      // No explicit styles — inherit from the segment at the insertion point.
       newSegments = _spliceInsert(block.segments, offset, text);
     }
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
@@ -58,7 +51,7 @@ class DeleteText extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    final block = doc.blocks[blockIndex];
+    final block = doc.allBlocks[blockIndex];
     final newSegments = _spliceDelete(block.segments, offset, length);
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
     return doc.replaceBlock(blockIndex, newBlock);
@@ -83,7 +76,7 @@ class ToggleStyle extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    final block = doc.blocks[blockIndex];
+    final block = doc.allBlocks[blockIndex];
     final segments = block.segments;
 
     // Expand segments into per-character style sets.
@@ -139,35 +132,24 @@ class SplitBlock extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    final block = doc.blocks[blockIndex];
-    final beforeSegments = _splitSegmentsAt(
-      block.segments,
-      offset,
-      takeBefore: true,
-    );
-    final afterSegments = _splitSegmentsAt(
-      block.segments,
-      offset,
-      takeBefore: false,
-    );
+    final block = doc.allBlocks[blockIndex];
+    final beforeSegments = _splitSegmentsAt(block.segments, offset, takeBefore: true);
+    final afterSegments = _splitSegmentsAt(block.segments, offset, takeBefore: false);
 
-    // Headings always produce a paragraph on Enter.
-    // List items continue as list items.
     final newBlockType = block.blockType == BlockType.listItem
         ? BlockType.listItem
         : BlockType.paragraph;
 
-    final updatedBlock = block.copyWith(
-      segments: mergeSegments(beforeSegments),
-    );
+    final updatedBlock = block.copyWith(segments: mergeSegments(beforeSegments));
     final newBlock = TextBlock(
       id: generateBlockId(),
       blockType: newBlockType,
       segments: mergeSegments(afterSegments),
     );
 
+    // Insert the new block as a sibling after the split block in the tree.
     var result = doc.replaceBlock(blockIndex, updatedBlock);
-    result = result.insertBlock(blockIndex + 1, newBlock);
+    result = result.insertAfterFlatIndex(blockIndex, newBlock);
     return result;
   }
 
@@ -185,15 +167,13 @@ class MergeBlocks extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    if (secondBlockIndex <= 0) return doc; // Can't merge first block upward.
+    final flat = doc.allBlocks;
+    if (secondBlockIndex <= 0 || secondBlockIndex >= flat.length) return doc;
 
-    final first = doc.blocks[secondBlockIndex - 1];
-    final second = doc.blocks[secondBlockIndex];
+    final first = flat[secondBlockIndex - 1];
+    final second = flat[secondBlockIndex];
 
-    final mergedSegments = mergeSegments([
-      ...first.segments,
-      ...second.segments,
-    ]);
+    final mergedSegments = mergeSegments([...first.segments, ...second.segments]);
     final mergedBlock = first.copyWith(segments: mergedSegments);
 
     var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
@@ -214,12 +194,73 @@ class ChangeBlockType extends EditOperation {
 
   @override
   Document apply(Document doc) {
-    final block = doc.blocks[blockIndex];
+    final block = doc.allBlocks[blockIndex];
     return doc.replaceBlock(blockIndex, block.copyWith(blockType: newType));
   }
 
   @override
   String toString() => 'ChangeBlockType(block: $blockIndex, ${newType.name})';
+}
+
+/// Indent a block: make it a child of its previous sibling.
+///
+/// Only valid for list items that have a previous sibling.
+/// The block is removed from its current position and appended
+/// as the last child of the previous sibling.
+class IndentBlock extends EditOperation {
+  IndentBlock(this.flatIndex);
+  final int flatIndex;
+
+  @override
+  Document apply(Document doc) {
+    final prevSibling = doc.previousSibling(flatIndex);
+    if (prevSibling == null) return doc; // No previous sibling — can't indent.
+
+    final block = doc.allBlocks[flatIndex];
+
+    // Remove block from current position.
+    var result = doc.removeBlockByFlatIndex(flatIndex);
+
+    // Add as last child of previous sibling.
+    final prevFlatIndex = result.indexOfBlock(prevSibling.id);
+    if (prevFlatIndex < 0) return doc; // Safety check.
+    result = result.addChild(prevFlatIndex, block);
+
+    return result;
+  }
+
+  @override
+  String toString() => 'IndentBlock(flat: $flatIndex)';
+}
+
+/// Outdent a block: move it from its parent's children to be a sibling
+/// after its parent.
+///
+/// Only valid for nested blocks (depth > 0).
+class OutdentBlock extends EditOperation {
+  OutdentBlock(this.flatIndex);
+  final int flatIndex;
+
+  @override
+  Document apply(Document doc) {
+    final parent = doc.parentOf(flatIndex);
+    if (parent == null) return doc; // Already at root — can't outdent.
+
+    final block = doc.allBlocks[flatIndex];
+
+    // Remove block from parent's children.
+    var result = doc.removeBlockByFlatIndex(flatIndex);
+
+    // Insert as sibling after the parent.
+    final parentFlatIndex = result.indexOfBlock(parent.id);
+    if (parentFlatIndex < 0) return doc;
+    result = result.insertAfterFlatIndex(parentFlatIndex, block);
+
+    return result;
+  }
+
+  @override
+  String toString() => 'OutdentBlock(flat: $flatIndex)';
 }
 
 // --- Helpers ---
@@ -339,10 +380,12 @@ List<StyledSegment> _spliceDelete(
       final keepAfter = seg.text.substring(
         (deleteEnd - segStart).clamp(0, seg.text.length),
       );
-      if (keepBefore.isNotEmpty)
+      if (keepBefore.isNotEmpty) {
         result.add(StyledSegment(keepBefore, seg.styles));
-      if (keepAfter.isNotEmpty)
+      }
+      if (keepAfter.isNotEmpty) {
         result.add(StyledSegment(keepAfter, seg.styles));
+      }
     }
 
     pos = segEnd;
