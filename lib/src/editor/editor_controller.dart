@@ -271,6 +271,32 @@ class EditorController extends TextEditingController {
     return _document.allBlocks[pos.blockIndex].blockType;
   }
 
+  /// Whether the task at the cursor is checked. Returns false if not a task.
+  bool get isTaskChecked {
+    if (!value.selection.isValid) return false;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    if (block.blockType != BlockType.taskItem) return false;
+    return block.metadata['checked'] == true;
+  }
+
+  /// Toggle checked state of the task at the cursor.
+  void toggleTaskChecked() {
+    if (!value.selection.isValid) return;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    if (block.blockType != BlockType.taskItem) return;
+
+    final current = block.metadata['checked'] == true;
+    _pushUndo();
+    _document = SetBlockMetadata(pos.blockIndex, 'checked', !current)
+        .apply(_document);
+    _syncToTextField(modelSelection: modelSel);
+    notifyListeners();
+  }
+
   // -- Edit pipeline --
 
   /// Run input rules on [tx], push undo, apply, sync to TextField, update styles.
@@ -436,7 +462,7 @@ class EditorController extends TextEditingController {
     if (diff.insertedText == '\t' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
       final block = _document.allBlocks[pos.blockIndex];
-      if (block.blockType == BlockType.listItem) {
+      if (isListLike(block.blockType)) {
         return Transaction(
           operations: [IndentBlock(pos.blockIndex)],
           selectionAfter: selection,

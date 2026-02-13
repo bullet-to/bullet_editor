@@ -7,12 +7,11 @@ import '../model/document.dart';
 /// Occupies exactly 1 offset position in the display text.
 const prefixChar = '\uFFFC';
 
-/// Whether a block gets a visual prefix WidgetSpan (bullet, indent, etc).
-/// List items always get a bullet. Nested blocks get indentation.
+/// Whether a block gets a visual prefix WidgetSpan (bullet, number, checkbox, indent).
+/// All list-like blocks get a prefix. Nested non-list blocks get indentation.
 bool hasPrefix(Document doc, int flatIndex) {
   final block = doc.allBlocks[flatIndex];
-  return block.blockType == BlockType.listItem ||
-      doc.depthOf(flatIndex) > 0;
+  return isListLike(block.blockType) || doc.depthOf(flatIndex) > 0;
 }
 
 /// Convert a display offset (TextField) to a model offset (Document).

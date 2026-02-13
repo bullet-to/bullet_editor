@@ -317,4 +317,58 @@ void main() {
       expect(result.blocks[0].segments[0].styles, {InlineStyle.bold});
     });
   });
+
+  group('SplitBlock with list-like types', () {
+    test('Enter on numbered list creates another numbered list', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('first')],
+        ),
+      ]);
+      final result = SplitBlock(0, 5).apply(doc);
+      expect(result.allBlocks.length, 2);
+      expect(result.allBlocks[0].blockType, BlockType.numberedList);
+      expect(result.allBlocks[1].blockType, BlockType.numberedList);
+    });
+
+    test('Enter on task creates unchecked task', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('done')],
+          metadata: {'checked': true},
+        ),
+      ]);
+      final result = SplitBlock(0, 4).apply(doc);
+      expect(result.allBlocks.length, 2);
+      expect(result.allBlocks[1].blockType, BlockType.taskItem);
+      expect(result.allBlocks[1].metadata['checked'], false);
+    });
+  });
+
+  group('SetBlockMetadata', () {
+    test('sets metadata on a block', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('task')],
+          metadata: {'checked': false},
+        ),
+      ]);
+      final result = SetBlockMetadata(0, 'checked', true).apply(doc);
+      expect(result.allBlocks[0].metadata['checked'], true);
+    });
+
+    test('out of range is no-op', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+      ]);
+      final result = SetBlockMetadata(5, 'key', 'value').apply(doc);
+      expect(result.allBlocks.length, 1);
+    });
+  });
 }

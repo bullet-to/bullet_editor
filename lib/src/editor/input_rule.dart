@@ -154,6 +154,75 @@ class ListItemRule extends PrefixBlockRule {
   ListItemRule() : super('-', BlockType.listItem);
 }
 
+class NumberedListRule extends PrefixBlockRule {
+  NumberedListRule() : super('1.', BlockType.numberedList);
+}
+
+/// Detects task shortcut patterns and converts to a taskItem with metadata.
+///
+/// Two trigger paths:
+/// 1. `- [ ] ` or `- [x] ` typed on a paragraph (full shortcut)
+/// 2. `[ ] ` or `[x] ` typed at the start of a list item (since "- " already
+///    converted it to a list item via ListItemRule)
+class TaskItemRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final insertOp = _findInsertOp(pending);
+    if (insertOp == null || insertOp.text != ' ') return null;
+
+    final resultDoc = pending.apply(doc);
+    final i = insertOp.blockIndex;
+    if (i >= resultDoc.allBlocks.length) return null;
+
+    final block = resultDoc.allBlocks[i];
+    final text = block.plainText;
+
+    bool? checked;
+    int prefixLen;
+
+    if (block.blockType == BlockType.paragraph) {
+      // Path 1: full "- [ ] " on a paragraph.
+      if (text.startsWith('- [ ] ')) {
+        checked = false;
+        prefixLen = 6;
+      } else if (text.startsWith('- [x] ')) {
+        checked = true;
+        prefixLen = 6;
+      } else {
+        return null;
+      }
+    } else if (block.blockType == BlockType.listItem) {
+      // Path 2: "[ ] " at start of a list item (user typed "- [ ] ",
+      // ListItemRule ate the "- ", leaving "[ ] " on a listItem).
+      if (text.startsWith('[ ] ')) {
+        checked = false;
+        prefixLen = 4;
+      } else if (text.startsWith('[x] ')) {
+        checked = true;
+        prefixLen = 4;
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
+
+    final blockStart = resultDoc.globalOffset(i, 0);
+    return Transaction(
+      operations: [
+        ...pending.operations,
+        DeleteText(i, 0, prefixLen),
+        ChangeBlockType(i, BlockType.taskItem),
+        SetBlockMetadata(i, 'checked', checked),
+      ],
+      selectionAfter: pending.selectionAfter?.copyWith(
+        baseOffset: blockStart,
+        extentOffset: blockStart,
+      ),
+    );
+  }
+}
+
 /// Enter on an empty list item converts it to a paragraph instead of splitting.
 ///
 /// This rule checks for SplitBlock on an empty list item and replaces it
@@ -165,7 +234,7 @@ class EmptyListItemRule extends InputRule {
     if (splitOp == null) return null;
 
     final block = doc.allBlocks[splitOp.blockIndex];
-    if (block.blockType != BlockType.listItem) return null;
+    if (!isListLike(block.blockType)) return null;
     if (block.plainText.isNotEmpty) return null;
 
     // Replace the split with a type change to paragraph.
@@ -191,7 +260,7 @@ class ListItemBackspaceRule extends InputRule {
     if (mergeOp.secondBlockIndex >= flat.length) return null;
 
     final block = flat[mergeOp.secondBlockIndex];
-    if (block.blockType != BlockType.listItem) return null;
+    if (!isListLike(block.blockType)) return null;
 
     // Convert to paragraph instead of merging.
     // Cursor should stay at the start of this block, not jump to the previous one.
@@ -219,8 +288,8 @@ class NestedBackspaceRule extends InputRule {
     if (mergeOp.secondBlockIndex >= flat.length) return null;
 
     final block = flat[mergeOp.secondBlockIndex];
-    // Only for non-list-item blocks (list items are handled by ListItemBackspaceRule).
-    if (block.blockType == BlockType.listItem) return null;
+    // Only for non-list-like blocks (list-like are handled by ListItemBackspaceRule).
+    if (isListLike(block.blockType)) return null;
     // Only if nested (depth > 0). Root blocks merge normally.
     if (doc.depthOf(mergeOp.secondBlockIndex) == 0) return null;
 

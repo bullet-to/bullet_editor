@@ -39,4 +39,14 @@ const defaultPolicies = <BlockType, BlockPolicies>{
     canHaveChildren: true,
     maxDepth: 6,
   ),
+  BlockType.numberedList: BlockPolicies(
+    canBeChild: true,
+    canHaveChildren: true,
+    maxDepth: 6,
+  ),
+  BlockType.taskItem: BlockPolicies(
+    canBeChild: true,
+    canHaveChildren: true,
+    maxDepth: 6,
+  ),
 };

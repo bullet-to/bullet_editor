@@ -358,4 +358,118 @@ void main() {
       );
     });
   });
+
+  group('NumberedListRule', () {
+    test('1. followed by space converts to numbered list', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('1.')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 2, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 3),
+      );
+      final rule = NumberedListRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.numberedList);
+      expect(resultDoc.allBlocks[0].plainText, '');
+    });
+  });
+
+  group('TaskItemRule', () {
+    test('- [ ] followed by space creates unchecked task', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('- [ ]')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 5, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 6),
+      );
+      final rule = TaskItemRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(resultDoc.allBlocks[0].metadata['checked'], false);
+      expect(resultDoc.allBlocks[0].plainText, '');
+    });
+
+    test('- [x] followed by space creates checked task', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('- [x]')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 5, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 6),
+      );
+      final rule = TaskItemRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(resultDoc.allBlocks[0].metadata['checked'], true);
+    });
+
+    test('[ ] on a list item converts to task (post-ListItemRule path)', () {
+      // After ListItemRule eats "- ", the user is on a listItem typing "[ ] ".
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('[ ]')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 3, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 4),
+      );
+      final rule = TaskItemRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(resultDoc.allBlocks[0].metadata['checked'], false);
+      expect(resultDoc.allBlocks[0].plainText, '');
+    });
+  });
+
+  group('EmptyListItemRule with list-like types', () {
+    test('Enter on empty numbered list converts to paragraph', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [SplitBlock(0, 0)],
+        selectionAfter: const TextSelection.collapsed(offset: 0),
+      );
+      final rule = EmptyListItemRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.paragraph);
+    });
+
+    test('Enter on empty task converts to paragraph', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('')],
+          metadata: {'checked': false},
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [SplitBlock(0, 0)],
+        selectionAfter: const TextSelection.collapsed(offset: 0),
+      );
+      final rule = EmptyListItemRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+    });
+  });
 }

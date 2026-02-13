@@ -194,5 +194,59 @@ void main() {
         (s) => s.text == 'strike' && s.styles.contains(InlineStyle.strikethrough),
       ), isTrue);
     });
+
+    test('encode numbered list', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('first')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('second')],
+        ),
+      ]);
+      expect(codec.encode(doc), '1. first\n\n2. second');
+    });
+
+    test('decode numbered list', () {
+      final doc = codec.decode('1. first\n\n2. second');
+      expect(doc.blocks.length, 2);
+      expect(doc.blocks[0].blockType, BlockType.numberedList);
+      expect(doc.blocks[0].plainText, 'first');
+      expect(doc.blocks[1].blockType, BlockType.numberedList);
+      expect(doc.blocks[1].plainText, 'second');
+    });
+
+    test('encode task items', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('undone')],
+          metadata: {'checked': false},
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('done')],
+          metadata: {'checked': true},
+        ),
+      ]);
+      expect(codec.encode(doc), '- [ ] undone\n\n- [x] done');
+    });
+
+    test('decode task items', () {
+      final doc = codec.decode('- [ ] undone\n\n- [x] done');
+      expect(doc.blocks.length, 2);
+      expect(doc.blocks[0].blockType, BlockType.taskItem);
+      expect(doc.blocks[0].plainText, 'undone');
+      expect(doc.blocks[0].metadata['checked'], false);
+      expect(doc.blocks[1].blockType, BlockType.taskItem);
+      expect(doc.blocks[1].plainText, 'done');
+      expect(doc.blocks[1].metadata['checked'], true);
+    });
   });
 }

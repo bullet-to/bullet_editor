@@ -32,14 +32,25 @@ class MarkdownCodec {
   }
 
   void _encodeBlocks(List<TextBlock> blocks, int depth, List<String> lines) {
+    var numberedOrdinal = 0;
     for (final block in blocks) {
       final content = _encodeSegments(block.segments);
       final indent = '  ' * depth;
+      if (block.blockType == BlockType.numberedList) {
+        numberedOrdinal++;
+      } else {
+        numberedOrdinal = 0;
+      }
       switch (block.blockType) {
         case BlockType.h1:
           lines.add('$indent# $content');
         case BlockType.listItem:
           lines.add('$indent- $content');
+        case BlockType.numberedList:
+          lines.add('$indent$numberedOrdinal. $content');
+        case BlockType.taskItem:
+          final checked = block.metadata['checked'] == true;
+          lines.add('$indent- [${checked ? 'x' : ' '}] $content');
         case BlockType.paragraph:
           lines.add('$indent$content');
       }
@@ -97,13 +108,25 @@ class MarkdownCodec {
   TextBlock _decodeBlock(String text) {
     BlockType type;
     String content;
+    Map<String, dynamic> metadata = const {};
 
     if (text.startsWith('# ')) {
       type = BlockType.h1;
       content = text.substring(2);
+    } else if (text.startsWith('- [x] ')) {
+      type = BlockType.taskItem;
+      content = text.substring(6);
+      metadata = {'checked': true};
+    } else if (text.startsWith('- [ ] ')) {
+      type = BlockType.taskItem;
+      content = text.substring(6);
+      metadata = {'checked': false};
     } else if (text.startsWith('- ')) {
       type = BlockType.listItem;
       content = text.substring(2);
+    } else if (RegExp(r'^\d+\. ').hasMatch(text)) {
+      type = BlockType.numberedList;
+      content = text.replaceFirst(RegExp(r'^\d+\. '), '');
     } else {
       type = BlockType.paragraph;
       content = text;
@@ -113,6 +136,7 @@ class MarkdownCodec {
       id: generateBlockId(),
       blockType: type,
       segments: _decodeSegments(content),
+      metadata: metadata,
     );
   }
 

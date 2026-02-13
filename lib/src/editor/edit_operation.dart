@@ -145,9 +145,14 @@ class SplitBlock extends EditOperation {
       takeBefore: false,
     );
 
-    final newBlockType = block.blockType == BlockType.listItem
-        ? BlockType.listItem
+    final newBlockType = isListLike(block.blockType)
+        ? block.blockType
         : BlockType.paragraph;
+
+    // For tasks, new block starts unchecked.
+    final newMetadata = block.blockType == BlockType.taskItem
+        ? <String, dynamic>{'checked': false}
+        : <String, dynamic>{};
 
     final updatedBlock = block.copyWith(
       segments: mergeSegments(beforeSegments),
@@ -156,6 +161,7 @@ class SplitBlock extends EditOperation {
       id: generateBlockId(),
       blockType: newBlockType,
       segments: mergeSegments(afterSegments),
+      metadata: newMetadata,
     );
 
     // Insert the new block as a sibling after the split block in the tree.
@@ -285,6 +291,31 @@ class DeleteRange extends EditOperation {
   @override
   String toString() =>
       'DeleteRange(start: $startBlockIndex:$startOffset, end: $endBlockIndex:$endOffset)';
+}
+
+/// Set a metadata field on a block.
+///
+/// Used for toggling task checked state, etc.
+class SetBlockMetadata extends EditOperation {
+  SetBlockMetadata(this.blockIndex, this.key, this.value);
+
+  final int blockIndex;
+  final String key;
+  final dynamic value;
+
+  @override
+  Document apply(Document doc) {
+    final flat = doc.allBlocks;
+    if (blockIndex < 0 || blockIndex >= flat.length) return doc;
+
+    final block = flat[blockIndex];
+    final newMeta = Map<String, dynamic>.of(block.metadata);
+    newMeta[key] = value;
+    return doc.replaceBlock(blockIndex, block.copyWith(metadata: newMeta));
+  }
+
+  @override
+  String toString() => 'SetBlockMetadata(block: $blockIndex, $key: $value)';
 }
 
 /// Indent a block: make it a child of its previous sibling.

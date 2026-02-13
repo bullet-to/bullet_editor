@@ -56,7 +56,9 @@ class BlockTypeSelector extends StatelessWidget {
   static const _labels = {
     BlockType.paragraph: 'Paragraph',
     BlockType.h1: 'Heading 1',
-    BlockType.listItem: 'List Item',
+    BlockType.listItem: 'Bullet List',
+    BlockType.numberedList: 'Numbered List',
+    BlockType.taskItem: 'Task',
   };
 
   @override
@@ -149,6 +151,23 @@ class EditorToolbar extends StatelessWidget {
                 tooltip: 'Strikethrough',
                 editorFocusNode: editorFocusNode,
               ),
+              const VerticalDivider(width: 16, indent: 8, endIndent: 8),
+
+              // Task toggle.
+              if (controller.currentBlockType == BlockType.taskItem)
+                IconButton(
+                  icon: Icon(
+                    controller.isTaskChecked
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank,
+                  ),
+                  tooltip: 'Toggle checked',
+                  style: IconButton.styleFrom(
+                    splashFactory: NoSplash.splashFactory,
+                  ),
+                  onPressed: () =>
+                      _action(() => controller.toggleTaskChecked()),
+                ),
               const VerticalDivider(width: 16, indent: 8, endIndent: 8),
 
               // Undo / redo.

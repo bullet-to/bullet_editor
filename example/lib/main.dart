@@ -67,13 +67,37 @@ class _EditorScreenState extends State<EditorScreen> {
         blockType: BlockType.listItem,
         segments: [const StyledSegment('Tab to indent, Shift+Tab to outdent')],
       ),
+      TextBlock(
+        id: 'b5',
+        blockType: BlockType.numberedList,
+        segments: [const StyledSegment('First numbered item')],
+      ),
+      TextBlock(
+        id: 'b6',
+        blockType: BlockType.numberedList,
+        segments: [const StyledSegment('Second numbered item')],
+      ),
+      TextBlock(
+        id: 'b7',
+        blockType: BlockType.taskItem,
+        segments: [const StyledSegment('Unchecked task')],
+        metadata: {'checked': false},
+      ),
+      TextBlock(
+        id: 'b8',
+        blockType: BlockType.taskItem,
+        segments: [const StyledSegment('Completed task')],
+        metadata: {'checked': true},
+      ),
     ]);
 
     _controller = EditorController(
       document: doc,
       inputRules: [
         HeadingRule(),
+        TaskItemRule(), // "- [ ] " before "- " — order matters
         ListItemRule(),
+        NumberedListRule(),
         EmptyListItemRule(),
         ListItemBackspaceRule(),
         NestedBackspaceRule(),
@@ -215,7 +239,7 @@ class _EditorScreenState extends State<EditorScreen> {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 2),
                           child: Text(
-                            '$indent[$i] ${block.blockType.name}: "${block.plainText}"',
+                            '$indent[$i] ${block.blockType.name}${block.metadata.isNotEmpty ? ' ${block.metadata}' : ''}: "${block.plainText}"',
                             style: TextStyle(
                               fontSize: 12,
                               fontFamily: 'monospace',

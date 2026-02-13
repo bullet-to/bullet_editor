@@ -32,7 +32,14 @@ class StyledSegment {
 }
 
 /// The type of a block. Determines rendering and behavior.
-enum BlockType { paragraph, h1, listItem }
+enum BlockType { paragraph, h1, listItem, numberedList, taskItem }
+
+/// Whether a block type behaves like a list item (nestable, gets a prefix,
+/// shares enter/backspace/indent behavior).
+bool isListLike(BlockType type) =>
+    type == BlockType.listItem ||
+    type == BlockType.numberedList ||
+    type == BlockType.taskItem;
 
 /// A single block in the document.
 ///
@@ -43,12 +50,17 @@ class TextBlock {
     this.blockType = BlockType.paragraph,
     this.segments = const [],
     this.children = const [],
+    this.metadata = const {},
   });
 
   final String id;
   final BlockType blockType;
   final List<StyledSegment> segments;
   final List<TextBlock> children;
+
+  /// Arbitrary key-value metadata for the block.
+  /// Used for task checked state (`'checked': true/false`), etc.
+  final Map<String, dynamic> metadata;
 
   /// Plain text content of this block (no formatting).
   String get plainText => segments.map((s) => s.text).join();
@@ -61,12 +73,14 @@ class TextBlock {
     BlockType? blockType,
     List<StyledSegment>? segments,
     List<TextBlock>? children,
+    Map<String, dynamic>? metadata,
   }) {
     return TextBlock(
       id: id ?? this.id,
       blockType: blockType ?? this.blockType,
       segments: segments ?? this.segments,
       children: children ?? this.children,
+      metadata: metadata ?? this.metadata,
     );
   }
 

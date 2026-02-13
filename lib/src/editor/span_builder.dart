@@ -29,22 +29,16 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style) {
     final block = flat[i];
     final bStyle = blockBaseStyle(block.blockType, style);
 
-    // Visual prefix: bullet for list items, indentation for nested blocks.
+    // Visual prefix: bullet, number, checkbox, or indentation spacer.
     if (hasPrefix(doc, i)) {
       final depth = doc.depthOf(i);
-      final isList = block.blockType == BlockType.listItem;
+      final prefixWidget = _buildPrefixContent(doc, i, block);
       children.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: SizedBox(
             width: 20.0 + (depth * 16.0),
-            child: isList
-                ? const Text(
-                    '•  ',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: 14, color: Color(0xFF666666)),
-                  )
-                : null, // Just indentation spacer, no bullet.
+            child: prefixWidget,
           ),
         ),
       );
@@ -67,6 +61,50 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style) {
   return TextSpan(style: style, children: children);
 }
 
+/// Build the prefix content widget for a block's WidgetSpan.
+Widget? _buildPrefixContent(Document doc, int flatIndex, TextBlock block) {
+  const prefixStyle = TextStyle(fontSize: 14, color: Color(0xFF666666));
+
+  switch (block.blockType) {
+    case BlockType.listItem:
+      return const Text('•  ', textAlign: TextAlign.right, style: prefixStyle);
+
+    case BlockType.numberedList:
+      final ordinal = _computeOrdinal(doc, flatIndex);
+      return Text(
+        '$ordinal.  ',
+        textAlign: TextAlign.right,
+        style: prefixStyle,
+      );
+
+    case BlockType.taskItem:
+      final checked = block.metadata['checked'] == true;
+      return Text(
+        checked ? '☑  ' : '☐  ',
+        textAlign: TextAlign.right,
+        style: prefixStyle,
+      );
+
+    default:
+      return null; // Indentation spacer only (nested paragraph).
+  }
+}
+
+/// Compute the 1-based ordinal for a numbered list item among its siblings.
+int _computeOrdinal(Document doc, int flatIndex) {
+  // Walk backwards through siblings to count consecutive numbered list items.
+  var ordinal = 1;
+  final flat = doc.allBlocks;
+  final depth = doc.depthOf(flatIndex);
+
+  for (var j = flatIndex - 1; j >= 0; j--) {
+    if (doc.depthOf(j) != depth) break;
+    if (flat[j].blockType != BlockType.numberedList) break;
+    ordinal++;
+  }
+  return ordinal;
+}
+
 /// Get the base TextStyle for a block type (e.g. H1 gets larger font).
 TextStyle? blockBaseStyle(BlockType type, TextStyle? base) {
   switch (type) {
@@ -77,7 +115,8 @@ TextStyle? blockBaseStyle(BlockType type, TextStyle? base) {
         height: 1.3,
       );
     case BlockType.listItem:
-      return base;
+    case BlockType.numberedList:
+    case BlockType.taskItem:
     case BlockType.paragraph:
       return base;
   }
