@@ -157,9 +157,6 @@ class Document {
   Document replaceBlock(int flatIndex, TextBlock newBlock) =>
       replaceBlockByFlatIndex(flatIndex, newBlock);
 
-  Document insertBlock(int flatIndex, TextBlock block) =>
-      insertAfterFlatIndex(flatIndex - 1 >= 0 ? flatIndex - 1 : 0, block);
-
   Document removeBlock(int flatIndex) =>
       removeBlockByFlatIndex(flatIndex);
 

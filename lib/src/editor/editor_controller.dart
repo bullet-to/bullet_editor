@@ -74,23 +74,24 @@ class EditorController extends TextEditingController {
       return;
     }
 
-    var tx = _transactionFromDiff(diff, value.selection);
+    final tx = _transactionFromDiff(diff, value.selection);
     if (tx == null) {
       _previousValue = value;
       return;
     }
 
     // Input rules can transform the transaction before commit.
+    var finalTx = tx;
     for (final rule in _inputRules) {
-      final transformed = rule.tryTransform(tx!, _document);
+      final transformed = rule.tryTransform(finalTx, _document);
       if (transformed != null) {
-        tx = transformed;
+        finalTx = transformed;
         break;
       }
     }
 
-    _document = tx!.apply(_document);
-    _syncToTextField(selection: tx.selectionAfter ?? value.selection);
+    _document = finalTx.apply(_document);
+    _syncToTextField(selection: finalTx.selectionAfter ?? value.selection);
     _activeStyles = _document.stylesAt(value.selection.baseOffset);
   }
 

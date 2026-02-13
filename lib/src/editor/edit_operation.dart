@@ -26,12 +26,7 @@ class InsertText extends EditOperation {
   @override
   Document apply(Document doc) {
     final block = doc.allBlocks[blockIndex];
-    final List<StyledSegment> newSegments;
-    if (styles != null) {
-      newSegments = _spliceInsertWithStyle(block.segments, offset, text, styles!);
-    } else {
-      newSegments = _spliceInsert(block.segments, offset, text);
-    }
+    final newSegments = _spliceInsert(block.segments, offset, text, styles: styles);
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
     return doc.replaceBlock(blockIndex, newBlock);
   }
@@ -265,61 +260,18 @@ class OutdentBlock extends EditOperation {
 
 // --- Helpers ---
 
-/// Insert [text] into segments at [offset], inheriting the style of the
-/// segment at the insertion point. If inserting at the end, inherits from
-/// the last segment. If segments are empty, inserts unstyled.
+/// Insert [text] at [offset] in [segments].
+///
+/// If [styles] is provided, the new text gets those styles explicitly.
+/// If null, inherits from the segment at the insertion point.
 List<StyledSegment> _spliceInsert(
   List<StyledSegment> segments,
   int offset,
-  String text,
-) {
+  String text, {
+  Set<InlineStyle>? styles,
+}) {
   if (segments.isEmpty) {
-    return [StyledSegment(text)];
-  }
-
-  final result = <StyledSegment>[];
-  var pos = 0;
-  var inserted = false;
-
-  for (final seg in segments) {
-    final segStart = pos;
-    final segEnd = pos + seg.text.length;
-
-    if (!inserted && offset <= segEnd) {
-      // Insertion point is within (or at the boundary of) this segment.
-      final localOffset = offset - segStart;
-      final before = seg.text.substring(0, localOffset);
-      final after = seg.text.substring(localOffset);
-      if (before.isNotEmpty) result.add(StyledSegment(before, seg.styles));
-      result.add(StyledSegment(text, seg.styles)); // inherit style
-      if (after.isNotEmpty) result.add(StyledSegment(after, seg.styles));
-      inserted = true;
-    } else {
-      result.add(seg);
-    }
-
-    pos = segEnd;
-  }
-
-  // If offset is past all segments (shouldn't happen with valid offset),
-  // append with the last segment's style.
-  if (!inserted) {
-    result.add(StyledSegment(text, segments.last.styles));
-  }
-
-  return result;
-}
-
-/// Insert [text] at [offset] with explicit [styles], splitting the existing
-/// segment at the insertion point.
-List<StyledSegment> _spliceInsertWithStyle(
-  List<StyledSegment> segments,
-  int offset,
-  String text,
-  Set<InlineStyle> styles,
-) {
-  if (segments.isEmpty) {
-    return [StyledSegment(text, styles)];
+    return [StyledSegment(text, styles ?? const {})];
   }
 
   final result = <StyledSegment>[];
@@ -334,8 +286,9 @@ List<StyledSegment> _spliceInsertWithStyle(
       final localOffset = offset - segStart;
       final before = seg.text.substring(0, localOffset);
       final after = seg.text.substring(localOffset);
+      final insertStyles = styles ?? seg.styles;
       if (before.isNotEmpty) result.add(StyledSegment(before, seg.styles));
-      result.add(StyledSegment(text, styles)); // use explicit styles
+      result.add(StyledSegment(text, insertStyles));
       if (after.isNotEmpty) result.add(StyledSegment(after, seg.styles));
       inserted = true;
     } else {
@@ -346,7 +299,7 @@ List<StyledSegment> _spliceInsertWithStyle(
   }
 
   if (!inserted) {
-    result.add(StyledSegment(text, styles));
+    result.add(StyledSegment(text, styles ?? segments.last.styles));
   }
 
   return result;

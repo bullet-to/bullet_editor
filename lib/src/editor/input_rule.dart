@@ -104,33 +104,40 @@ class BoldWrapRule extends InputRule {
 // Matches **content** where content is one or more non-* characters.
 final _boldPattern = RegExp(r'\*\*([^*]+)\*\*');
 
-/// Detects "# " at the start of a block and converts it to an H1.
+/// Detects a prefix (e.g. "# ", "- ") typed at the start of a paragraph
+/// and converts the block to the specified type.
 ///
-/// Fires when the user types a space after "# " at position 0.
-class HeadingRule extends InputRule {
+/// Fires when the user types a space after the prefix character at position 0.
+class PrefixBlockRule extends InputRule {
+  PrefixBlockRule(this.prefix, this.targetType);
+
+  /// The prefix character before the space (e.g. "#", "-").
+  final String prefix;
+  final BlockType targetType;
+
   @override
   Transaction? tryTransform(Transaction pending, Document doc) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ' ') return null;
+    if (insertOp.offset != prefix.length) return null;
 
     final resultDoc = pending.apply(doc);
     final i = insertOp.blockIndex;
     if (i >= resultDoc.allBlocks.length) return null;
 
     final block = resultDoc.allBlocks[i];
-    if (!block.plainText.startsWith('# ') || block.blockType != BlockType.paragraph) {
+    final fullPrefix = '$prefix ';
+    if (!block.plainText.startsWith(fullPrefix) ||
+        block.blockType != BlockType.paragraph) {
       return null;
     }
-    // Only fire if the space was typed at position 1 (right after #).
-    if (insertOp.offset != 1) return null;
 
-    // Delete "# " prefix and change type. Cursor lands at start of block.
     final blockStart = resultDoc.globalOffset(i, 0);
     return Transaction(
       operations: [
         ...pending.operations,
-        DeleteText(i, 0, 2),
-        ChangeBlockType(i, BlockType.h1),
+        DeleteText(i, 0, fullPrefix.length),
+        ChangeBlockType(i, targetType),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
         baseOffset: blockStart,
@@ -140,37 +147,13 @@ class HeadingRule extends InputRule {
   }
 }
 
-/// Detects "- " at the start of a block and converts it to a list item.
-class ListItemRule extends InputRule {
-  @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null || insertOp.text != ' ') return null;
+/// Convenience constructors for common prefix rules.
+class HeadingRule extends PrefixBlockRule {
+  HeadingRule() : super('#', BlockType.h1);
+}
 
-    final resultDoc = pending.apply(doc);
-    final i = insertOp.blockIndex;
-    if (i >= resultDoc.allBlocks.length) return null;
-
-    final block = resultDoc.allBlocks[i];
-    if (!block.plainText.startsWith('- ') || block.blockType != BlockType.paragraph) {
-      return null;
-    }
-    // Only fire if the space was typed at position 1 (right after -).
-    if (insertOp.offset != 1) return null;
-
-    final blockStart = resultDoc.globalOffset(i, 0);
-    return Transaction(
-      operations: [
-        ...pending.operations,
-        DeleteText(i, 0, 2),
-        ChangeBlockType(i, BlockType.listItem),
-      ],
-      selectionAfter: pending.selectionAfter?.copyWith(
-        baseOffset: resultDoc.globalOffset(i, 0),
-        extentOffset: resultDoc.globalOffset(i, 0),
-      ),
-    );
-  }
+class ListItemRule extends PrefixBlockRule {
+  ListItemRule() : super('-', BlockType.listItem);
 }
 
 /// Enter on an empty list item converts it to a paragraph instead of splitting.
