@@ -165,6 +165,45 @@ void main() {
     });
   });
 
+  group('ChangeBlockType', () {
+    test('changes block type', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+      ]);
+      final result = ChangeBlockType(0, BlockType.h1).apply(doc);
+      expect(result.blocks[0].blockType, BlockType.h1);
+      expect(result.blocks[0].plainText, 'hello');
+    });
+  });
+
+  group('SplitBlock with block types', () {
+    test('Enter on heading creates paragraph', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('heading')],
+        ),
+      ]);
+      final result = SplitBlock(0, 7).apply(doc);
+      expect(result.blocks[0].blockType, BlockType.h1);
+      expect(result.blocks[1].blockType, BlockType.paragraph);
+    });
+
+    test('Enter on list item creates another list item', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('item')],
+        ),
+      ]);
+      final result = SplitBlock(0, 4).apply(doc);
+      expect(result.blocks[0].blockType, BlockType.listItem);
+      expect(result.blocks[1].blockType, BlockType.listItem);
+    });
+  });
+
   group('Transaction', () {
     test('applies multiple operations in sequence', () {
       final doc = Document([

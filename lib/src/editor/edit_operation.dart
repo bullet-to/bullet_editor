@@ -29,7 +29,12 @@ class InsertText extends EditOperation {
     final List<StyledSegment> newSegments;
     if (styles != null) {
       // Explicit styles from active style set — splice in with those styles.
-      newSegments = _spliceInsertWithStyle(block.segments, offset, text, styles!);
+      newSegments = _spliceInsertWithStyle(
+        block.segments,
+        offset,
+        text,
+        styles!,
+      );
     } else {
       // No explicit styles — inherit from the segment at the insertion point.
       newSegments = _spliceInsert(block.segments, offset, text);
@@ -39,7 +44,8 @@ class InsertText extends EditOperation {
   }
 
   @override
-  String toString() => 'InsertText(block: $blockIndex, offset: $offset, "$text")';
+  String toString() =>
+      'InsertText(block: $blockIndex, offset: $offset, "$text")';
 }
 
 /// Delete [length] characters from block at [blockIndex] starting at [offset].
@@ -59,7 +65,8 @@ class DeleteText extends EditOperation {
   }
 
   @override
-  String toString() => 'DeleteText(block: $blockIndex, offset: $offset, len: $length)';
+  String toString() =>
+      'DeleteText(block: $blockIndex, offset: $offset, len: $length)';
 }
 
 /// Toggle [style] on the range [start]..[end] in block at [blockIndex].
@@ -114,12 +121,16 @@ class ToggleStyle extends EditOperation {
   }
 
   @override
-  String toString() => 'ToggleStyle(block: $blockIndex, $start..$end, ${style.name})';
+  String toString() =>
+      'ToggleStyle(block: $blockIndex, $start..$end, ${style.name})';
 }
 
 /// Split block at [blockIndex] at [offset], creating a new block after it.
 ///
 /// This is what happens when the user presses Enter.
+/// - Headings: new block is always a paragraph (Notion-style).
+/// - List items: new block is another list item (continue the list).
+/// - Paragraphs: new block is a paragraph.
 class SplitBlock extends EditOperation {
   SplitBlock(this.blockIndex, this.offset);
 
@@ -129,13 +140,29 @@ class SplitBlock extends EditOperation {
   @override
   Document apply(Document doc) {
     final block = doc.blocks[blockIndex];
-    // Rebuild segments for each half, preserving styles at the split point.
-    final beforeSegments = _splitSegmentsAt(block.segments, offset, takeBefore: true);
-    final afterSegments = _splitSegmentsAt(block.segments, offset, takeBefore: false);
+    final beforeSegments = _splitSegmentsAt(
+      block.segments,
+      offset,
+      takeBefore: true,
+    );
+    final afterSegments = _splitSegmentsAt(
+      block.segments,
+      offset,
+      takeBefore: false,
+    );
 
-    final updatedBlock = block.copyWith(segments: mergeSegments(beforeSegments));
+    // Headings always produce a paragraph on Enter.
+    // List items continue as list items.
+    final newBlockType = block.blockType == BlockType.listItem
+        ? BlockType.listItem
+        : BlockType.paragraph;
+
+    final updatedBlock = block.copyWith(
+      segments: mergeSegments(beforeSegments),
+    );
     final newBlock = TextBlock(
       id: generateBlockId(),
+      blockType: newBlockType,
       segments: mergeSegments(afterSegments),
     );
 
@@ -163,7 +190,10 @@ class MergeBlocks extends EditOperation {
     final first = doc.blocks[secondBlockIndex - 1];
     final second = doc.blocks[secondBlockIndex];
 
-    final mergedSegments = mergeSegments([...first.segments, ...second.segments]);
+    final mergedSegments = mergeSegments([
+      ...first.segments,
+      ...second.segments,
+    ]);
     final mergedBlock = first.copyWith(segments: mergedSegments);
 
     var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
@@ -173,6 +203,23 @@ class MergeBlocks extends EditOperation {
 
   @override
   String toString() => 'MergeBlocks(second: $secondBlockIndex)';
+}
+
+/// Change the block type of the block at [blockIndex].
+class ChangeBlockType extends EditOperation {
+  ChangeBlockType(this.blockIndex, this.newType);
+
+  final int blockIndex;
+  final BlockType newType;
+
+  @override
+  Document apply(Document doc) {
+    final block = doc.blocks[blockIndex];
+    return doc.replaceBlock(blockIndex, block.copyWith(blockType: newType));
+  }
+
+  @override
+  String toString() => 'ChangeBlockType(block: $blockIndex, ${newType.name})';
 }
 
 // --- Helpers ---
@@ -285,10 +332,17 @@ List<StyledSegment> _spliceDelete(
       result.add(seg);
     } else {
       // Partially or fully inside the delete range.
-      final keepBefore = seg.text.substring(0, (deleteStart - segStart).clamp(0, seg.text.length));
-      final keepAfter = seg.text.substring((deleteEnd - segStart).clamp(0, seg.text.length));
-      if (keepBefore.isNotEmpty) result.add(StyledSegment(keepBefore, seg.styles));
-      if (keepAfter.isNotEmpty) result.add(StyledSegment(keepAfter, seg.styles));
+      final keepBefore = seg.text.substring(
+        0,
+        (deleteStart - segStart).clamp(0, seg.text.length),
+      );
+      final keepAfter = seg.text.substring(
+        (deleteEnd - segStart).clamp(0, seg.text.length),
+      );
+      if (keepBefore.isNotEmpty)
+        result.add(StyledSegment(keepBefore, seg.styles));
+      if (keepAfter.isNotEmpty)
+        result.add(StyledSegment(keepAfter, seg.styles));
     }
 
     pos = segEnd;
@@ -314,13 +368,17 @@ List<StyledSegment> _splitSegmentsAt(
       if (segEnd <= offset) {
         result.add(seg);
       } else if (segStart < offset) {
-        result.add(StyledSegment(seg.text.substring(0, offset - segStart), seg.styles));
+        result.add(
+          StyledSegment(seg.text.substring(0, offset - segStart), seg.styles),
+        );
       }
     } else {
       if (segStart >= offset) {
         result.add(seg);
       } else if (segEnd > offset) {
-        result.add(StyledSegment(seg.text.substring(offset - segStart), seg.styles));
+        result.add(
+          StyledSegment(seg.text.substring(offset - segStart), seg.styles),
+        );
       }
     }
 

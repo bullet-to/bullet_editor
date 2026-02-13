@@ -1,3 +1,4 @@
+import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
 import 'edit_operation.dart';
@@ -43,10 +44,10 @@ class BoldWrapRule extends InputRule {
       final editEnd = insertOp.offset + insertOp.text.length;
       if (editBlock != i) continue;
 
-      final match = _boldPattern.allMatches(text).cast<RegExpMatch?>().firstWhere(
-            (m) => m!.end == editEnd,
-            orElse: () => null,
-          );
+      final match = _boldPattern
+          .allMatches(text)
+          .cast<RegExpMatch?>()
+          .firstWhere((m) => m!.end == editEnd, orElse: () => null);
       if (match == null) continue;
 
       final fullMatchStart = match.start;
@@ -100,6 +101,89 @@ class BoldWrapRule extends InputRule {
 
 // Matches **content** where content is one or more non-* characters.
 final _boldPattern = RegExp(r'\*\*([^*]+)\*\*');
+
+/// Detects "# " at the start of a block and converts it to an H1.
+///
+/// Fires when the user types a space after "# " at position 0.
+class HeadingRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final insertOp = _findInsertOp(pending);
+    if (insertOp == null || insertOp.text != ' ') return null;
+
+    final resultDoc = pending.apply(doc);
+    final i = insertOp.blockIndex;
+    if (i >= resultDoc.blocks.length) return null;
+
+    final block = resultDoc.blocks[i];
+    if (block.plainText != '# ' || block.blockType != BlockType.paragraph)
+      return null;
+
+    // Transform: apply original ops, then delete "# ", then change type to H1.
+    return Transaction(
+      operations: [
+        ...pending.operations,
+        DeleteText(i, 0, 2),
+        ChangeBlockType(i, BlockType.h1),
+      ],
+      selectionAfter: pending.selectionAfter?.copyWith(
+        baseOffset: resultDoc.globalOffset(i, 0),
+        extentOffset: resultDoc.globalOffset(i, 0),
+      ),
+    );
+  }
+}
+
+/// Detects "- " at the start of a block and converts it to a list item.
+class ListItemRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final insertOp = _findInsertOp(pending);
+    if (insertOp == null || insertOp.text != ' ') return null;
+
+    final resultDoc = pending.apply(doc);
+    final i = insertOp.blockIndex;
+    if (i >= resultDoc.blocks.length) return null;
+
+    final block = resultDoc.blocks[i];
+    if (block.plainText != '- ' || block.blockType != BlockType.paragraph)
+      return null;
+
+    return Transaction(
+      operations: [
+        ...pending.operations,
+        DeleteText(i, 0, 2),
+        ChangeBlockType(i, BlockType.listItem),
+      ],
+      selectionAfter: pending.selectionAfter?.copyWith(
+        baseOffset: resultDoc.globalOffset(i, 0),
+        extentOffset: resultDoc.globalOffset(i, 0),
+      ),
+    );
+  }
+}
+
+/// Enter on an empty list item converts it to a paragraph instead of splitting.
+///
+/// This rule checks for SplitBlock on an empty list item and replaces it
+/// with a ChangeBlockType to paragraph.
+class EmptyListItemRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
+    if (splitOp == null) return null;
+
+    final block = doc.blocks[splitOp.blockIndex];
+    if (block.blockType != BlockType.listItem) return null;
+    if (block.plainText.isNotEmpty) return null;
+
+    // Replace the split with a type change to paragraph.
+    return Transaction(
+      operations: [ChangeBlockType(splitOp.blockIndex, BlockType.paragraph)],
+      selectionAfter: pending.selectionAfter,
+    );
+  }
+}
 
 /// Find the first InsertText operation in a transaction, if any.
 InsertText? _findInsertOp(Transaction tx) {

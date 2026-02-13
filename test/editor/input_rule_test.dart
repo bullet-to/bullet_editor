@@ -1,6 +1,6 @@
+import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:bullet_editor/bullet_editor.dart';
 
 void main() {
   group('BoldWrapRule', () {
@@ -38,34 +38,39 @@ void main() {
       expect(result.selectionAfter!.baseOffset, 11);
     });
 
-    test('does NOT fire when **text** already exists and unrelated edit happens', () {
-      final rule = BoldWrapRule();
+    test(
+      'does NOT fire when **text** already exists and unrelated edit happens',
+      () {
+        final rule = BoldWrapRule();
 
-      // Block already has **text** as literal characters.
-      final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('Type **text** here'),
-        ]),
-      ]);
+        // Block already has **text** as literal characters.
+        final doc = Document([
+          TextBlock(
+            id: 'a',
+            segments: [const StyledSegment('Type **text** here')],
+          ),
+        ]);
 
-      // User types a space at the end — unrelated to the pattern.
-      final pending = Transaction(
-        operations: [InsertText(0, 18, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 19),
-      );
+        // User types a space at the end — unrelated to the pattern.
+        final pending = Transaction(
+          operations: [InsertText(0, 18, ' ')],
+          selectionAfter: const TextSelection.collapsed(offset: 19),
+        );
 
-      // Rule should NOT fire — the pattern wasn't just completed.
-      expect(rule.tryTransform(pending, doc), isNull);
-    });
+        // Rule should NOT fire — the pattern wasn't just completed.
+        expect(rule.tryTransform(pending, doc), isNull);
+      },
+    );
 
     test('cursor lands after bold text when pattern is mid-sentence', () {
       final rule = BoldWrapRule();
 
       // "abc **trigger* bold" — user is about to type the closing *
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('abc **trigger* bold'),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('abc **trigger* bold')],
+        ),
       ]);
 
       // User types closing * at position 14 (right after the existing *)
@@ -98,9 +103,10 @@ void main() {
       // Two blocks: block 0 = "first", block 1 = "abc **trigger* bold"
       final doc = Document([
         TextBlock(id: 'a', segments: [const StyledSegment('first')]),
-        TextBlock(id: 'b', segments: [
-          const StyledSegment('abc **trigger* bold'),
-        ]),
+        TextBlock(
+          id: 'b',
+          segments: [const StyledSegment('abc **trigger* bold')],
+        ),
       ]);
 
       // User types * in block 1 at local offset 14.
@@ -129,6 +135,118 @@ void main() {
       final pending = Transaction(
         operations: [InsertText(0, 11, '!')],
         selectionAfter: const TextSelection.collapsed(offset: 12),
+      );
+
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
+  group('HeadingRule', () {
+    test('# followed by space converts to H1', () {
+      final rule = HeadingRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('#')]),
+      ]);
+
+      final pending = Transaction(
+        operations: [InsertText(0, 1, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 2),
+      );
+
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+
+      final newDoc = result!.apply(doc);
+      expect(newDoc.blocks[0].blockType, BlockType.h1);
+      expect(newDoc.blocks[0].plainText, '');
+    });
+
+    test('does not fire on # mid-text', () {
+      final rule = HeadingRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello #')]),
+      ]);
+
+      final pending = Transaction(
+        operations: [InsertText(0, 7, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 8),
+      );
+
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+
+    test('does not fire if block is already H1', () {
+      final rule = HeadingRule();
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('#')],
+        ),
+      ]);
+
+      final pending = Transaction(
+        operations: [InsertText(0, 1, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 2),
+      );
+
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
+  group('ListItemRule', () {
+    test('- followed by space converts to list item', () {
+      final rule = ListItemRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('-')]),
+      ]);
+
+      final pending = Transaction(
+        operations: [InsertText(0, 1, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 2),
+      );
+
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+
+      final newDoc = result!.apply(doc);
+      expect(newDoc.blocks[0].blockType, BlockType.listItem);
+      expect(newDoc.blocks[0].plainText, '');
+    });
+  });
+
+  group('EmptyListItemRule', () {
+    test('Enter on empty list item converts to paragraph', () {
+      final rule = EmptyListItemRule();
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
+      ]);
+
+      final pending = Transaction(
+        operations: [SplitBlock(0, 0)],
+        selectionAfter: const TextSelection.collapsed(offset: 1),
+      );
+
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+
+      final newDoc = result!.apply(doc);
+      expect(newDoc.blocks[0].blockType, BlockType.paragraph);
+    });
+
+    test('does not fire on non-empty list item', () {
+      final rule = EmptyListItemRule();
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('content')],
+        ),
+      ]);
+
+      final pending = Transaction(
+        operations: [SplitBlock(0, 7)],
+        selectionAfter: const TextSelection.collapsed(offset: 8),
       );
 
       expect(rule.tryTransform(pending, doc), isNull);

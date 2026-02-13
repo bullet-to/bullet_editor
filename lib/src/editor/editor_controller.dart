@@ -145,16 +145,23 @@ class EditorController extends TextEditingController {
     final children = <InlineSpan>[];
 
     for (var i = 0; i < _document.blocks.length; i++) {
-      if (i > 0) children.add(TextSpan(text: '\n', style: style));
+      if (i > 0) {
+        // Give the \n the previous block's style so the cursor height
+        // stays consistent at the end of lines with larger fonts (e.g. H1).
+        final prevBlockStyle = _blockBaseStyle(_document.blocks[i - 1].blockType, style);
+        children.add(TextSpan(text: '\n', style: prevBlockStyle));
+      }
 
       final block = _document.blocks[i];
+      final blockStyle = _blockBaseStyle(block.blockType, style);
+
       if (block.segments.isEmpty) {
-        children.add(TextSpan(text: '', style: style));
+        children.add(TextSpan(text: '', style: blockStyle));
       } else {
         for (final seg in block.segments) {
           children.add(TextSpan(
             text: seg.text,
-            style: _resolveStyle(seg.styles, style),
+            style: _resolveStyle(seg.styles, blockStyle),
           ));
         }
       }
@@ -163,6 +170,26 @@ class EditorController extends TextEditingController {
     return TextSpan(style: style, children: children);
   }
 
+  /// Base style for a block type (font size, weight, color).
+  TextStyle? _blockBaseStyle(BlockType type, TextStyle? base) {
+    switch (type) {
+      case BlockType.h1:
+        return (base ?? const TextStyle()).copyWith(
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
+          height: 1.3,
+        );
+      case BlockType.listItem:
+        // Subtle visual distinction — no bullet prefix (would break offsets).
+        return (base ?? const TextStyle()).copyWith(
+          color: const Color(0xFF333333),
+        );
+      case BlockType.paragraph:
+        return base;
+    }
+  }
+
+  /// Apply inline styles on top of the block base style.
   TextStyle? _resolveStyle(Set<InlineStyle> styles, TextStyle? base) {
     if (styles.isEmpty) return base;
     var result = base ?? const TextStyle();

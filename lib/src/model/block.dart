@@ -31,13 +31,21 @@ class StyledSegment {
   }
 }
 
-/// A single block in the document. POC: always a paragraph.
+/// The type of a block. Determines rendering and behavior.
+enum BlockType { paragraph, h1, listItem }
+
+/// A single block in the document.
 ///
 /// Immutable. Use [copyWith] to produce modified versions.
 class TextBlock {
-  TextBlock({required this.id, this.segments = const []});
+  TextBlock({
+    required this.id,
+    this.blockType = BlockType.paragraph,
+    this.segments = const [],
+  });
 
   final String id;
+  final BlockType blockType;
   final List<StyledSegment> segments;
 
   /// Plain text content of this block (no formatting).
@@ -46,12 +54,20 @@ class TextBlock {
   /// Total character length of this block's text.
   int get length => plainText.length;
 
-  TextBlock copyWith({String? id, List<StyledSegment>? segments}) {
-    return TextBlock(id: id ?? this.id, segments: segments ?? this.segments);
+  TextBlock copyWith({
+    String? id,
+    BlockType? blockType,
+    List<StyledSegment>? segments,
+  }) {
+    return TextBlock(
+      id: id ?? this.id,
+      blockType: blockType ?? this.blockType,
+      segments: segments ?? this.segments,
+    );
   }
 
   @override
-  String toString() => 'TextBlock($id, segments: $segments)';
+  String toString() => 'TextBlock($id, $blockType, segments: $segments)';
 }
 
 /// Merge adjacent segments that share the same style set.

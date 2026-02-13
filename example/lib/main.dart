@@ -32,27 +32,41 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
 
-    // Pre-load a document with some bold text to demonstrate styled rendering.
     final doc = Document([
       TextBlock(
         id: 'b1',
-        segments: [
-          const StyledSegment('Hello '),
-          const StyledSegment('bold world', {InlineStyle.bold}),
-          const StyledSegment('! This is the POC.'),
-        ],
+        blockType: BlockType.h1,
+        segments: [const StyledSegment('Welcome to Bullet Editor')],
       ),
       TextBlock(
         id: 'b2',
         segments: [
-          const StyledSegment(
-            'Type two asterisks, then text, then two more asterisks to trigger bold.',
-          ),
+          const StyledSegment('This is a '),
+          const StyledSegment('bold', {InlineStyle.bold}),
+          const StyledSegment(' paragraph.'),
         ],
+      ),
+      TextBlock(
+        id: 'b3',
+        blockType: BlockType.listItem,
+        segments: [const StyledSegment('Type # then space for a heading')],
+      ),
+      TextBlock(
+        id: 'b4',
+        blockType: BlockType.listItem,
+        segments: [const StyledSegment('Type - then space for a list item')],
       ),
     ]);
 
-    _controller = EditorController(document: doc, inputRules: [BoldWrapRule()]);
+    _controller = EditorController(
+      document: doc,
+      inputRules: [
+        HeadingRule(),
+        ListItemRule(),
+        EmptyListItemRule(),
+        BoldWrapRule(),
+      ],
+    );
     _controller.addListener(() => setState(() {}));
   }
 
@@ -117,7 +131,7 @@ class _EditorScreenState extends State<EditorScreen> {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Text(
-                            'Block $i [${block.id}]: ${block.segments}',
+                            'Block $i [${block.blockType.name}]: ${block.segments}',
                             style: TextStyle(
                               fontSize: 12,
                               fontFamily: 'monospace',

@@ -238,6 +238,160 @@ void main() {
       );
     });
 
+    test('# space converts paragraph to H1 via controller', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: const []),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), BoldWrapRule()],
+      );
+
+      // Type '#'
+      controller.value = const TextEditingValue(
+        text: '#',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+      expect(controller.document.blocks[0].blockType, BlockType.paragraph);
+
+      // Type space — should trigger HeadingRule.
+      controller.value = const TextEditingValue(
+        text: '# ',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+      expect(controller.document.blocks[0].blockType, BlockType.h1);
+      expect(controller.document.blocks[0].plainText, '');
+    });
+
+    test('- space converts paragraph to list item via controller', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: const []),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), BoldWrapRule()],
+      );
+
+      controller.value = const TextEditingValue(
+        text: '-',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+
+      controller.value = const TextEditingValue(
+        text: '- ',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+      expect(controller.document.blocks[0].blockType, BlockType.listItem);
+      expect(controller.document.blocks[0].plainText, '');
+    });
+
+    test('typing space at end of H1 advances cursor correctly', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.h1,
+            segments: [const StyledSegment('Title')],
+          ),
+          TextBlock(
+            id: 'b',
+            segments: [const StyledSegment('paragraph')],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+      );
+
+      // "Title\nparagraph" — cursor at end of "Title" (offset 5).
+      expect(controller.text, 'Title\nparagraph');
+
+      controller.value = const TextEditingValue(
+        text: 'Title\nparagraph',
+        selection: TextSelection.collapsed(offset: 5),
+      );
+
+      // Type space at end of H1.
+      controller.value = const TextEditingValue(
+        text: 'Title \nparagraph',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+
+      // Model should have the space.
+      expect(controller.document.blocks[0].plainText, 'Title ');
+      expect(controller.document.blocks[0].blockType, BlockType.h1);
+
+      // Cursor should be at 6 (after the space, which is the \n position).
+      expect(controller.value.selection.baseOffset, 6);
+
+      // Controller text should reflect the model.
+      expect(controller.text, 'Title \nparagraph');
+    });
+
+    test('Enter on heading creates paragraph block', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.h1,
+            segments: [const StyledSegment('Title')],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+      );
+
+      // Press Enter at end of heading.
+      controller.value = const TextEditingValue(
+        text: 'Title\n',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[0].blockType, BlockType.h1);
+      expect(controller.document.blocks[1].blockType, BlockType.paragraph);
+    });
+
+    test('Enter on list item creates another list item', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('first')],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'first\n',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[0].blockType, BlockType.listItem);
+      expect(controller.document.blocks[1].blockType, BlockType.listItem);
+    });
+
+    test('Enter on empty list item converts to paragraph', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: const [],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+      );
+
+      // Press Enter on empty list item.
+      controller.value = const TextEditingValue(
+        text: '\n',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+
+      // Should convert to paragraph, not split.
+      expect(controller.document.blocks.length, 1);
+      expect(controller.document.blocks[0].blockType, BlockType.paragraph);
+    });
+
     test('bold rule in second block of example doc', () {
       // Matches the example app's initial document.
       final controller = EditorController(

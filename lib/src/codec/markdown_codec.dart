@@ -2,62 +2,89 @@ import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
 
-/// Minimal markdown codec: paragraphs + bold only.
+/// Markdown codec: paragraphs, H1, list items, bold.
 ///
-/// Encode: wrap bold segments in **, join blocks with double newline.
-/// Decode: split on double newline, parse **...** patterns.
+/// Encode: block type determines prefix (# , - ), bold wrapped in **.
+/// Decode: line prefix determines block type, ** patterns become bold.
 class MarkdownCodec {
-  /// Encode a [Document] to a markdown string.
   String encode(Document doc) {
     return doc.blocks.map(_encodeBlock).join('\n\n');
   }
 
-  /// Decode a markdown string to a [Document].
   Document decode(String markdown) {
     if (markdown.isEmpty) return Document.empty();
-
     final paragraphs = markdown.split('\n\n');
-    final blocks = paragraphs.map(_decodeBlock).toList();
-    return Document(blocks);
+    return Document(paragraphs.map(_decodeBlock).toList());
   }
 
   String _encodeBlock(TextBlock block) {
+    final content = _encodeSegments(block.segments);
+    switch (block.blockType) {
+      case BlockType.h1:
+        return '# $content';
+      case BlockType.listItem:
+        return '- $content';
+      case BlockType.paragraph:
+        return content;
+    }
+  }
+
+  String _encodeSegments(List<StyledSegment> segments) {
     final buffer = StringBuffer();
-    for (final segment in block.segments) {
-      if (segment.styles.contains(InlineStyle.bold)) {
-        buffer.write('**${segment.text}**');
+    for (final seg in segments) {
+      if (seg.styles.contains(InlineStyle.bold)) {
+        buffer.write('**${seg.text}**');
       } else {
-        buffer.write(segment.text);
+        buffer.write(seg.text);
       }
     }
     return buffer.toString();
   }
 
   TextBlock _decodeBlock(String text) {
+    // Detect block type from prefix.
+    BlockType type;
+    String content;
+
+    if (text.startsWith('# ')) {
+      type = BlockType.h1;
+      content = text.substring(2);
+    } else if (text.startsWith('- ')) {
+      type = BlockType.listItem;
+      content = text.substring(2);
+    } else {
+      type = BlockType.paragraph;
+      content = text;
+    }
+
+    return TextBlock(
+      id: generateBlockId(),
+      blockType: type,
+      segments: _decodeSegments(content),
+    );
+  }
+
+  List<StyledSegment> _decodeSegments(String text) {
     final segments = <StyledSegment>[];
     final pattern = RegExp(r'\*\*([^*]+)\*\*');
     var pos = 0;
 
     for (final match in pattern.allMatches(text)) {
-      // Text before the match (unstyled).
       if (match.start > pos) {
         segments.add(StyledSegment(text.substring(pos, match.start)));
       }
-      // Bold text.
       segments.add(StyledSegment(match.group(1)!, {InlineStyle.bold}));
       pos = match.end;
     }
 
-    // Trailing text after last match.
     if (pos < text.length) {
       segments.add(StyledSegment(text.substring(pos)));
     }
 
-    // If no segments were created, add a single empty segment.
     if (segments.isEmpty) {
       segments.add(const StyledSegment(''));
     }
 
-    return TextBlock(id: generateBlockId(), segments: segments);
+    return segments;
   }
 }

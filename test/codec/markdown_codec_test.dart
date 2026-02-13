@@ -46,6 +46,64 @@ void main() {
       expect(segments[2].text, ' text');
     });
 
+    test('encode H1 block', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('Hello')],
+        ),
+      ]);
+      expect(codec.encode(doc), '# Hello');
+    });
+
+    test('encode list item', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Item')],
+        ),
+      ]);
+      expect(codec.encode(doc), '- Item');
+    });
+
+    test('decode H1', () {
+      final doc = codec.decode('# Hello');
+      expect(doc.blocks.length, 1);
+      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].plainText, 'Hello');
+    });
+
+    test('decode list item', () {
+      final doc = codec.decode('- Item');
+      expect(doc.blocks.length, 1);
+      expect(doc.blocks[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].plainText, 'Item');
+    });
+
+    test('round-trip H1 with bold', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [
+            const StyledSegment('Hello '),
+            const StyledSegment('bold', {InlineStyle.bold}),
+          ],
+        ),
+      ]);
+      final decoded = codec.decode(codec.encode(doc));
+      expect(decoded.blocks[0].blockType, BlockType.h1);
+      expect(decoded.blocks[0].plainText, 'Hello bold');
+      expect(
+        decoded.blocks[0].segments.any(
+          (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold),
+        ),
+        isTrue,
+      );
+    });
+
     test('round-trip: encode then decode preserves content', () {
       final original = Document([
         TextBlock(
