@@ -88,7 +88,21 @@ Handle non-collapsed selections: delete a range spanning multiple blocks, replac
 
 ---
 
-## Phase 7: Editor Modes (was Phase 6)
+## Phase 7: IME / Composing Input Handling
+
+Fix diacritics, accented characters, and other IME composing sequences (Option+E then E for é, CJK input, etc.).
+
+- **Composing range handling:** Currently `_onValueChanged` bails early during composing (`value.composing.isValid`), but the bail is too aggressive or the composing range isn't tracked correctly across prefix chars
+- **Diacritic mid-word:** Typing a dead key (Option+E) mid-word incorrectly shifts the cursor and replaces adjacent characters instead of composing in place
+- **Diacritic at block boundary:** Composing at the end of a block causes the cursor to jump to the next block and merges blocks on completion
+- **Root cause investigation:** The display-to-model offset translation likely doesn't account for composing ranges, and the diff algorithm may misinterpret composing state changes as edits
+- **Testing:** Simulate composing sequences in unit tests (set value with composing range, then resolve)
+
+**Key question answered:** Does our diff + offset translation pipeline handle multi-step IME input without corrupting the document?
+
+---
+
+## Phase 8: Editor Modes (was Phase 6/7)
 
 - **Mode 2 (Bear-like):** Markdown tokens in text, contextual reveal (shrink when cursor away, show when near)
 - **Mode 3 (WYSIWYG):** Plain text in controller, formatting from span model only
@@ -98,7 +112,7 @@ Handle non-collapsed selections: delete a range spanning multiple blocks, replac
 
 ---
 
-## Phase 8: Schema-as-Configuration (was Phase 7)
+## Phase 9: Schema-as-Configuration (was Phase 7/8)
 
 Refactor toward the aspirational API:
 
