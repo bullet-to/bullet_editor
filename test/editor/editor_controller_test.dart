@@ -1253,6 +1253,73 @@ void main() {
       });
     });
 
+    group('currentAttributes', () {
+      test('returns link URL when cursor is inside a link', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment('before '),
+              const StyledSegment(
+                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
+              const StyledSegment(' after'),
+            ]),
+          ]),
+        );
+        // Place cursor inside "link" (display offset 9).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 9),
+        );
+        expect(controller.currentAttributes['url'], 'https://x.com');
+      });
+
+      test('returns empty map when cursor is on plain text', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('plain')]),
+          ]),
+        );
+        expect(controller.currentAttributes, isEmpty);
+      });
+    });
+
+    group('setLink idempotent', () {
+      test('setLink on already-linked range updates URL', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment(
+                  'click', {InlineStyle.link}, {'url': 'https://old.com'}),
+            ]),
+          ]),
+        );
+        // Select all.
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 5),
+        );
+        controller.setLink('https://new.com');
+
+        final seg = controller.document.allBlocks[0].segments[0];
+        expect(seg.styles, contains(InlineStyle.link));
+        expect(seg.attributes['url'], 'https://new.com');
+      });
+
+      test('setLink on plain text applies link', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 5),
+        );
+        controller.setLink('https://example.com');
+
+        final seg = controller.document.allBlocks[0].segments[0];
+        expect(seg.styles, contains(InlineStyle.link));
+        expect(seg.attributes['url'], 'https://example.com');
+      });
+    });
+
     group('canIndent / canOutdent', () {
       test('canIndent true for list item with previous sibling', () {
         final controller = EditorController(

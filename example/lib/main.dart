@@ -1,4 +1,6 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:bullet_editor/bullet_editor.dart' as offsetMapper
+    show displayToModel, modelToDisplay;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -123,14 +125,27 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _showLinkDialog() {
-    if (!_controller.value.selection.isValid ||
-        _controller.value.selection.isCollapsed) return;
+    if (!_controller.value.selection.isValid) return;
 
-    final urlController = TextEditingController();
-    showDialog<String>(
+    // If cursor is inside an existing link, pre-fill its URL.
+    final existingUrl = _controller.currentAttributes['url'] as String?;
+    final isEditing = existingUrl != null &&
+        _controller.activeStyles.contains(InlineStyle.link);
+
+    // For new links, require a selection. For editing, collapsed is fine.
+    if (!isEditing && _controller.value.selection.isCollapsed) return;
+
+    // If editing with collapsed cursor, select the entire link segment
+    // so setLink replaces its URL.
+    if (isEditing && _controller.value.selection.isCollapsed) {
+      _selectCurrentLinkSegment();
+    }
+
+    final urlController = TextEditingController(text: existingUrl ?? '');
+    showDialog<String?>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Insert Link'),
+        title: Text(isEditing ? 'Edit Link' : 'Insert Link'),
         content: TextField(
           controller: urlController,
           autofocus: true,
@@ -141,6 +156,15 @@ class _EditorScreenState extends State<EditorScreen> {
           onSubmitted: (url) => Navigator.of(ctx).pop(url),
         ),
         actions: [
+          if (isEditing)
+            TextButton(
+              onPressed: () {
+                // Remove the link style.
+                _controller.toggleStyle(InlineStyle.link);
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Remove Link'),
+            ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Cancel'),
@@ -152,11 +176,55 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
     ).then((url) {
-      if (url != null && url.isNotEmpty) {
+      if (url == null) {
+        // Cancelled — do nothing.
+      } else if (url.isEmpty) {
+        // Empty URL — remove the link.
+        _controller.toggleStyle(InlineStyle.link);
+      } else {
         _controller.setLink(url);
-        _focusNode.requestFocus();
       }
+      _focusNode.requestFocus();
     });
+  }
+
+  /// Select the full link segment at the cursor so setLink can update its URL.
+  void _selectCurrentLinkSegment() {
+    final sel = _controller.value.selection;
+    if (!sel.isValid || !sel.isCollapsed) return;
+
+    final offset = sel.baseOffset;
+
+    // Walk the document model to find the link segment boundaries.
+    // Link segments share the same style, so look for where the link style
+    // boundary is by checking the document model.
+    final doc = _controller.document;
+    final schema = _controller.schema;
+    final modelOffset = offsetMapper.displayToModel(doc, offset, schema);
+    final pos = doc.blockAt(modelOffset);
+    final block = doc.allBlocks[pos.blockIndex];
+
+    var segStart = 0;
+    for (final seg in block.segments) {
+      final segEnd = segStart + seg.text.length;
+      if (pos.localOffset >= segStart && pos.localOffset <= segEnd) {
+        if (seg.styles.contains(InlineStyle.link)) {
+          // Convert local offsets to display offsets.
+          final globalStart = doc.globalOffset(pos.blockIndex, segStart);
+          final globalEnd = doc.globalOffset(pos.blockIndex, segEnd);
+          final displayStart =
+              offsetMapper.modelToDisplay(doc, globalStart, schema);
+          final displayEnd =
+              offsetMapper.modelToDisplay(doc, globalEnd, schema);
+          _controller.value = _controller.value.copyWith(
+            selection: TextSelection(
+                baseOffset: displayStart, extentOffset: displayEnd),
+          );
+        }
+        break;
+      }
+      segStart = segEnd;
+    }
   }
 
   /// Intercept Tab / Shift+Tab before Flutter's focus system eats them.

@@ -74,6 +74,26 @@ class EditorController extends TextEditingController {
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
 
+  /// Get the segment attributes at the cursor position.
+  /// Returns the attributes of the segment the cursor is inside (e.g.
+  /// `{'url': '...'}` for a link). Empty map if no attributes.
+  Map<String, dynamic> get currentAttributes {
+    if (!value.selection.isValid) return const {};
+    final modelOffset = _displayToModel(value.selection.baseOffset);
+    final pos = _document.blockAt(modelOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    var offset = 0;
+    for (final seg in block.segments) {
+      final segEnd = offset + seg.text.length;
+      if (pos.localOffset <= segEnd &&
+          (pos.localOffset > offset || offset == 0)) {
+        return seg.attributes;
+      }
+      offset = segEnd;
+    }
+    return const {};
+  }
+
   // -- Offset helpers (delegate to offset_mapper) --
 
   int _displayToModel(int displayOffset) =>
@@ -386,30 +406,43 @@ class EditorController extends TextEditingController {
     final endPos = _document.blockAt(end);
     final attrs = {'url': url};
 
-    final ops = <EditOperation>[];
+    // Build ops: if any part of the range already has a link, remove it first
+    // so the toggle always adds. This makes setLink idempotent for edits.
+    final removeOps = <EditOperation>[];
+    final addOps = <EditOperation>[];
     for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
       final block = _document.allBlocks[i];
       final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
       final blockEnd = i == endPos.blockIndex
           ? endPos.localOffset
           : block.length;
-      if (blockEnd > blockStart) {
-        ops.add(
-          ToggleStyle(
-            i,
-            blockStart,
-            blockEnd,
-            InlineStyle.link,
-            attributes: attrs,
-          ),
-        );
+      if (blockEnd <= blockStart) continue;
+
+      // Check if this range already has link style — if so, remove first.
+      var hasLink = false;
+      var offset = 0;
+      for (final seg in block.segments) {
+        final segEnd = offset + seg.text.length;
+        if (segEnd > blockStart && offset < blockEnd &&
+            seg.styles.contains(InlineStyle.link)) {
+          hasLink = true;
+          break;
+        }
+        offset = segEnd;
       }
+      if (hasLink) {
+        removeOps.add(ToggleStyle(i, blockStart, blockEnd, InlineStyle.link,
+            attributes: attrs));
+      }
+      addOps.add(ToggleStyle(i, blockStart, blockEnd, InlineStyle.link,
+          attributes: attrs));
     }
 
-    if (ops.isEmpty) return;
+    if (addOps.isEmpty) return;
 
     _pushUndo();
-    final tx = Transaction(operations: ops, selectionAfter: modelSel);
+    final tx = Transaction(
+        operations: [...removeOps, ...addOps], selectionAfter: modelSel);
     _document = tx.apply(_document);
     _activeStyles = _stylesForSelection(
       TextSelection(baseOffset: start, extentOffset: end),
