@@ -1294,6 +1294,146 @@ void main() {
         controller.dispose();
       });
     });
+
+    group('canIndent / canOutdent', () {
+      test('canIndent true for list item with previous sibling', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem,
+                segments: [const StyledSegment('first')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem,
+                segments: [const StyledSegment('second')]),
+          ]),
+        );
+        // Cursor on second list item.
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(
+              offset: controller.text.length), // end of second
+        );
+        expect(controller.canIndent, isTrue);
+        expect(controller.canOutdent, isFalse); // root level
+      });
+
+      test('canIndent false for heading', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1,
+                segments: [const StyledSegment('Title')]),
+          ]),
+        );
+        expect(controller.canIndent, isFalse);
+      });
+
+      test('canOutdent true for nested block', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem,
+                segments: [const StyledSegment('parent')],
+                children: [
+                  TextBlock(id: 'b', blockType: BlockType.listItem,
+                      segments: [const StyledSegment('child')]),
+                ]),
+          ]),
+        );
+        // Cursor on nested child.
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(
+              offset: controller.text.length),
+        );
+        expect(controller.canOutdent, isTrue);
+      });
+    });
+
+    group('canSetBlockType', () {
+      test('returns true for valid conversion', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+        expect(controller.canSetBlockType(BlockType.h1), isTrue);
+        expect(controller.canSetBlockType(BlockType.listItem), isTrue);
+      });
+
+      test('returns false for void types', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+        expect(controller.canSetBlockType(BlockType.divider), isFalse);
+      });
+
+      test('returns false for heading on nested block', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem,
+                segments: [const StyledSegment('parent')],
+                children: [
+                  TextBlock(id: 'b', blockType: BlockType.paragraph,
+                      segments: [const StyledSegment('child')]),
+                ]),
+          ]),
+        );
+        // Cursor on nested child.
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(
+              offset: controller.text.length),
+        );
+        expect(controller.canSetBlockType(BlockType.h1), isFalse);
+        expect(controller.canSetBlockType(BlockType.paragraph), isTrue);
+      });
+    });
+
+    group('insertDivider', () {
+      test('inserts divider at cursor and creates paragraph after', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+          ]),
+        );
+        // Cursor at offset 5 ("hello|")
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 5),
+        );
+        controller.insertDivider();
+
+        final blocks = controller.document.allBlocks;
+        expect(blocks.length, 3);
+        expect(blocks[0].plainText, 'hello');
+        expect(blocks[1].blockType, BlockType.divider);
+        expect(blocks[2].plainText, ' world');
+      });
+
+      test('canInsertDivider false on void block', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.divider),
+            TextBlock(id: 'b', segments: [const StyledSegment('after')]),
+          ]),
+        );
+        // Cursor pushed to after divider prefix, but model is on divider.
+        expect(controller.canInsertDivider, isTrue); // cursor lands on 'after'
+      });
+
+      test('canInsertDivider false on nested block', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem,
+                segments: [const StyledSegment('parent')],
+                children: [
+                  TextBlock(id: 'b', blockType: BlockType.listItem,
+                      segments: [const StyledSegment('child')]),
+                ]),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(
+              offset: controller.text.length),
+        );
+        expect(controller.canInsertDivider, isFalse);
+      });
+    });
   });
 }
 

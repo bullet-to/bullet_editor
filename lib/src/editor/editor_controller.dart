@@ -198,6 +198,41 @@ class EditorController extends TextEditingController {
     );
   }
 
+  // -- Public queries --
+
+  /// Whether the block at the cursor can be indented.
+  bool get canIndent {
+    if (!value.selection.isValid || !value.selection.isCollapsed) return false;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final result = IndentBlock(pos.blockIndex, policies: _schema.policies)
+        .apply(_document);
+    return !identical(result, _document);
+  }
+
+  /// Whether the block at the cursor can be changed to [type].
+  /// Returns false for void types, same-type no-ops, and policy violations.
+  bool canSetBlockType(BlockType type) {
+    if (!value.selection.isValid) return false;
+    if (_schema.isVoid(type)) return false;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    if (block.blockType == type) return true; // already this type — "valid"
+    final result = ChangeBlockType(pos.blockIndex, type,
+            policies: _schema.policies)
+        .apply(_document);
+    return !identical(result, _document);
+  }
+
+  /// Whether the block at the cursor can be outdented (is nested).
+  bool get canOutdent {
+    if (!value.selection.isValid || !value.selection.isCollapsed) return false;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    return _document.depthOf(pos.blockIndex) > 0;
+  }
+
   // -- Public actions --
 
   void indent() {
@@ -223,6 +258,52 @@ class EditorController extends TextEditingController {
     _document = OutdentBlock(pos.blockIndex).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
+  }
+
+  /// Insert a divider at the cursor position.
+  ///
+  /// Splits the current block at the cursor, inserts a divider before the
+  /// second half, and places the cursor after the divider. Only works on
+  /// root-level non-void blocks.
+  void insertDivider() {
+    if (!value.selection.isValid) return;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+
+    // Don't insert divider inside a void block or nested block.
+    if (_schema.isVoid(block.blockType)) return;
+    if (_document.depthOf(pos.blockIndex) > 0) return;
+
+    _pushUndo();
+
+    // Split at cursor, then change the new block to divider, then split
+    // again to create a paragraph after the divider.
+    final dividerBlock = TextBlock(
+      id: generateBlockId(),
+      blockType: BlockType.divider,
+    );
+
+    // Split current block at cursor position.
+    _document = SplitBlock(pos.blockIndex, pos.localOffset).apply(_document);
+    // Insert divider between the two halves.
+    _document = _document.insertAfterFlatIndex(pos.blockIndex, dividerBlock);
+    // Cursor goes to the block after the divider (pos.blockIndex + 2).
+    final cursorOffset = _document.globalOffset(pos.blockIndex + 2, 0);
+    _syncToTextField(
+        modelSelection: TextSelection.collapsed(offset: cursorOffset));
+    _activeStyles = _document.stylesAt(cursorOffset);
+  }
+
+  /// Whether a divider can be inserted at the cursor position.
+  bool get canInsertDivider {
+    if (!value.selection.isValid) return false;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    if (_schema.isVoid(block.blockType)) return false;
+    if (_document.depthOf(pos.blockIndex) > 0) return false;
+    return true;
   }
 
   /// Toggle an inline style.

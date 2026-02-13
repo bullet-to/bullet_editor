@@ -123,6 +123,21 @@ Refactor toward the aspirational API:
 
 ---
 
+## Phase 10: Copy / Paste
+
+Rich copy/paste that preserves formatting across clipboard operations.
+
+- **Copy:** Serialize selected range to both plain text (for external apps) and a structured format (markdown or JSON) on the clipboard. Flutter's `Clipboard` only supports plain text natively; use `ClipboardData` with a custom MIME type or embed markdown in the plain text slot.
+- **Paste plain text:** Already works via TextField. Insert at cursor, inherits active styles.
+- **Paste rich/markdown:** Detect markdown in clipboard content, decode via `MarkdownCodec`, splice the resulting blocks/segments into the document at the cursor position. Cross-block paste (pasting multiple paragraphs) needs a `PasteBlocks` operation that splits the current block and inserts the pasted blocks between the halves.
+- **Cut:** Copy + delete selection. Should reuse the copy path + existing `DeleteRange`.
+- **Paste links:** Detect URLs in pasted plain text and auto-link them (optional input rule).
+- **Internal copy:** For copy within the editor, preserve the full `StyledSegment` list (with attributes) so paste is lossless.
+
+**Key question answered:** Can we round-trip formatting through the clipboard without losing styles or attributes? Does cross-block paste compose cleanly with the existing transaction system?
+
+---
+
 ## Future Phases (unordered)
 
 - WidgetSpan blocks (images, tables, embeds)

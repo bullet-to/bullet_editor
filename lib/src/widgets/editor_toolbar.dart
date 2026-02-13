@@ -77,9 +77,18 @@ class BlockTypeSelector extends StatelessWidget {
       underline: const SizedBox.shrink(),
       isDense: true,
       items: entries.map((entry) {
+        final canSet = entry.key is BlockType &&
+            controller.canSetBlockType(entry.key as BlockType);
         return DropdownMenuItem<Object>(
           value: entry.key,
-          child: Text(entry.value.label, style: const TextStyle(fontSize: 13)),
+          enabled: canSet,
+          child: Text(
+            entry.value.label,
+            style: TextStyle(
+              fontSize: 13,
+              color: canSet ? null : const Color(0xFFAAAAAA),
+            ),
+          ),
         );
       }).toList(),
       onChanged: (key) {
@@ -159,6 +168,18 @@ class EditorToolbar extends StatelessWidget {
                 ),
                 const VerticalDivider(width: 16, indent: 8, endIndent: 8),
 
+                // Divider insert.
+                IconButton(
+                  icon: const Icon(Icons.horizontal_rule),
+                  tooltip: 'Insert divider (---)',
+                  style: IconButton.styleFrom(
+                    splashFactory: NoSplash.splashFactory,
+                  ),
+                  onPressed: controller.canInsertDivider
+                      ? () => _action(() => controller.insertDivider())
+                      : null,
+                ),
+
                 // Task toggle.
                 if (controller.currentBlockType == BlockType.taskItem)
                   IconButton(
@@ -174,6 +195,29 @@ class EditorToolbar extends StatelessWidget {
                     onPressed: () =>
                         _action(() => controller.toggleTaskChecked()),
                   ),
+                const VerticalDivider(width: 16, indent: 8, endIndent: 8),
+
+                // Indent / outdent.
+                IconButton(
+                  icon: const Icon(Icons.format_indent_decrease),
+                  tooltip: 'Outdent (Shift+Tab)',
+                  style: IconButton.styleFrom(
+                    splashFactory: NoSplash.splashFactory,
+                  ),
+                  onPressed: controller.canOutdent
+                      ? () => _action(() => controller.outdent())
+                      : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.format_indent_increase),
+                  tooltip: 'Indent (Tab)',
+                  style: IconButton.styleFrom(
+                    splashFactory: NoSplash.splashFactory,
+                  ),
+                  onPressed: controller.canIndent
+                      ? () => _action(() => controller.indent())
+                      : null,
+                ),
                 const VerticalDivider(width: 16, indent: 8, endIndent: 8),
 
                 // Undo / redo.
