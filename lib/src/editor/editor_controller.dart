@@ -42,6 +42,10 @@ class EditorController extends TextEditingController {
   final List<InputRule> _inputRules;
   final UndoManager _undoManager;
   bool _isSyncing = false;
+  /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
+  /// While the cursor stays at this offset, the override is preserved.
+  /// Set to -1 when no override is active.
+  int _styleOverrideOffset = -1;
   TextEditingValue _previousValue = TextEditingValue.empty;
   Set<InlineStyle> _activeStyles = {};
 
@@ -49,6 +53,59 @@ class EditorController extends TextEditingController {
   Set<InlineStyle> get activeStyles => _activeStyles;
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
+
+  /// Compute active styles for the current selection.
+  ///
+  /// - Collapsed: styles at the cursor position.
+  /// - Non-collapsed: intersection of styles across ALL characters in the
+  ///   selection. Bold is active only if every selected character is bold.
+  Set<InlineStyle> _stylesForSelection(TextSelection sel) {
+    final modelSel = _selectionToModel(sel);
+
+    if (sel.isCollapsed) {
+      return _document.stylesAt(modelSel.baseOffset);
+    }
+
+    final start = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.baseOffset
+        : modelSel.extentOffset;
+    final end = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.extentOffset
+        : modelSel.baseOffset;
+
+    if (start == end) return _document.stylesAt(start);
+
+    // Walk segments in the range, intersect their styles.
+    final startPos = _document.blockAt(start);
+    final endPos = _document.blockAt(end);
+    Set<InlineStyle>? result;
+
+    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
+      final block = _document.allBlocks[i];
+      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
+      final blockEnd = i == endPos.blockIndex ? endPos.localOffset : block.length;
+      if (blockEnd <= blockStart) continue;
+
+      // Walk segments within this block's selected range.
+      var offset = 0;
+      for (final seg in block.segments) {
+        final segStart = offset;
+        final segEnd = offset + seg.text.length;
+        offset = segEnd;
+
+        // Does this segment overlap with the selected range in this block?
+        if (segEnd <= blockStart || segStart >= blockEnd) continue;
+
+        if (result == null) {
+          result = Set.of(seg.styles);
+        } else {
+          result = result.intersection(seg.styles);
+        }
+      }
+    }
+
+    return result ?? {};
+  }
 
   // -- Offset translation --
 
@@ -248,6 +305,83 @@ class EditorController extends TextEditingController {
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
   }
 
+  /// Toggle an inline style.
+  ///
+  /// - Collapsed cursor: toggles the style in [_activeStyles] so the next
+  ///   typed text gets (or loses) the style.
+  /// - Non-collapsed selection: applies [ToggleStyle] to the selected range.
+  ///   For cross-block selections, applies to each block in the range.
+  void toggleStyle(InlineStyle style) {
+    if (!value.selection.isValid) return;
+
+    if (value.selection.isCollapsed) {
+      // Toggle active style for next input.
+      if (_activeStyles.contains(style)) {
+        _activeStyles = Set.of(_activeStyles)..remove(style);
+      } else {
+        _activeStyles = Set.of(_activeStyles)..add(style);
+      }
+      _styleOverrideOffset = _displayToModel(value.selection.baseOffset);
+      notifyListeners(); // Toolbar needs to update.
+      return;
+    }
+
+    // Non-collapsed: apply ToggleStyle to each block in the range.
+    final modelSel = _selectionToModel(value.selection);
+    final start = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.baseOffset
+        : modelSel.extentOffset;
+    final end = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.extentOffset
+        : modelSel.baseOffset;
+
+    final startPos = _document.blockAt(start);
+    final endPos = _document.blockAt(end);
+
+    final ops = <EditOperation>[];
+    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
+      final block = _document.allBlocks[i];
+      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
+      final blockEnd = i == endPos.blockIndex ? endPos.localOffset : block.length;
+      if (blockEnd > blockStart) {
+        ops.add(ToggleStyle(i, blockStart, blockEnd, style));
+      }
+    }
+
+    if (ops.isEmpty) return;
+
+    _pushUndo();
+    final tx = Transaction(operations: ops, selectionAfter: modelSel);
+    _document = tx.apply(_document);
+    _activeStyles = _stylesForSelection(
+      TextSelection(baseOffset: start, extentOffset: end),
+    );
+    _syncToTextField(modelSelection: modelSel);
+    // Inline style changes don't alter display text (no characters added/removed),
+    // so _syncToTextField may not trigger notifyListeners (same TextEditingValue).
+    // Explicit notify so the toolbar rebuilds with the updated activeStyles.
+    notifyListeners();
+  }
+
+  /// Change the block type of the block at the cursor position.
+  void setBlockType(BlockType type) {
+    if (!value.selection.isValid) return;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+
+    _pushUndo();
+    _document = ChangeBlockType(pos.blockIndex, type).apply(_document);
+    _syncToTextField(modelSelection: modelSel);
+  }
+
+  /// Get the block type at the current cursor position.
+  BlockType get currentBlockType {
+    if (!value.selection.isValid) return BlockType.paragraph;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    return _document.allBlocks[pos.blockIndex].blockType;
+  }
+
   // -- Edit pipeline --
 
   void _onValueChanged() {
@@ -273,7 +407,12 @@ class EditorController extends TextEditingController {
         _isSyncing = false;
       }
       final modelOffset = _displayToModel(value.selection.baseOffset);
-      _activeStyles = _document.stylesAt(modelOffset);
+      if (_styleOverrideOffset >= 0 && modelOffset == _styleOverrideOffset) {
+        // Cursor still at the override position — preserve manual styles.
+      } else {
+        _styleOverrideOffset = -1;
+        _activeStyles = _stylesForSelection(value.selection);
+      }
       _previousValue = value;
       return;
     }
@@ -601,6 +740,12 @@ class EditorController extends TextEditingController {
     var result = base ?? const TextStyle();
     if (styles.contains(InlineStyle.bold)) {
       result = result.copyWith(fontWeight: FontWeight.bold);
+    }
+    if (styles.contains(InlineStyle.italic)) {
+      result = result.copyWith(fontStyle: FontStyle.italic);
+    }
+    if (styles.contains(InlineStyle.strikethrough)) {
+      result = result.copyWith(decoration: TextDecoration.lineThrough);
     }
     return result;
   }

@@ -14,3 +14,5 @@ export 'src/model/block_policies.dart';
 export 'src/model/document.dart';
 // Model
 export 'src/model/inline_style.dart';
+// Widgets
+export 'src/widgets/editor_toolbar.dart';

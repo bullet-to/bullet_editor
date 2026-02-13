@@ -314,4 +314,48 @@ void main() {
       expect(rule.tryTransform(pending, doc), isNull);
     });
   });
+
+  group('ItalicWrapRule', () {
+    test('*text* converts to italic', () {
+      final rule = ItalicWrapRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello *world')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 12, '*')],
+        selectionAfter: const TextSelection.collapsed(offset: 13),
+      );
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].plainText, 'hello world');
+      expect(
+        resultDoc.allBlocks[0].segments
+            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.italic)),
+        isTrue,
+      );
+    });
+  });
+
+  group('StrikethroughWrapRule', () {
+    test('~~text~~ converts to strikethrough', () {
+      final rule = StrikethroughWrapRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello ~~world~')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 14, '~')],
+        selectionAfter: const TextSelection.collapsed(offset: 15),
+      );
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].plainText, 'hello world');
+      expect(
+        resultDoc.allBlocks[0].segments
+            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.strikethrough)),
+        isTrue,
+      );
+    });
+  });
 }

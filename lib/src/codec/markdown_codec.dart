@@ -50,11 +50,18 @@ class MarkdownCodec {
   String _encodeSegments(List<StyledSegment> segments) {
     final buffer = StringBuffer();
     for (final seg in segments) {
-      if (seg.styles.contains(InlineStyle.bold)) {
-        buffer.write('**${seg.text}**');
-      } else {
-        buffer.write(seg.text);
+      var text = seg.text;
+      // Wrap in delimiters from innermost to outermost.
+      if (seg.styles.contains(InlineStyle.strikethrough)) {
+        text = '~~$text~~';
       }
+      if (seg.styles.contains(InlineStyle.italic)) {
+        text = '*$text*';
+      }
+      if (seg.styles.contains(InlineStyle.bold)) {
+        text = '**$text**';
+      }
+      buffer.write(text);
     }
     return buffer.toString();
   }
@@ -109,16 +116,26 @@ class MarkdownCodec {
     );
   }
 
+  /// Parse inline styles from text. Matches **bold**, ~~strikethrough~~, *italic*.
+  /// Order matters: ** is checked before * to avoid ambiguity.
   List<StyledSegment> _decodeSegments(String text) {
     final segments = <StyledSegment>[];
-    final pattern = RegExp(r'\*\*([^*]+)\*\*');
+    // Match bold (**), strikethrough (~~), then italic (*) — greedy on longer delimiters first.
+    final pattern = RegExp(r'\*\*(.+?)\*\*|~~(.+?)~~|\*(.+?)\*');
     var pos = 0;
 
     for (final match in pattern.allMatches(text)) {
       if (match.start > pos) {
         segments.add(StyledSegment(text.substring(pos, match.start)));
       }
-      segments.add(StyledSegment(match.group(1)!, {InlineStyle.bold}));
+      if (match.group(1) != null) {
+        segments.add(StyledSegment(match.group(1)!, {InlineStyle.bold}));
+      } else if (match.group(2) != null) {
+        segments
+            .add(StyledSegment(match.group(2)!, {InlineStyle.strikethrough}));
+      } else if (match.group(3) != null) {
+        segments.add(StyledSegment(match.group(3)!, {InlineStyle.italic}));
+      }
       pos = match.end;
     }
 

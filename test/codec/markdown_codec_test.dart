@@ -158,5 +158,41 @@ void main() {
         isTrue,
       );
     });
+
+    test('encode italic segments', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment('normal '),
+          const StyledSegment('italic', {InlineStyle.italic}),
+          const StyledSegment(' text'),
+        ]),
+      ]);
+      expect(codec.encode(doc), 'normal *italic* text');
+    });
+
+    test('decode italic text', () {
+      final doc = codec.decode('normal *italic* text');
+      expect(doc.blocks[0].segments.any(
+        (s) => s.text == 'italic' && s.styles.contains(InlineStyle.italic),
+      ), isTrue);
+    });
+
+    test('encode strikethrough segments', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment('normal '),
+          const StyledSegment('strike', {InlineStyle.strikethrough}),
+          const StyledSegment(' text'),
+        ]),
+      ]);
+      expect(codec.encode(doc), 'normal ~~strike~~ text');
+    });
+
+    test('decode strikethrough text', () {
+      final doc = codec.decode('normal ~~strike~~ text');
+      expect(doc.blocks[0].segments.any(
+        (s) => s.text == 'strike' && s.styles.contains(InlineStyle.strikethrough),
+      ), isTrue);
+    });
   });
 }

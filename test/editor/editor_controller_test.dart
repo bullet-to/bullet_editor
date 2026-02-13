@@ -751,5 +751,178 @@ void main() {
       expect(controller.document.allBlocks[0].plainText, 'hello');
       expect(controller.document.allBlocks[1].plainText, 'world');
     });
+
+    test('toggleStyle at collapsed cursor toggles activeStyles', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        ]),
+      );
+
+      // Controller starts with cursor at end of text. activeStyles is
+      // derived from the document (no bold at that position).
+      expect(controller.activeStyles.contains(InlineStyle.bold), isFalse);
+
+      // Toggle bold on — this is a "pending style" for next typed text.
+      controller.toggleStyle(InlineStyle.bold);
+      expect(controller.activeStyles.contains(InlineStyle.bold), isTrue);
+
+      // Simulate the system/IME re-setting value at the same cursor position
+      // but with a different composing range (forces a value change notification).
+      // This happens on macOS when Cmd+B triggers an IME update.
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: controller.value.selection,
+        composing: const TextRange(start: 0, end: 0),
+      );
+      // The composing range is empty, so _onValueChanged won't bail early.
+      // But it should still preserve the manually toggled active styles
+      // because the cursor hasn't moved.
+      expect(
+        controller.activeStyles.contains(InlineStyle.bold),
+        isTrue,
+        reason: 'Active styles should survive same-position value re-set',
+      );
+
+      // Toggle off.
+      controller.toggleStyle(InlineStyle.bold);
+      expect(controller.activeStyles.contains(InlineStyle.bold), isFalse);
+    });
+
+    test('toggleStyle with selection applies style to range', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        ]),
+      );
+
+      // Select 'world' (offset 6..11).
+      controller.value = const TextEditingValue(
+        text: 'hello world',
+        selection: TextSelection(baseOffset: 6, extentOffset: 11),
+      );
+
+      controller.toggleStyle(InlineStyle.italic);
+      expect(
+        controller.document.allBlocks[0].segments
+            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.italic)),
+        isTrue,
+      );
+    });
+
+    test('toggleStyle with selection updates activeStyles before notify', () {
+      // Regression: activeStyles must be updated BEFORE _syncToTextField
+      // triggers notifyListeners, so the toolbar sees the new state.
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        ]),
+      );
+
+      // Select 'world' (offset 6..11).
+      controller.value = const TextEditingValue(
+        text: 'hello world',
+        selection: TextSelection(baseOffset: 6, extentOffset: 11),
+      );
+
+      // Record activeStyles at the moment notifyListeners fires from toggleStyle.
+      // Register AFTER the setup value-set to avoid capturing that notification.
+      Set<InlineStyle>? stylesAtNotify;
+      controller.addListener(() {
+        stylesAtNotify ??= Set.of(controller.activeStyles);
+      });
+
+      controller.toggleStyle(InlineStyle.bold);
+
+      // The listener should have seen bold as active on the FIRST notification.
+      expect(
+        stylesAtNotify?.contains(InlineStyle.bold),
+        isTrue,
+        reason: 'Toolbar must see updated styles during notification',
+      );
+    });
+
+    test('setBlockType changes block type', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'hello',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+
+      expect(controller.currentBlockType, BlockType.paragraph);
+      controller.setBlockType(BlockType.h1);
+      expect(controller.currentBlockType, BlockType.h1);
+      expect(controller.document.allBlocks[0].blockType, BlockType.h1);
+    });
+
+    test('currentBlockType reflects cursor position', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.h1,
+            segments: [const StyledSegment('title')],
+          ),
+          TextBlock(id: 'b', segments: [const StyledSegment('body')]),
+        ]),
+      );
+
+      // Cursor in H1.
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
+      expect(controller.currentBlockType, BlockType.h1);
+
+      // Cursor in paragraph (after 'title\n' = offset 6).
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: const TextSelection.collapsed(offset: 6),
+      );
+      expect(controller.currentBlockType, BlockType.paragraph);
+    });
+
+    test('activeStyles reflects entire selection (all bold)', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [
+            const StyledSegment('hello ', {}),
+            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment(' world', {}),
+          ]),
+        ]),
+      );
+
+      // Select just the bold word 'bold' (offsets 6..10).
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: const TextSelection(baseOffset: 6, extentOffset: 10),
+      );
+      expect(controller.activeStyles.contains(InlineStyle.bold), isTrue);
+    });
+
+    test('activeStyles empty when selection spans bold and non-bold', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [
+            const StyledSegment('hello ', {}),
+            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment(' world', {}),
+          ]),
+        ]),
+      );
+
+      // Select 'lo bold w' (offsets 3..11) — spans both styled and unstyled.
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: const TextSelection(baseOffset: 3, extentOffset: 11),
+      );
+      expect(controller.activeStyles.contains(InlineStyle.bold), isFalse);
+    });
   });
 }

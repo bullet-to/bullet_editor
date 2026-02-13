@@ -1,4 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:bullet_editor/src/widgets/editor_toolbar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -76,7 +77,9 @@ class _EditorScreenState extends State<EditorScreen> {
         EmptyListItemRule(),
         ListItemBackspaceRule(),
         NestedBackspaceRule(),
-        BoldWrapRule(),
+        BoldWrapRule(), // ** before * — order matters
+        ItalicWrapRule(),
+        StrikethroughWrapRule(),
       ],
     );
     _controller.addListener(() => setState(() {}));
@@ -108,20 +111,38 @@ class _EditorScreenState extends State<EditorScreen> {
       return KeyEventResult.handled;
     }
 
-    // Cmd+Z / Ctrl+Z → undo, Cmd+Shift+Z / Ctrl+Shift+Z → redo.
+    // Cmd/Ctrl shortcuts.
     final isMeta = HardwareKeyboard.instance.isMetaPressed ||
         HardwareKeyboard.instance.isControlPressed;
-    if (isMeta && event.logicalKey == LogicalKeyboardKey.keyZ) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
-        _controller.redo();
-      } else {
-        _controller.undo();
-      }
-      setState(() {});
-      return KeyEventResult.handled;
-    }
+    if (!isMeta) return KeyEventResult.ignored;
 
-    return KeyEventResult.ignored;
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.keyZ:
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          _controller.redo();
+        } else {
+          _controller.undo();
+        }
+        setState(() {});
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.keyB:
+        _controller.toggleStyle(InlineStyle.bold);
+        setState(() {});
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.keyI:
+        _controller.toggleStyle(InlineStyle.italic);
+        setState(() {});
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.keyS:
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          _controller.toggleStyle(InlineStyle.strikethrough);
+          setState(() {});
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      default:
+        return KeyEventResult.ignored;
+    }
   }
 
   @override
@@ -133,6 +154,12 @@ class _EditorScreenState extends State<EditorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Toolbar.
+            EditorToolbar(
+              controller: _controller,
+              editorFocusNode: _focusNode,
+            ),
+            const SizedBox(height: 8),
             // The editor — wrapped in Focus to intercept Tab/Shift+Tab.
             Expanded(
               flex: 3,
