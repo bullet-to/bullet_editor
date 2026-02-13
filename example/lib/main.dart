@@ -1,5 +1,4 @@
 import 'package:bullet_editor/bullet_editor.dart';
-import 'package:bullet_editor/src/widgets/editor_toolbar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -51,6 +50,16 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
       TextBlock(
+        id: 'bh2',
+        blockType: BlockType.h2,
+        segments: [const StyledSegment('Heading 2 example')],
+      ),
+      TextBlock(
+        id: 'bh3',
+        blockType: BlockType.h3,
+        segments: [const StyledSegment('Heading 3 example')],
+      ),
+      TextBlock(
         id: 'b3',
         blockType: BlockType.listItem,
         segments: [const StyledSegment('Parent item')],
@@ -94,6 +103,8 @@ class _EditorScreenState extends State<EditorScreen> {
     _controller = EditorController(
       document: doc,
       inputRules: [
+        PrefixBlockRule('###', BlockType.h3), // ### before ## before #
+        PrefixBlockRule('##', BlockType.h2),
         HeadingRule(),
         TaskItemRule(), // "- [ ] " before "- " — order matters
         ListItemRule(),

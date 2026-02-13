@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../editor/editor_controller.dart';
 import '../model/block.dart';
 import '../model/inline_style.dart';
+import '../schema/editor_schema.dart';
 
 /// A single toggle button for an inline style.
 ///
@@ -46,6 +47,9 @@ class StyleToggleButton extends StatelessWidget {
 
 /// A dropdown for picking the block type at the cursor.
 ///
+/// Labels and available types come from the [EditorSchema], so adding new
+/// block types to the schema automatically populates the dropdown.
+///
 /// Reads [EditorController.currentBlockType] and calls
 /// [EditorController.setBlockType] on change. Use this to build custom toolbars.
 class BlockTypeSelector extends StatelessWidget {
@@ -53,31 +57,26 @@ class BlockTypeSelector extends StatelessWidget {
 
   final EditorController controller;
 
-  static const _labels = {
-    BlockType.paragraph: 'Paragraph',
-    BlockType.h1: 'Heading 1',
-    BlockType.listItem: 'Bullet List',
-    BlockType.numberedList: 'Numbered List',
-    BlockType.taskItem: 'Task',
-  };
-
   @override
   Widget build(BuildContext context) {
-    return DropdownButton<BlockType>(
+    final schema = controller.schema;
+    final entries = schema.blocks.entries.toList();
+
+    return DropdownButton<Object>(
       value: controller.currentBlockType,
       underline: const SizedBox.shrink(),
       isDense: true,
-      items: BlockType.values.map((type) {
-        return DropdownMenuItem(
-          value: type,
+      items: entries.map((entry) {
+        return DropdownMenuItem<Object>(
+          value: entry.key,
           child: Text(
-            _labels[type] ?? type.name,
+            entry.value.label,
             style: const TextStyle(fontSize: 13),
           ),
         );
       }).toList(),
-      onChanged: (type) {
-        if (type != null) controller.setBlockType(type);
+      onChanged: (key) {
+        if (key is BlockType) controller.setBlockType(key);
       },
     );
   }

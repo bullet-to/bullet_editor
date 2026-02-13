@@ -207,15 +207,19 @@ class MergeBlocks extends EditOperation {
 
 /// Change the block type of the block at [blockIndex].
 class ChangeBlockType extends EditOperation {
-  ChangeBlockType(this.blockIndex, this.newType);
+  ChangeBlockType(this.blockIndex, this.newType, {this.policies});
 
   final int blockIndex;
   final BlockType newType;
 
+  /// Optional policies map. Falls back to [defaultPolicies] if not provided.
+  final Map<Object, BlockPolicies>? policies;
+
   @override
   Document apply(Document doc) {
+    final policyMap = policies ?? defaultPolicies;
     // Policy: if the new type can't be a child and the block is nested, reject.
-    final newPolicy = defaultPolicies[newType];
+    final newPolicy = policyMap[newType];
     if (newPolicy != null &&
         !newPolicy.canBeChild &&
         doc.depthOf(blockIndex) > 0) {
@@ -324,22 +328,26 @@ class SetBlockMetadata extends EditOperation {
 /// The block is removed from its current position and appended
 /// as the last child of the previous sibling.
 class IndentBlock extends EditOperation {
-  IndentBlock(this.flatIndex);
+  IndentBlock(this.flatIndex, {this.policies});
   final int flatIndex;
+
+  /// Optional policies map. Falls back to [defaultPolicies] if not provided.
+  final Map<Object, BlockPolicies>? policies;
 
   @override
   Document apply(Document doc) {
+    final policyMap = policies ?? defaultPolicies;
     final prevSibling = doc.previousSibling(flatIndex);
     if (prevSibling == null) return doc; // No previous sibling — can't indent.
 
     final block = doc.allBlocks[flatIndex];
 
     // Policy: block must be allowed to be a child.
-    final blockPolicy = defaultPolicies[block.blockType];
+    final blockPolicy = policyMap[block.blockType];
     if (blockPolicy != null && !blockPolicy.canBeChild) return doc;
 
     // Policy: target parent must accept children.
-    final parentPolicy = defaultPolicies[prevSibling.blockType];
+    final parentPolicy = policyMap[prevSibling.blockType];
     if (parentPolicy != null && !parentPolicy.canHaveChildren) return doc;
 
     // Policy: respect maxDepth.

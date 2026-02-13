@@ -11,10 +11,15 @@ export 'src/editor/span_builder.dart';
 export 'src/editor/text_diff.dart';
 export 'src/editor/transaction.dart';
 export 'src/editor/undo_manager.dart';
+// Model
 export 'src/model/block.dart';
 export 'src/model/block_policies.dart';
 export 'src/model/document.dart';
-// Model
 export 'src/model/inline_style.dart';
+// Schema
+export 'src/schema/block_def.dart';
+export 'src/schema/default_schema.dart';
+export 'src/schema/editor_schema.dart';
+export 'src/schema/inline_style_def.dart';
 // Widgets
 export 'src/widgets/editor_toolbar.dart';

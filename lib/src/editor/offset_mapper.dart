@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 
-import '../model/block.dart';
 import '../model/document.dart';
+import '../schema/editor_schema.dart';
 
 /// Placeholder character used for visual-only WidgetSpan prefixes (bullets).
 /// Occupies exactly 1 offset position in the display text.
@@ -9,14 +9,14 @@ const prefixChar = '\uFFFC';
 
 /// Whether a block gets a visual prefix WidgetSpan (bullet, number, checkbox, indent).
 /// All list-like blocks get a prefix. Nested non-list blocks get indentation.
-bool hasPrefix(Document doc, int flatIndex) {
+bool hasPrefix(Document doc, int flatIndex, EditorSchema schema) {
   final block = doc.allBlocks[flatIndex];
-  return isListLike(block.blockType) || doc.depthOf(flatIndex) > 0;
+  return schema.isListLike(block.blockType) || doc.depthOf(flatIndex) > 0;
 }
 
 /// Convert a display offset (TextField) to a model offset (Document).
 /// Subtracts the prefix placeholder chars that precede this position.
-int displayToModel(Document doc, int displayOffset) {
+int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
   final flat = doc.allBlocks;
   var displayPos = 0;
   var modelPos = 0;
@@ -28,7 +28,7 @@ int displayToModel(Document doc, int displayOffset) {
       modelPos++;
     }
 
-    if (hasPrefix(doc, i)) {
+    if (hasPrefix(doc, i, schema)) {
       // Prefix placeholder char — display only.
       if (displayOffset <= displayPos) return modelPos;
       displayPos++;
@@ -48,7 +48,7 @@ int displayToModel(Document doc, int displayOffset) {
 
 /// Convert a model offset (Document) to a display offset (TextField).
 /// Adds the prefix placeholder chars that precede this position.
-int modelToDisplay(Document doc, int modelOffset) {
+int modelToDisplay(Document doc, int modelOffset, EditorSchema schema) {
   final flat = doc.allBlocks;
   var displayPos = 0;
   var modelPos = 0;
@@ -59,7 +59,7 @@ int modelToDisplay(Document doc, int modelOffset) {
       modelPos++;
     }
 
-    if (hasPrefix(doc, i)) {
+    if (hasPrefix(doc, i, schema)) {
       displayPos++; // prefix char in display, not in model
     }
 
@@ -76,18 +76,20 @@ int modelToDisplay(Document doc, int modelOffset) {
 }
 
 /// Convert a display TextSelection to model TextSelection.
-TextSelection selectionToModel(Document doc, TextSelection sel) {
+TextSelection selectionToModel(
+    Document doc, TextSelection sel, EditorSchema schema) {
   return TextSelection(
-    baseOffset: displayToModel(doc, sel.baseOffset),
-    extentOffset: displayToModel(doc, sel.extentOffset),
+    baseOffset: displayToModel(doc, sel.baseOffset, schema),
+    extentOffset: displayToModel(doc, sel.extentOffset, schema),
   );
 }
 
 /// Convert a model TextSelection to display TextSelection.
-TextSelection selectionToDisplay(Document doc, TextSelection sel) {
+TextSelection selectionToDisplay(
+    Document doc, TextSelection sel, EditorSchema schema) {
   return TextSelection(
-    baseOffset: modelToDisplay(doc, sel.baseOffset),
-    extentOffset: modelToDisplay(doc, sel.extentOffset),
+    baseOffset: modelToDisplay(doc, sel.baseOffset, schema),
+    extentOffset: modelToDisplay(doc, sel.extentOffset, schema),
   );
 }
 
@@ -121,12 +123,12 @@ TextSelection? skipPrefixChars(
 
 /// Build the display text: model text with prefix placeholder chars inserted
 /// before each block that has a visual prefix.
-String buildDisplayText(Document doc) {
+String buildDisplayText(Document doc, EditorSchema schema) {
   final flat = doc.allBlocks;
   final buf = StringBuffer();
   for (var i = 0; i < flat.length; i++) {
     if (i > 0) buf.write('\n');
-    if (hasPrefix(doc, i)) buf.write(prefixChar);
+    if (hasPrefix(doc, i, schema)) buf.write(prefixChar);
     buf.write(flat[i].plainText);
   }
   return buf.toString();

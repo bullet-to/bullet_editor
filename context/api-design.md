@@ -452,6 +452,87 @@ Adding a new block type with different nesting rules doesn't require new key act
 
 ---
 
+## Revisions from Implementation (Post Phase 7)
+
+Changes based on actually building the editor through Phases 1–7.
+
+### 1. Split inputRules from keyActions on BlockDef
+
+The original design has `inputRules` on BlockDef. In practice, two distinct things got conflated under `InputRule`:
+
+- **Text-pattern rules** (as-you-type): `PrefixBlockRule` fires when `"# "` is typed, `InlineWrapRule` fires when `**text**` is completed. These inspect the pending transaction's text content.
+- **Key-action rules**: `ListItemBackspaceRule`, `NestedBackspaceRule`, `EmptyListItemRule` fire on specific key events (backspace, enter) in specific block contexts. These inspect the pending transaction's *operations* (MergeBlocks, SplitBlock), not text patterns.
+
+These should be two separate fields on BlockDef:
+
+```dart
+BlockDef(
+  // Text patterns — "as you type" transformations
+  inputRules: [prefixRule('- ')],
+
+  // Key actions — structural behavior for specific keys
+  keyActions: {
+    LogicalKeyboardKey.backspace: (block, cursor, editor) =>
+      cursor.atBlockStart ? outdent(block) : null,
+    LogicalKeyboardKey.enter: (block, cursor, editor) =>
+      block.isEmpty ? convertToParagraph(block) : splitAndInheritType(block),
+  },
+)
+```
+
+### 2. BlockCodec.encode needs context
+
+Our actual encoder needs sibling context (numbered list ordinals) and parent context (indentation depth). The original `encode: (block) => '- ${block.text}'` is insufficient.
+
+```dart
+class EncodeContext {
+  final int depth;
+  final int siblingIndex;       // position among siblings of same type
+  final int siblingCount;       // total siblings of same type in run
+  final BlockType? parentType;
+}
+
+BlockCodec(
+  encode: (block, context) => '${context.indent}${context.siblingIndex + 1}. ${block.text}',
+)
+```
+
+### 3. FormatParser owns newline semantics
+
+Markdown's `\n` vs `\n\n` distinction (soft break vs paragraph break, tight vs loose lists) is parser grammar, not per-block logic. The `FormatParser` must own this. Each format has fundamentally different structure rules:
+
+- **Markdown:** `\n\n` = paragraph break, `\n` within lists = continuation, indentation = nesting
+- **HTML:** Tags define structure (`<p>`, `<ul><li>`), whitespace is insignificant
+- **Quill Delta:** Flat list of ops, `\n` with attributes defines block boundaries
+- **JSON:** Explicit tree structure, no ambiguity
+
+### 4. Add metadataSchema to BlockDef
+
+Task items use `metadata['checked']` but nothing declares this. For validation, serialization round-trips, and generic sync/persistence:
+
+```dart
+BlockDef(
+  metadataSchema: {
+    'checked': MetaField(type: bool, defaultValue: false),
+  },
+)
+```
+
+Not urgent for v1 but needed before generic sync support.
+
+### 5. Markdown-specific codec considerations
+
+Quirks the `MarkdownParser` must handle that don't fit the per-block codec model:
+
+- **Setext vs ATX headings:** Decode both (`# H1` and `H1\n===`), encode only ATX
+- **Multiple list markers:** Decode `-`, `*`, `+`; encode only `-`
+- **Ordered list numbering:** Decode any digit (`1.`, `3.`, `42.`); encode correct ordinals
+- **Fenced vs indented code blocks:** Decode both; encode only fenced
+- **Tight vs loose lists:** Single `\n` vs `\n\n` between list items changes rendering. Our current codec always uses `\n\n`.
+- **Bold/italic delimiter variants:** `**`/`__` for bold, `*`/`_` for italic. Decode all; encode `**` and `*`.
+
+---
+
 ## Known Concerns
 
 - **Complex blocks make BlockDef large.** For tables, extract codec/renderer into separate classes and reference them. BlockDef is the registry entry, not the implementation.

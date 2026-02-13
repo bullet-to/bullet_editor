@@ -34,6 +34,8 @@ class BlockPolicies {
 const defaultPolicies = <BlockType, BlockPolicies>{
   BlockType.paragraph: BlockPolicies(canBeChild: true, canHaveChildren: false),
   BlockType.h1: BlockPolicies(canBeChild: false, canHaveChildren: false),
+  BlockType.h2: BlockPolicies(canBeChild: false, canHaveChildren: false),
+  BlockType.h3: BlockPolicies(canBeChild: false, canHaveChildren: false),
   BlockType.listItem: BlockPolicies(
     canBeChild: true,
     canHaveChildren: true,

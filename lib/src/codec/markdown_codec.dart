@@ -44,6 +44,10 @@ class MarkdownCodec {
       switch (block.blockType) {
         case BlockType.h1:
           lines.add('$indent# $content');
+        case BlockType.h2:
+          lines.add('$indent## $content');
+        case BlockType.h3:
+          lines.add('$indent### $content');
         case BlockType.listItem:
           lines.add('$indent- $content');
         case BlockType.numberedList:
@@ -110,7 +114,13 @@ class MarkdownCodec {
     String content;
     Map<String, dynamic> metadata = const {};
 
-    if (text.startsWith('# ')) {
+    if (text.startsWith('### ')) {
+      type = BlockType.h3;
+      content = text.substring(4);
+    } else if (text.startsWith('## ')) {
+      type = BlockType.h2;
+      content = text.substring(3);
+    } else if (text.startsWith('# ')) {
       type = BlockType.h1;
       content = text.substring(2);
     } else if (text.startsWith('- [x] ')) {

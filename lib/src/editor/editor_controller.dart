@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
+import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
 import 'input_rule.dart';
 import 'offset_mapper.dart' as mapper;
@@ -20,23 +21,26 @@ class EditorController extends TextEditingController {
   EditorController({
     Document? document,
     List<InputRule>? inputRules,
+    EditorSchema? schema,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
   }) : _document = document ?? Document.empty(),
        _inputRules = inputRules ?? [],
+       _schema = schema ?? EditorSchema.standard(),
        _undoManager = UndoManager(
          grouping: undoGrouping,
          maxStackSize: maxUndoStack,
        ) {
     _syncToTextField();
     _activeStyles = _document.stylesAt(
-      mapper.displayToModel(_document, value.selection.baseOffset),
+      mapper.displayToModel(_document, value.selection.baseOffset, _schema),
     );
     addListener(_onValueChanged);
   }
 
   Document _document;
   final List<InputRule> _inputRules;
+  final EditorSchema _schema;
   final UndoManager _undoManager;
   bool _isSyncing = false;
   /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
@@ -50,6 +54,7 @@ class EditorController extends TextEditingController {
   Set<InlineStyle> _activeStyles = {};
 
   Document get document => _document;
+  EditorSchema get schema => _schema;
   Set<InlineStyle> get activeStyles => _activeStyles;
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
@@ -57,13 +62,13 @@ class EditorController extends TextEditingController {
   // -- Offset helpers (delegate to offset_mapper) --
 
   int _displayToModel(int displayOffset) =>
-      mapper.displayToModel(_document, displayOffset);
+      mapper.displayToModel(_document, displayOffset, _schema);
 
   TextSelection _selectionToModel(TextSelection sel) =>
-      mapper.selectionToModel(_document, sel);
+      mapper.selectionToModel(_document, sel, _schema);
 
   TextSelection _selectionToDisplay(TextSelection sel) =>
-      mapper.selectionToDisplay(_document, sel);
+      mapper.selectionToDisplay(_document, sel, _schema);
 
   /// Compute active styles for the current selection.
   ///
@@ -181,7 +186,8 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
 
     _pushUndo();
-    _document = IndentBlock(pos.blockIndex).apply(_document);
+    _document =
+        IndentBlock(pos.blockIndex, policies: _schema.policies).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
   }
@@ -259,7 +265,8 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
 
     _pushUndo();
-    _document = ChangeBlockType(pos.blockIndex, type).apply(_document);
+    _document = ChangeBlockType(pos.blockIndex, type, policies: _schema.policies)
+        .apply(_document);
     _syncToTextField(modelSelection: modelSel);
   }
 
@@ -462,7 +469,7 @@ class EditorController extends TextEditingController {
     if (diff.insertedText == '\t' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
       final block = _document.allBlocks[pos.blockIndex];
-      if (isListLike(block.blockType)) {
+      if (_schema.isListLike(block.blockType)) {
         return Transaction(
           operations: [IndentBlock(pos.blockIndex)],
           selectionAfter: selection,
@@ -547,7 +554,7 @@ class EditorController extends TextEditingController {
   /// gets translated to display space.
   void _syncToTextField({TextSelection? modelSelection}) {
     _isSyncing = true;
-    final displayText = mapper.buildDisplayText(_document);
+    final displayText = mapper.buildDisplayText(_document, _schema);
     final modelSel =
         modelSelection ??
         TextSelection.collapsed(offset: _document.plainText.length);
@@ -579,7 +586,7 @@ class EditorController extends TextEditingController {
     TextStyle? style,
     required bool withComposing,
   }) {
-    return spans.buildDocumentSpan(_document, style);
+    return spans.buildDocumentSpan(_document, style, _schema);
   }
 
   @override

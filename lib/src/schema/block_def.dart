@@ -1,0 +1,48 @@
+import 'package:flutter/widgets.dart';
+
+import '../model/block.dart';
+import '../model/block_policies.dart';
+import '../model/document.dart';
+
+/// Defines the behavior and appearance of a block type.
+///
+/// Each block type in the editor has a corresponding [BlockDef] that bundles
+/// its policies, rendering, and metadata in one place. Register block defs
+/// in an [EditorSchema] to make them available to the editor.
+class BlockDef {
+  const BlockDef({
+    required this.label,
+    this.policies = const BlockPolicies(),
+    this.isListLike = false,
+    this.splitInheritsType = false,
+    this.baseStyle,
+    this.prefixBuilder,
+  });
+
+  /// Human-readable label for toolbars and UI (e.g. "Heading 1", "Paragraph").
+  final String label;
+
+  /// Structural rules for this block type (nesting, children, depth limits).
+  final BlockPolicies policies;
+
+  /// Whether this block behaves like a list item: gets a prefix, supports
+  /// nesting via indent/outdent, Enter creates a sibling, empty+Enter
+  /// converts to paragraph.
+  final bool isListLike;
+
+  /// Whether Enter (SplitBlock) creates a new block of the same type.
+  /// True for list-like blocks. False for headings (Enter creates paragraph).
+  final bool splitInheritsType;
+
+  /// Returns the base [TextStyle] for this block type, given the editor's
+  /// base style. Return null to use the base style unchanged.
+  /// Example: headings return a larger font size.
+  final TextStyle? Function(TextStyle? base)? baseStyle;
+
+  /// Builds the prefix widget for this block's WidgetSpan (bullet, number,
+  /// checkbox, etc.). Return null for no prefix content (indentation-only).
+  /// The [doc] and [flatIndex] are provided for context (e.g. computing
+  /// ordinals for numbered lists).
+  final Widget? Function(Document doc, int flatIndex, TextBlock block)?
+      prefixBuilder;
+}
