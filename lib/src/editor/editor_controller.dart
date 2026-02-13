@@ -404,17 +404,7 @@ class EditorController extends TextEditingController {
       return null;
     }
 
-    // Newline deleted → merge.
-    if (deletedText.contains('\n') && diff.insertedText.isEmpty) {
-      final pos = _document.blockAt(diff.start);
-      if (pos.blockIndex + 1 >= _document.allBlocks.length) return null;
-      return Transaction(
-        operations: [MergeBlocks(pos.blockIndex + 1)],
-        selectionAfter: selection,
-      );
-    }
-
-    // Newline inserted → split.
+    // Pure newline insert → split (no delete involved).
     if (diff.insertedText.contains('\n') && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
       return Transaction(
@@ -423,23 +413,72 @@ class EditorController extends TextEditingController {
       );
     }
 
-    // Text change within a block.
-    final pos = _document.blockAt(diff.start);
-    final ops = <EditOperation>[
-      if (diff.deletedLength > 0)
-        DeleteText(pos.blockIndex, pos.localOffset, diff.deletedLength),
-      if (diff.insertedText.isNotEmpty)
-        InsertText(
-          pos.blockIndex,
-          pos.localOffset,
+    // General delete (possibly cross-block) + optional insert.
+    final startPos = _document.blockAt(diff.start);
+
+    if (diff.deletedLength > 0) {
+      // Find the end position of the deleted range.
+      final deleteEnd = diff.start + diff.deletedLength;
+      final endPos = _document.blockAt(deleteEnd);
+
+      final ops = <EditOperation>[];
+
+      if (startPos.blockIndex == endPos.blockIndex) {
+        // Same-block delete.
+        ops.add(DeleteText(
+          startPos.blockIndex,
+          startPos.localOffset,
+          diff.deletedLength,
+        ));
+      } else if (endPos.blockIndex == startPos.blockIndex + 1 &&
+          startPos.localOffset ==
+              _document.allBlocks[startPos.blockIndex].length &&
+          endPos.localOffset == 0 &&
+          diff.insertedText.isEmpty) {
+        // Delete exactly one block boundary (backspace at start of next block).
+        // Use MergeBlocks so input rules can intercept (e.g. list→paragraph).
+        ops.add(MergeBlocks(endPos.blockIndex));
+      } else {
+        // Cross-block delete spanning content.
+        ops.add(DeleteRange(
+          startPos.blockIndex,
+          startPos.localOffset,
+          endPos.blockIndex,
+          endPos.localOffset,
+        ));
+      }
+
+      // If there's also inserted text (replace selection), insert at the
+      // start of the deleted range. After DeleteRange, the start block
+      // still exists at startPos.blockIndex with cursor at startOffset.
+      if (diff.insertedText.isNotEmpty) {
+        ops.add(InsertText(
+          startPos.blockIndex,
+          startPos.localOffset,
           diff.insertedText,
           styles: _activeStyles,
-        ),
-    ];
+        ));
+      }
 
-    return ops.isEmpty
-        ? null
-        : Transaction(operations: ops, selectionAfter: selection);
+      return Transaction(operations: ops, selectionAfter: selection);
+    }
+
+    // Pure insert (no delete).
+    if (diff.insertedText.isNotEmpty) {
+      return Transaction(
+        operations: [
+          InsertText(
+            startPos.blockIndex,
+            startPos.localOffset,
+            diff.insertedText,
+            styles: _activeStyles,
+          ),
+        ],
+        selectionAfter: selection,
+      );
+    }
+
+    return null;
   }
 
   // -- TextField sync --
@@ -490,8 +529,15 @@ class EditorController extends TextEditingController {
 
     for (var i = 0; i < flat.length; i++) {
       if (i > 0) {
-        final prevBlockStyle = _blockBaseStyle(flat[i - 1].blockType, style);
-        children.add(TextSpan(text: '\n', style: prevBlockStyle));
+        // Give the \n separator the style of the preceding block's last segment.
+        // This prevents cursor "sticking" when the trailing text has different
+        // font metrics (bold, larger size, etc.) than the default style.
+        final prevBlock = flat[i - 1];
+        var prevStyle = _blockBaseStyle(prevBlock.blockType, style);
+        if (prevBlock.segments.isNotEmpty) {
+          prevStyle = _resolveStyle(prevBlock.segments.last.styles, prevStyle);
+        }
+        children.add(TextSpan(text: '\n', style: prevStyle));
       }
 
       final block = flat[i];

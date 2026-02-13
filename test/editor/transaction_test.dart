@@ -254,6 +254,53 @@ void main() {
     });
   });
 
+  group('DeleteRange', () {
+    test('same block behaves like DeleteText', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+      ]);
+      final result = DeleteRange(0, 2, 0, 7).apply(doc);
+      expect(result.allBlocks[0].plainText, 'heorld');
+    });
+
+    test('across 2 blocks merges remaining halves', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+      ]);
+      // Delete from offset 3 in block 0 to offset 2 in block 1.
+      // Keeps 'hel' + 'rld' = 'helrld'
+      final result = DeleteRange(0, 3, 1, 2).apply(doc);
+      expect(result.allBlocks.length, 1);
+      expect(result.allBlocks[0].plainText, 'helrld');
+    });
+
+    test('across 3+ blocks removes middle blocks and merges first and last', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('aaa')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('bbb')]),
+        TextBlock(id: 'c', segments: [const StyledSegment('ccc')]),
+        TextBlock(id: 'd', segments: [const StyledSegment('ddd')]),
+      ]);
+      // Delete from offset 1 in block 0 to offset 2 in block 3.
+      // Keeps 'a' + 'd' = 'ad', blocks b and c removed.
+      final result = DeleteRange(0, 1, 3, 2).apply(doc);
+      expect(result.allBlocks.length, 1);
+      expect(result.allBlocks[0].plainText, 'ad');
+    });
+
+    test('delete entire blocks leaves empty first block', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+      ]);
+      // Delete from offset 0 in block 0 to offset 5 in block 1 (everything).
+      final result = DeleteRange(0, 0, 1, 5).apply(doc);
+      expect(result.allBlocks.length, 1);
+      expect(result.allBlocks[0].plainText, '');
+    });
+  });
+
   group('Transaction', () {
     test('applies multiple operations in sequence', () {
       final doc = Document([

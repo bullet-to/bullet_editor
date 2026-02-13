@@ -224,6 +224,69 @@ class ChangeBlockType extends EditOperation {
   String toString() => 'ChangeBlockType(block: $blockIndex, ${newType.name})';
 }
 
+/// Delete a range of text that may span multiple blocks.
+///
+/// If the range is within a single block, behaves like [DeleteText].
+/// If cross-block: truncates the start block, removes middle blocks entirely,
+/// truncates the end block, and merges the remaining end text into the start block.
+class DeleteRange extends EditOperation {
+  DeleteRange(
+    this.startBlockIndex,
+    this.startOffset,
+    this.endBlockIndex,
+    this.endOffset,
+  );
+
+  final int startBlockIndex;
+  final int startOffset;
+  final int endBlockIndex;
+  final int endOffset;
+
+  @override
+  Document apply(Document doc) {
+    final flat = doc.allBlocks;
+    if (startBlockIndex >= flat.length || endBlockIndex >= flat.length) {
+      return doc;
+    }
+
+    // Same block — just delete within it.
+    if (startBlockIndex == endBlockIndex) {
+      final length = endOffset - startOffset;
+      if (length <= 0) return doc;
+      return DeleteText(startBlockIndex, startOffset, length).apply(doc);
+    }
+
+    // Cross-block delete.
+    final startBlock = flat[startBlockIndex];
+    final endBlock = flat[endBlockIndex];
+
+    // 1. Truncate start block: keep text before startOffset.
+    final startSegs =
+        _splitSegmentsAt(startBlock.segments, startOffset, takeBefore: true);
+
+    // 2. Truncate end block: keep text after endOffset.
+    final endSegs =
+        _splitSegmentsAt(endBlock.segments, endOffset, takeBefore: false);
+
+    // 3. Merge remaining: start block's head + end block's tail.
+    final mergedSegments = mergeSegments([...startSegs, ...endSegs]);
+    final mergedBlock = startBlock.copyWith(segments: mergedSegments);
+
+    // 4. Apply: replace start block, then remove end block and all middle blocks.
+    //    Remove from high index to low to avoid index shifting.
+    var result = doc.replaceBlock(startBlockIndex, mergedBlock);
+    for (var i = endBlockIndex; i > startBlockIndex; i--) {
+      result = result.removeBlock(i);
+    }
+
+    return result;
+  }
+
+  @override
+  String toString() =>
+      'DeleteRange(start: $startBlockIndex:$startOffset, end: $endBlockIndex:$endOffset)';
+}
+
 /// Indent a block: make it a child of its previous sibling.
 ///
 /// Only valid for list items that have a previous sibling.

@@ -648,5 +648,108 @@ void main() {
         reason: 'Cursor should not be at end of document',
       );
     });
+
+    test('select within block and delete', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        ]),
+        undoGrouping: (_, __) => false,
+      );
+
+      // Select 'llo w' (offsets 2..7) and delete.
+      // Simulates: the user selected, then pressed delete.
+      // Flutter gives us new value with the selection deleted.
+      controller.value = const TextEditingValue(
+        text: 'heorld',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+
+      expect(controller.document.allBlocks[0].plainText, 'heorld');
+      expect(controller.document.allBlocks.length, 1);
+    });
+
+    test('select across 2 blocks and delete', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        ]),
+        undoGrouping: (_, __) => false,
+      );
+
+      // Initial display text: 'hello\nworld' (no prefixes — paragraphs).
+      // Select from offset 3 ('hel|lo') to offset 8 ('wor|ld') and delete.
+      // Deleted: 'lo\nwor' (6 chars), result: 'helld'.
+      controller.value = const TextEditingValue(
+        text: 'helld',
+        selection: TextSelection.collapsed(offset: 3),
+      );
+
+      expect(controller.document.allBlocks.length, 1);
+      expect(controller.document.allBlocks[0].plainText, 'helld');
+    });
+
+    test('select across blocks and type character (replace)', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        ]),
+        undoGrouping: (_, __) => false,
+      );
+
+      // Select from offset 3 to offset 8, then type 'X'.
+      // Deleted: 'lo\nwor', inserted: 'X', result: 'helXld'.
+      controller.value = const TextEditingValue(
+        text: 'helXld',
+        selection: TextSelection.collapsed(offset: 4),
+      );
+
+      expect(controller.document.allBlocks.length, 1);
+      expect(controller.document.allBlocks[0].plainText, 'helXld');
+    });
+
+    test('select all and delete', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        ]),
+        undoGrouping: (_, __) => false,
+      );
+
+      // Select all and delete.
+      controller.value = const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+
+      expect(controller.document.allBlocks.length, 1);
+      expect(controller.document.allBlocks[0].plainText, '');
+    });
+
+    test('undo after cross-block delete restores all blocks', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        ]),
+        undoGrouping: (_, __) => false,
+      );
+
+      // Select across both blocks and delete.
+      controller.value = const TextEditingValue(
+        text: 'helld',
+        selection: TextSelection.collapsed(offset: 3),
+      );
+      expect(controller.document.allBlocks.length, 1);
+
+      // Undo — should restore both blocks.
+      controller.undo();
+      expect(controller.document.allBlocks.length, 2);
+      expect(controller.document.allBlocks[0].plainText, 'hello');
+      expect(controller.document.allBlocks[1].plainText, 'world');
+    });
   });
 }
