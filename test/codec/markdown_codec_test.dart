@@ -297,5 +297,74 @@ void main() {
       final doc = codec.decode('--- extra');
       expect(doc.blocks[0].blockType, BlockType.paragraph);
     });
+
+    test('encode link segment', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('Visit '),
+            const StyledSegment(
+              'Google',
+              {InlineStyle.link},
+              {'url': 'https://google.com'},
+            ),
+            const StyledSegment(' today'),
+          ],
+        ),
+      ]);
+      expect(codec.encode(doc), 'Visit [Google](https://google.com) today');
+    });
+
+    test('decode link', () {
+      final doc = codec.decode('Visit [Google](https://google.com) today');
+      final segs = doc.blocks[0].segments;
+      expect(segs.length, 3);
+      expect(segs[0].text, 'Visit ');
+      expect(segs[0].styles, isEmpty);
+      expect(segs[1].text, 'Google');
+      expect(segs[1].styles, {InlineStyle.link});
+      expect(segs[1].attributes['url'], 'https://google.com');
+      expect(segs[2].text, ' today');
+    });
+
+    test('round-trip link with bold', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('Click ', {InlineStyle.bold}),
+            const StyledSegment(
+              'here',
+              {InlineStyle.link},
+              {'url': 'https://example.com'},
+            ),
+          ],
+        ),
+      ]);
+      final md = codec.encode(doc);
+      expect(md, '**Click **[here](https://example.com)');
+      final decoded = codec.decode(md);
+      expect(
+        decoded.blocks[0].segments.any(
+          (s) =>
+              s.text == 'here' &&
+              s.styles.contains(InlineStyle.link) &&
+              s.attributes['url'] == 'https://example.com',
+        ),
+        isTrue,
+      );
+    });
+
+    test('decode multiple links in one paragraph', () {
+      final doc = codec.decode('[A](url1) and [B](url2)');
+      final segs = doc.blocks[0].segments;
+      expect(segs.length, 3);
+      expect(segs[0].text, 'A');
+      expect(segs[0].attributes['url'], 'url1');
+      expect(segs[1].text, ' and ');
+      expect(segs[2].text, 'B');
+      expect(segs[2].attributes['url'], 'url2');
+    });
   });
 }

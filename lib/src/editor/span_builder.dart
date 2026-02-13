@@ -1,9 +1,11 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
 import '../schema/editor_schema.dart';
+import 'editor_controller.dart' show LinkTapCallback;
 import 'offset_mapper.dart';
 
 /// Build a TextSpan tree from a Document for rendering in a TextField.
@@ -14,7 +16,16 @@ import 'offset_mapper.dart';
 /// Rendering is driven by the [schema]: block base styles, prefix widgets,
 /// and inline style resolution all come from schema lookups — no hardcoded
 /// switch statements.
-TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) {
+/// [onLinkTap] is called when a link span is tapped. If provided,
+/// `TapGestureRecognizer`s are created and added to [recognizers] for
+/// lifecycle management (the caller must dispose them).
+TextSpan buildDocumentSpan(
+  Document doc,
+  TextStyle? style,
+  EditorSchema schema, {
+  LinkTapCallback? onLinkTap,
+  List<GestureRecognizer>? recognizers,
+}) {
   final children = <InlineSpan>[];
   final flat = doc.allBlocks;
 
@@ -26,8 +37,12 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
       final prevBlock = flat[i - 1];
       var prevStyle = _blockBaseStyle(prevBlock.blockType, style, schema);
       if (prevBlock.segments.isNotEmpty) {
-        prevStyle =
-            _resolveStyle(prevBlock.segments.last.styles, prevStyle, schema);
+        prevStyle = _resolveStyle(
+          prevBlock.segments.last.styles,
+          prevStyle,
+          schema,
+          attributes: prevBlock.segments.last.attributes,
+        );
       }
       children.add(TextSpan(text: '\n', style: prevStyle));
     }
@@ -57,10 +72,7 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
       children.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
-          child: SizedBox(
-            width: 20.0 + (depth * 16.0),
-            child: prefixWidget,
-          ),
+          child: SizedBox(width: 20.0 + (depth * 16.0), child: prefixWidget),
         ),
       );
     }
@@ -72,10 +84,25 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
       children.add(TextSpan(text: placeholder, style: bStyle));
     } else {
       for (final seg in block.segments) {
+        GestureRecognizer? recognizer;
+        if (onLinkTap != null &&
+            seg.styles.contains(InlineStyle.link) &&
+            seg.attributes['url'] != null) {
+          final url = seg.attributes['url'] as String;
+          recognizer = TapGestureRecognizer()
+            ..onTap = () => onLinkTap(url);
+          recognizers?.add(recognizer);
+        }
         children.add(
           TextSpan(
             text: seg.text,
-            style: _resolveStyle(seg.styles, bStyle, schema),
+            style: _resolveStyle(
+              seg.styles,
+              bStyle,
+              schema,
+              attributes: seg.attributes,
+            ),
+            recognizer: recognizer,
           ),
         );
       }
@@ -87,19 +114,27 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
 
 /// Get the base TextStyle for a block type via schema lookup.
 TextStyle? _blockBaseStyle(
-    BlockType type, TextStyle? base, EditorSchema schema) {
+  BlockType type,
+  TextStyle? base,
+  EditorSchema schema,
+) {
   final def = schema.blockDef(type);
   return def.baseStyle?.call(base) ?? base;
 }
 
 /// Resolve inline styles into a TextStyle via schema lookup.
+/// Passes segment [attributes] through for data-carrying styles.
 TextStyle? _resolveStyle(
-    Set<InlineStyle> styles, TextStyle? base, EditorSchema schema) {
+  Set<InlineStyle> styles,
+  TextStyle? base,
+  EditorSchema schema, {
+  Map<String, dynamic> attributes = const {},
+}) {
   if (styles.isEmpty) return base;
   var result = base ?? const TextStyle();
   for (final style in styles) {
     final def = schema.inlineStyleDef(style);
-    result = def.applyStyle(result);
+    result = def.applyStyle(result, attributes: attributes);
   }
   return result;
 }

@@ -3,15 +3,32 @@ import 'inline_style.dart';
 /// A run of text with uniform formatting.
 ///
 /// The document's text content is stored as a list of these segments.
-/// Adjacent segments with identical styles should be merged.
+/// Adjacent segments with identical styles AND attributes should be merged.
+///
+/// [styles] holds on/off style flags (bold, italic, link, etc.).
+/// [attributes] holds data for styles that carry it (e.g. `{'url': '...'}`
+/// for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
-  const StyledSegment(this.text, [this.styles = const {}]);
+  const StyledSegment(this.text,
+      [this.styles = const {}, this.attributes = const {}]);
 
   final String text;
   final Set<InlineStyle> styles;
 
-  StyledSegment copyWith({String? text, Set<InlineStyle>? styles}) {
-    return StyledSegment(text ?? this.text, styles ?? this.styles);
+  /// Per-segment data for data-carrying styles (links, mentions, tags).
+  /// Empty for simple styles like bold/italic.
+  final Map<String, dynamic> attributes;
+
+  StyledSegment copyWith({
+    String? text,
+    Set<InlineStyle>? styles,
+    Map<String, dynamic>? attributes,
+  }) {
+    return StyledSegment(
+      text ?? this.text,
+      styles ?? this.styles,
+      attributes ?? this.attributes,
+    );
   }
 
   @override
@@ -19,15 +36,19 @@ class StyledSegment {
       identical(this, other) ||
       other is StyledSegment &&
           text == other.text &&
-          _setsEqual(styles, other.styles);
+          _setsEqual(styles, other.styles) &&
+          _mapsEqual(attributes, other.attributes);
 
   @override
-  int get hashCode => Object.hash(text, Object.hashAllUnordered(styles));
+  int get hashCode => Object.hash(
+      text, Object.hashAllUnordered(styles), Object.hashAll(attributes.entries));
 
   @override
   String toString() {
     if (styles.isEmpty) return 'Segment("$text")';
-    return 'Segment("$text", ${styles.map((s) => s.name).join(', ')})';
+    final styleStr = styles.map((s) => s.name).join(', ');
+    if (attributes.isEmpty) return 'Segment("$text", $styleStr)';
+    return 'Segment("$text", $styleStr, $attributes)';
   }
 }
 
@@ -88,19 +109,22 @@ class TextBlock {
   String toString() => 'TextBlock($id, $blockType, segments: $segments)';
 }
 
-/// Merge adjacent segments that share the same style set.
+/// Merge adjacent segments that share the same styles AND attributes.
 ///
 /// This keeps the segment list normalized — no two consecutive segments
-/// have identical styles. Called after any operation that modifies segments.
+/// have identical formatting. Called after any operation that modifies segments.
 List<StyledSegment> mergeSegments(List<StyledSegment> segments) {
   if (segments.isEmpty) return segments;
   final result = <StyledSegment>[];
   for (final seg in segments) {
     if (seg.text.isEmpty) continue; // drop empty segments
-    if (result.isNotEmpty && _setsEqual(result.last.styles, seg.styles)) {
+    if (result.isNotEmpty &&
+        _setsEqual(result.last.styles, seg.styles) &&
+        _mapsEqual(result.last.attributes, seg.attributes)) {
       // Merge with previous
       final prev = result.removeLast();
-      result.add(StyledSegment(prev.text + seg.text, prev.styles));
+      result.add(
+          StyledSegment(prev.text + seg.text, prev.styles, prev.attributes));
     } else {
       result.add(seg);
     }
@@ -111,4 +135,12 @@ List<StyledSegment> mergeSegments(List<StyledSegment> segments) {
 bool _setsEqual<T>(Set<T> a, Set<T> b) {
   if (a.length != b.length) return false;
   return a.containsAll(b);
+}
+
+bool _mapsEqual(Map<String, dynamic> a, Map<String, dynamic> b) {
+  if (a.length != b.length) return false;
+  for (final key in a.keys) {
+    if (!b.containsKey(key) || a[key] != b[key]) return false;
+  }
+  return true;
 }

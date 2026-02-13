@@ -17,12 +17,21 @@ sealed class EditOperation {
 /// (from the controller's active styles). If null, inherits from the
 /// segment at the insertion point.
 class InsertText extends EditOperation {
-  InsertText(this.blockIndex, this.offset, this.text, {this.styles});
+  InsertText(
+    this.blockIndex,
+    this.offset,
+    this.text, {
+    this.styles,
+    this.attributes,
+  });
 
   final int blockIndex;
   final int offset;
   final String text;
   final Set<InlineStyle>? styles;
+
+  /// Attributes for data-carrying styles (e.g. `{'url': '...'}` for links).
+  final Map<String, dynamic>? attributes;
 
   @override
   Document apply(Document doc) {
@@ -32,6 +41,7 @@ class InsertText extends EditOperation {
       offset,
       text,
       styles: styles,
+      attributes: attributes,
     );
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
     return doc.replaceBlock(blockIndex, newBlock);
@@ -68,23 +78,35 @@ class DeleteText extends EditOperation {
 /// If the entire range already has the style, remove it.
 /// Otherwise, apply it to the entire range.
 class ToggleStyle extends EditOperation {
-  ToggleStyle(this.blockIndex, this.start, this.end, this.style);
+  ToggleStyle(
+    this.blockIndex,
+    this.start,
+    this.end,
+    this.style, {
+    this.attributes,
+  });
 
   final int blockIndex;
   final int start;
   final int end;
   final InlineStyle style;
 
+  /// Attributes to set when applying a data-carrying style (e.g. link URL).
+  /// Ignored when removing a style.
+  final Map<String, dynamic>? attributes;
+
   @override
   Document apply(Document doc) {
     final block = doc.allBlocks[blockIndex];
     final segments = block.segments;
 
-    // Expand segments into per-character style sets.
+    // Expand segments into per-character style sets and attribute maps.
     final charStyles = <Set<InlineStyle>>[];
+    final charAttrs = <Map<String, dynamic>>[];
     for (final seg in segments) {
       for (var i = 0; i < seg.text.length; i++) {
         charStyles.add(Set.of(seg.styles));
+        charAttrs.add(Map.of(seg.attributes));
       }
     }
 
@@ -98,16 +120,26 @@ class ToggleStyle extends EditOperation {
     for (var i = start; i < end; i++) {
       if (allHaveStyle) {
         charStyles[i].remove(style);
+        // Clear attributes from data-carrying styles when removing.
+        if (attributes != null) {
+          for (final key in attributes!.keys) {
+            charAttrs[i].remove(key);
+          }
+        }
       } else {
         charStyles[i].add(style);
+        // Set attributes when adding a data-carrying style.
+        if (attributes != null) {
+          charAttrs[i].addAll(attributes!);
+        }
       }
     }
 
-    // Rebuild segments from per-character styles.
+    // Rebuild segments from per-character styles + attributes.
     final plainText = block.plainText;
     final newSegments = <StyledSegment>[];
     for (var i = 0; i < plainText.length; i++) {
-      newSegments.add(StyledSegment(plainText[i], charStyles[i]));
+      newSegments.add(StyledSegment(plainText[i], charStyles[i], charAttrs[i]));
     }
 
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
@@ -277,12 +309,18 @@ class DeleteRange extends EditOperation {
     final endBlock = flat[endBlockIndex];
 
     // 1. Truncate start block: keep text before startOffset.
-    final startSegs =
-        _splitSegmentsAt(startBlock.segments, startOffset, takeBefore: true);
+    final startSegs = _splitSegmentsAt(
+      startBlock.segments,
+      startOffset,
+      takeBefore: true,
+    );
 
     // 2. Truncate end block: keep text after endOffset.
-    final endSegs =
-        _splitSegmentsAt(endBlock.segments, endOffset, takeBefore: false);
+    final endSegs = _splitSegmentsAt(
+      endBlock.segments,
+      endOffset,
+      takeBefore: false,
+    );
 
     // 3. Merge remaining: start block's head + end block's tail.
     final mergedSegments = mergeSegments([...startSegs, ...endSegs]);
@@ -434,14 +472,16 @@ class OutdentBlock extends EditOperation {
 ///
 /// If [styles] is provided, the new text gets those styles explicitly.
 /// If null, inherits from the segment at the insertion point.
+/// [attributes] is passed through for data-carrying styles.
 List<StyledSegment> _spliceInsert(
   List<StyledSegment> segments,
   int offset,
   String text, {
   Set<InlineStyle>? styles,
+  Map<String, dynamic>? attributes,
 }) {
   if (segments.isEmpty) {
-    return [StyledSegment(text, styles ?? const {})];
+    return [StyledSegment(text, styles ?? const {}, attributes ?? const {})];
   }
 
   final result = <StyledSegment>[];
@@ -457,9 +497,14 @@ List<StyledSegment> _spliceInsert(
       final before = seg.text.substring(0, localOffset);
       final after = seg.text.substring(localOffset);
       final insertStyles = styles ?? seg.styles;
-      if (before.isNotEmpty) result.add(StyledSegment(before, seg.styles));
-      result.add(StyledSegment(text, insertStyles));
-      if (after.isNotEmpty) result.add(StyledSegment(after, seg.styles));
+      final insertAttrs = attributes ?? seg.attributes;
+      if (before.isNotEmpty) {
+        result.add(StyledSegment(before, seg.styles, seg.attributes));
+      }
+      result.add(StyledSegment(text, insertStyles, insertAttrs));
+      if (after.isNotEmpty) {
+        result.add(StyledSegment(after, seg.styles, seg.attributes));
+      }
       inserted = true;
     } else {
       result.add(seg);
@@ -469,7 +514,13 @@ List<StyledSegment> _spliceInsert(
   }
 
   if (!inserted) {
-    result.add(StyledSegment(text, styles ?? segments.last.styles));
+    result.add(
+      StyledSegment(
+        text,
+        styles ?? segments.last.styles,
+        attributes ?? const {},
+      ),
+    );
   }
 
   return result;

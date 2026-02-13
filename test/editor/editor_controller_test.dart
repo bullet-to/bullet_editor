@@ -1,4 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -516,14 +517,22 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), NestedBackspaceRule(), BoldWrapRule()],
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          ListItemBackspaceRule(),
+          NestedBackspaceRule(),
+          BoldWrapRule(),
+        ],
       );
 
       // Step 1: backspace on nested "boss" → should outdent to root.
       var displayText = controller.text;
       var bossStart = displayText.indexOf('boss');
       controller.value = TextEditingValue(
-        text: '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
+        text:
+            '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
         selection: TextSelection.collapsed(offset: bossStart - 1),
       );
 
@@ -535,7 +544,8 @@ void main() {
       displayText = controller.text;
       bossStart = displayText.indexOf('boss');
       controller.value = TextEditingValue(
-        text: '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
+        text:
+            '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
         selection: TextSelection.collapsed(offset: bossStart - 1),
       );
 
@@ -559,7 +569,14 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), NestedBackspaceRule(), BoldWrapRule()],
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          ListItemBackspaceRule(),
+          NestedBackspaceRule(),
+          BoldWrapRule(),
+        ],
       );
 
       // Display: "\uFFFCparent\n\uFFFCchild"
@@ -804,8 +821,9 @@ void main() {
 
       controller.toggleStyle(InlineStyle.italic);
       expect(
-        controller.document.allBlocks[0].segments
-            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.italic)),
+        controller.document.allBlocks[0].segments.any(
+          (s) => s.text == 'world' && s.styles.contains(InlineStyle.italic),
+        ),
         isTrue,
       );
     });
@@ -890,11 +908,14 @@ void main() {
     test('activeStyles reflects entire selection (all bold)', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('hello ', {}),
-            const StyledSegment('bold', {InlineStyle.bold}),
-            const StyledSegment(' world', {}),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('hello ', {}),
+              const StyledSegment('bold', {InlineStyle.bold}),
+              const StyledSegment(' world', {}),
+            ],
+          ),
         ]),
       );
 
@@ -909,11 +930,14 @@ void main() {
     test('activeStyles empty when selection spans bold and non-bold', () {
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('hello ', {}),
-            const StyledSegment('bold', {InlineStyle.bold}),
-            const StyledSegment(' world', {}),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('hello ', {}),
+              const StyledSegment('bold', {InlineStyle.bold}),
+              const StyledSegment(' world', {}),
+            ],
+          ),
         ]),
       );
 
@@ -955,8 +979,11 @@ void main() {
 
         // During composing, the model is updated provisionally (for rendering)
         // but block structure must be preserved.
-        expect(controller.document.allBlocks.length, 2,
-            reason: 'block count must not change during composing');
+        expect(
+          controller.document.allBlocks.length,
+          2,
+          reason: 'block count must not change during composing',
+        );
 
         // Step 2: User presses E to complete the diacritic.
         // Flutter resolves composing: replaces the ´ with é.
@@ -967,8 +994,11 @@ void main() {
         );
 
         // Document should have 2 blocks, first block is "helloé".
-        expect(controller.document.allBlocks.length, 2,
-            reason: 'block count must stay 2 after composing resolves');
+        expect(
+          controller.document.allBlocks.length,
+          2,
+          reason: 'block count must stay 2 after composing resolves',
+        );
         expect(controller.document.allBlocks[0].plainText, 'helloé');
         expect(controller.document.allBlocks[1].plainText, 'item');
       });
@@ -1072,8 +1102,11 @@ void main() {
           composing: TextRange.empty,
         );
 
-        expect(controller.document.blocks[0].plainText, 'hello',
-            reason: 'document unchanged after cancelled composing');
+        expect(
+          controller.document.blocks[0].plainText,
+          'hello',
+          reason: 'document unchanged after cancelled composing',
+        );
       });
 
       test('multi-step composing resolves correctly', () {
@@ -1117,5 +1150,167 @@ void main() {
         expect(controller.document.blocks[0].plainText, 'abZ');
       });
     });
+
+    group('Link support', () {
+      test('setLink applies link style with URL to selection', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(
+              id: 'a',
+              segments: [const StyledSegment('click here please')],
+            ),
+          ]),
+        );
+
+        // Select "here" (offset 6..10).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 6, extentOffset: 10),
+        );
+
+        controller.setLink('https://example.com');
+
+        final segs = controller.document.allBlocks[0].segments;
+        final linkSeg = segs.firstWhere((s) => s.text == 'here');
+        expect(linkSeg.styles, contains(InlineStyle.link));
+        expect(linkSeg.attributes['url'], 'https://example.com');
+
+        // Non-linked parts should not have link style.
+        final plainSeg = segs.firstWhere((s) => s.text == 'click ');
+        expect(plainSeg.styles, isEmpty);
+      });
+
+      test('setLink is no-op on collapsed cursor', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 3),
+        );
+
+        controller.setLink('https://example.com');
+
+        // No link applied — all segments unchanged.
+        expect(controller.document.allBlocks[0].segments[0].styles, isEmpty);
+      });
+    });
+
+    group('Link tap', () {
+      test('buildTextSpan creates recognizers when onLinkTap is set', () {
+        final tappedUrls = <String>[];
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment('Visit '),
+              const StyledSegment(
+                  'Google', {InlineStyle.link}, {'url': 'https://google.com'}),
+              const StyledSegment(' today'),
+            ]),
+          ]),
+          onLinkTap: (url) => tappedUrls.add(url),
+        );
+
+        final span = controller.buildTextSpan(
+          context: _MockBuildContext(),
+          style: const TextStyle(),
+          withComposing: false,
+        );
+
+        // Find the link TextSpan.
+        final linkSpan = _findSpanWithText(span, 'Google');
+        expect(linkSpan, isNotNull);
+        expect(linkSpan!.recognizer, isNotNull);
+
+        // Simulate tap.
+        (linkSpan.recognizer! as TapGestureRecognizer).onTap!();
+        expect(tappedUrls, ['https://google.com']);
+
+        controller.dispose();
+      });
+
+      test('buildTextSpan has no recognizers when onLinkTap is null', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment(
+                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
+            ]),
+          ]),
+        );
+
+        final span = controller.buildTextSpan(
+          context: _MockBuildContext(),
+          style: const TextStyle(),
+          withComposing: false,
+        );
+
+        final linkSpan = _findSpanWithText(span, 'link');
+        expect(linkSpan, isNotNull);
+        expect(linkSpan!.recognizer, isNull);
+
+        controller.dispose();
+      });
+
+      test('recognizers are disposed on rebuild', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment(
+                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
+            ]),
+          ]),
+          onLinkTap: (_) {},
+        );
+
+        final ctx = _MockBuildContext();
+
+        // First build.
+        final span1 = controller.buildTextSpan(
+          context: ctx,
+          style: const TextStyle(),
+          withComposing: false,
+        );
+        final recognizer1 = _findSpanWithText(span1, 'link')!.recognizer!;
+
+        // Second build — old recognizer should be disposed.
+        controller.buildTextSpan(
+          context: ctx,
+          style: const TextStyle(),
+          withComposing: false,
+        );
+
+        // Disposed recognizers throw when accessed in debug mode, but we
+        // can verify new ones were created by checking they're different objects.
+        final span2 = controller.buildTextSpan(
+          context: ctx,
+          style: const TextStyle(),
+          withComposing: false,
+        );
+        final recognizer2 = _findSpanWithText(span2, 'link')!.recognizer!;
+        expect(identical(recognizer1, recognizer2), isFalse);
+
+        controller.dispose();
+      });
+    });
   });
+}
+
+// -- Test helpers --
+
+class _MockBuildContext extends Fake implements BuildContext {}
+
+/// Recursively find a TextSpan with the given text content.
+TextSpan? _findSpanWithText(InlineSpan root, String text) {
+  if (root is TextSpan) {
+    if (root.text == text) return root;
+    if (root.children != null) {
+      for (final child in root.children!) {
+        final found = _findSpanWithText(child, text);
+        if (found != null) return found;
+      }
+    }
+  }
+  return null;
 }

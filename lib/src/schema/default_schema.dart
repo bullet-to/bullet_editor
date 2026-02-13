@@ -170,12 +170,16 @@ EditorSchema buildStandardSchema() {
             },
             decode: (line) {
               if (line.startsWith('- [x] ')) {
-                return DecodeMatch(line.substring(6),
-                    metadata: {'checked': true});
+                return DecodeMatch(
+                  line.substring(6),
+                  metadata: {'checked': true},
+                );
               }
               if (line.startsWith('- [ ] ')) {
-                return DecodeMatch(line.substring(6),
-                    metadata: {'checked': false});
+                return DecodeMatch(
+                  line.substring(6),
+                  metadata: {'checked': false},
+                );
               }
               return null;
             },
@@ -186,19 +190,49 @@ EditorSchema buildStandardSchema() {
     inlineStyles: {
       InlineStyle.bold: InlineStyleDef(
         label: 'Bold',
-        applyStyle: (base) => base.copyWith(fontWeight: FontWeight.bold),
+        applyStyle: (base, {attributes = const {}}) =>
+            base.copyWith(fontWeight: FontWeight.bold),
         codecs: {Format.markdown: const InlineCodec(wrap: '**')},
       ),
       InlineStyle.italic: InlineStyleDef(
         label: 'Italic',
-        applyStyle: (base) => base.copyWith(fontStyle: FontStyle.italic),
+        applyStyle: (base, {attributes = const {}}) =>
+            base.copyWith(fontStyle: FontStyle.italic),
         codecs: {Format.markdown: const InlineCodec(wrap: '*')},
       ),
       InlineStyle.strikethrough: InlineStyleDef(
         label: 'Strikethrough',
-        applyStyle: (base) =>
+        applyStyle: (base, {attributes = const {}}) =>
             base.copyWith(decoration: TextDecoration.lineThrough),
         codecs: {Format.markdown: const InlineCodec(wrap: '~~')},
+      ),
+      InlineStyle.link: InlineStyleDef(
+        label: 'Link',
+        isDataCarrying: true,
+        applyStyle: (base, {attributes = const {}}) => base.copyWith(
+          color: const Color(0xFF1A73E8),
+          decoration: TextDecoration.underline,
+          decorationColor: const Color(0xFF1A73E8),
+        ),
+        codecs: {
+          Format.markdown: InlineCodec(
+            encode: (text, attributes) {
+              final url = attributes['url'] ?? '';
+              return '[$text]($url)';
+            },
+            decode: (text) {
+              final match = RegExp(
+                r'^\[([^\]]+)\]\(([^)]+)\)',
+              ).firstMatch(text);
+              if (match == null) return null;
+              return InlineDecodeMatch(
+                text: match.group(1)!,
+                fullMatchLength: match.end,
+                attributes: {'url': match.group(2)!},
+              );
+            },
+          ),
+        },
       ),
     },
   );
@@ -216,11 +250,7 @@ Widget? _bulletPrefix(Document doc, int flatIndex, TextBlock block) {
 
 Widget? _numberedPrefix(Document doc, int flatIndex, TextBlock block) {
   final ordinal = computeOrdinal(doc, flatIndex);
-  return Text(
-    '$ordinal.  ',
-    textAlign: TextAlign.right,
-    style: _prefixStyle,
-  );
+  return Text('$ordinal.  ', textAlign: TextAlign.right, style: _prefixStyle);
 }
 
 Widget? _dividerPrefix(Document doc, int flatIndex, TextBlock block) {

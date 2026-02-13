@@ -60,10 +60,14 @@ void main() {
     test('allBlocks flattens tree depth-first', () {
       final doc = Document([
         TextBlock(id: 'a', segments: [const StyledSegment('A')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('B')], children: [
-          TextBlock(id: 'b1', segments: [const StyledSegment('B1')]),
-          TextBlock(id: 'b2', segments: [const StyledSegment('B2')]),
-        ]),
+        TextBlock(
+          id: 'b',
+          segments: [const StyledSegment('B')],
+          children: [
+            TextBlock(id: 'b1', segments: [const StyledSegment('B1')]),
+            TextBlock(id: 'b2', segments: [const StyledSegment('B2')]),
+          ],
+        ),
         TextBlock(id: 'c', segments: [const StyledSegment('C')]),
       ]);
       final ids = doc.allBlocks.map((b) => b.id).toList();
@@ -72,9 +76,13 @@ void main() {
 
     test('plainText flattens tree correctly', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('A')], children: [
-          TextBlock(id: 'a1', segments: [const StyledSegment('A1')]),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('A')],
+          children: [
+            TextBlock(id: 'a1', segments: [const StyledSegment('A1')]),
+          ],
+        ),
         TextBlock(id: 'b', segments: [const StyledSegment('B')]),
       ]);
       expect(doc.plainText, 'A\nA1\nB');
@@ -82,9 +90,13 @@ void main() {
 
     test('blockAt works with nested blocks', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('AB')], children: [
-          TextBlock(id: 'a1', segments: [const StyledSegment('CD')]),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('AB')],
+          children: [
+            TextBlock(id: 'a1', segments: [const StyledSegment('CD')]),
+          ],
+        ),
         TextBlock(id: 'b', segments: [const StyledSegment('EF')]),
       ]);
       // "AB\nCD\nEF" — offsets: A=0, B=1, \n=2, C=3, D=4, \n=5, E=6, F=7
@@ -95,11 +107,17 @@ void main() {
 
     test('depthOf returns correct nesting level', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: const [], children: [
-          TextBlock(id: 'a1', segments: const [], children: [
-            TextBlock(id: 'a1a', segments: const []),
-          ]),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: const [],
+          children: [
+            TextBlock(
+              id: 'a1',
+              segments: const [],
+              children: [TextBlock(id: 'a1a', segments: const [])],
+            ),
+          ],
+        ),
       ]);
       expect(doc.depthOf(0), 0); // 'a'
       expect(doc.depthOf(1), 1); // 'a1'
@@ -110,11 +128,14 @@ void main() {
   group('Document.stylesAt', () {
     test('returns styles from segment at offset', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('abc '),
-          const StyledSegment('bold', {InlineStyle.bold}),
-          const StyledSegment(' xyz'),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('abc '),
+            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment(' xyz'),
+          ],
+        ),
       ]);
       // Inside unstyled "abc "
       expect(doc.stylesAt(0), <InlineStyle>{});
@@ -129,9 +150,7 @@ void main() {
     });
 
     test('returns empty for empty block', () {
-      final doc = Document([
-        TextBlock(id: 'a', segments: const []),
-      ]);
+      final doc = Document([TextBlock(id: 'a', segments: const [])]);
       expect(doc.stylesAt(0), <InlineStyle>{});
     });
   });
@@ -157,6 +176,56 @@ void main() {
       ]);
       expect(result.length, 1);
       expect(result[0].text, 'hi');
+    });
+
+    test('does NOT merge segments with different attributes', () {
+      final result = mergeSegments([
+        const StyledSegment('a', {InlineStyle.link}, {'url': 'https://a.com'}),
+        const StyledSegment('b', {InlineStyle.link}, {'url': 'https://b.com'}),
+      ]);
+      expect(result.length, 2);
+      expect(result[0].attributes['url'], 'https://a.com');
+      expect(result[1].attributes['url'], 'https://b.com');
+    });
+
+    test('merges segments with same styles AND attributes', () {
+      final result = mergeSegments([
+        const StyledSegment(
+          'click',
+          {InlineStyle.link},
+          {'url': 'https://x.com'},
+        ),
+        const StyledSegment(
+          ' here',
+          {InlineStyle.link},
+          {'url': 'https://x.com'},
+        ),
+      ]);
+      expect(result.length, 1);
+      expect(result[0].text, 'click here');
+      expect(result[0].attributes['url'], 'https://x.com');
+    });
+  });
+
+  group('StyledSegment attributes', () {
+    test('equality includes attributes', () {
+      const a = StyledSegment('x', {InlineStyle.link}, {'url': 'a'});
+      const b = StyledSegment('x', {InlineStyle.link}, {'url': 'a'});
+      const c = StyledSegment('x', {InlineStyle.link}, {'url': 'b'});
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)));
+    });
+
+    test('copyWith preserves attributes', () {
+      const seg = StyledSegment('hi', {InlineStyle.link}, {'url': 'x'});
+      final copy = seg.copyWith(text: 'bye');
+      expect(copy.text, 'bye');
+      expect(copy.attributes, {'url': 'x'});
+    });
+
+    test('default attributes is empty', () {
+      const seg = StyledSegment('hi', {InlineStyle.bold});
+      expect(seg.attributes, isEmpty);
     });
   });
 }

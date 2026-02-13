@@ -11,10 +11,7 @@ import 'inline_style_def.dart';
 ///
 /// Use [EditorSchema.standard()] for the built-in block types and styles.
 class EditorSchema {
-  EditorSchema({
-    required this.blocks,
-    required this.inlineStyles,
-  });
+  EditorSchema({required this.blocks, required this.inlineStyles});
 
   /// Creates the standard schema with all built-in block types and inline styles.
   factory EditorSchema.standard() => buildStandardSchema();
@@ -46,6 +43,6 @@ class EditorSchema {
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');
   static final _fallbackInlineStyleDef = InlineStyleDef(
     label: 'Unknown',
-    applyStyle: (base) => base,
+    applyStyle: (base, {attributes = const {}}) => base,
   );
 }

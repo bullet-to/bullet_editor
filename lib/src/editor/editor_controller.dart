@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
@@ -12,6 +13,9 @@ import 'text_diff.dart';
 import 'transaction.dart';
 import 'undo_manager.dart';
 
+/// Callback for link taps. Receives the URL from the segment's attributes.
+typedef LinkTapCallback = void Function(String url);
+
 /// The bridge between Flutter's TextField and our document model.
 ///
 /// Offset translation is handled by [offset_mapper.dart].
@@ -22,11 +26,13 @@ class EditorController extends TextEditingController {
     Document? document,
     List<InputRule>? inputRules,
     EditorSchema? schema,
+    LinkTapCallback? onLinkTap,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
   }) : _document = document ?? Document.empty(),
        _inputRules = inputRules ?? [],
        _schema = schema ?? EditorSchema.standard(),
+       _onLinkTap = onLinkTap,
        _undoManager = UndoManager(
          grouping: undoGrouping,
          maxStackSize: maxUndoStack,
@@ -42,12 +48,16 @@ class EditorController extends TextEditingController {
   final List<InputRule> _inputRules;
   final EditorSchema _schema;
   final UndoManager _undoManager;
+  LinkTapCallback? _onLinkTap;
+  final List<GestureRecognizer> _recognizers = [];
   bool _isSyncing = false;
+
   /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
   /// While the cursor stays at this offset, the override is preserved.
   /// Set to -1 when no override is active.
   int _styleOverrideOffset = -1;
   TextEditingValue _previousValue = TextEditingValue.empty;
+
   /// Snapshot of the value BEFORE composing started.
   /// Set on the first composing frame; used to diff when composing resolves.
   TextEditingValue? _preComposingValue;
@@ -56,6 +66,8 @@ class EditorController extends TextEditingController {
   Document get document => _document;
   EditorSchema get schema => _schema;
   Set<InlineStyle> get activeStyles => _activeStyles;
+  LinkTapCallback? get onLinkTap => _onLinkTap;
+  set onLinkTap(LinkTapCallback? value) => _onLinkTap = value;
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
 
@@ -99,7 +111,9 @@ class EditorController extends TextEditingController {
     for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
       final block = _document.allBlocks[i];
       final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final blockEnd = i == endPos.blockIndex ? endPos.localOffset : block.length;
+      final blockEnd = i == endPos.blockIndex
+          ? endPos.localOffset
+          : block.length;
       if (blockEnd <= blockStart) continue;
 
       var offset = 0;
@@ -133,11 +147,13 @@ class EditorController extends TextEditingController {
         ? _previousValue.selection
         : value.selection;
     final modelSel = _selectionToModel(displaySel);
-    _undoManager.push(UndoEntry(
-      document: _document,
-      selection: modelSel,
-      timestamp: DateTime.now(),
-    ));
+    _undoManager.push(
+      UndoEntry(
+        document: _document,
+        selection: modelSel,
+        timestamp: DateTime.now(),
+      ),
+    );
   }
 
   /// Undo the last edit. Restores the document and cursor from the snapshot.
@@ -146,11 +162,13 @@ class EditorController extends TextEditingController {
     if (entry == null) return;
 
     final modelSel = _selectionToModel(value.selection);
-    _undoManager.pushRedo(UndoEntry(
-      document: _document,
-      selection: modelSel,
-      timestamp: DateTime.now(),
-    ));
+    _undoManager.pushRedo(
+      UndoEntry(
+        document: _document,
+        selection: modelSel,
+        timestamp: DateTime.now(),
+      ),
+    );
 
     _document = entry.document;
     _syncToTextField(modelSelection: entry.selection);
@@ -165,11 +183,13 @@ class EditorController extends TextEditingController {
     if (entry == null) return;
 
     final modelSel = _selectionToModel(value.selection);
-    _undoManager.pushUndoRaw(UndoEntry(
-      document: _document,
-      selection: modelSel,
-      timestamp: DateTime.now(),
-    ));
+    _undoManager.pushUndoRaw(
+      UndoEntry(
+        document: _document,
+        selection: modelSel,
+        timestamp: DateTime.now(),
+      ),
+    );
 
     _document = entry.document;
     _syncToTextField(modelSelection: entry.selection);
@@ -186,8 +206,10 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
 
     _pushUndo();
-    _document =
-        IndentBlock(pos.blockIndex, policies: _schema.policies).apply(_document);
+    _document = IndentBlock(
+      pos.blockIndex,
+      policies: _schema.policies,
+    ).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
   }
@@ -238,7 +260,9 @@ class EditorController extends TextEditingController {
     for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
       final block = _document.allBlocks[i];
       final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final blockEnd = i == endPos.blockIndex ? endPos.localOffset : block.length;
+      final blockEnd = i == endPos.blockIndex
+          ? endPos.localOffset
+          : block.length;
       if (blockEnd > blockStart) {
         ops.add(ToggleStyle(i, blockStart, blockEnd, style));
       }
@@ -258,6 +282,58 @@ class EditorController extends TextEditingController {
     notifyListeners();
   }
 
+  /// Apply a link to the current selection.
+  ///
+  /// Requires a non-collapsed selection. Applies [InlineStyle.link] with
+  /// the given [url] as an attribute. To remove a link, use
+  /// `toggleStyle(InlineStyle.link)` on a fully-linked selection.
+  void setLink(String url) {
+    if (!value.selection.isValid || value.selection.isCollapsed) return;
+
+    final modelSel = _selectionToModel(value.selection);
+    final start = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.baseOffset
+        : modelSel.extentOffset;
+    final end = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.extentOffset
+        : modelSel.baseOffset;
+
+    final startPos = _document.blockAt(start);
+    final endPos = _document.blockAt(end);
+    final attrs = {'url': url};
+
+    final ops = <EditOperation>[];
+    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
+      final block = _document.allBlocks[i];
+      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
+      final blockEnd = i == endPos.blockIndex
+          ? endPos.localOffset
+          : block.length;
+      if (blockEnd > blockStart) {
+        ops.add(
+          ToggleStyle(
+            i,
+            blockStart,
+            blockEnd,
+            InlineStyle.link,
+            attributes: attrs,
+          ),
+        );
+      }
+    }
+
+    if (ops.isEmpty) return;
+
+    _pushUndo();
+    final tx = Transaction(operations: ops, selectionAfter: modelSel);
+    _document = tx.apply(_document);
+    _activeStyles = _stylesForSelection(
+      TextSelection(baseOffset: start, extentOffset: end),
+    );
+    _syncToTextField(modelSelection: modelSel);
+    notifyListeners();
+  }
+
   /// Change the block type of the block at the cursor position.
   void setBlockType(BlockType type) {
     if (!value.selection.isValid) return;
@@ -265,8 +341,11 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
 
     _pushUndo();
-    _document = ChangeBlockType(pos.blockIndex, type, policies: _schema.policies)
-        .apply(_document);
+    _document = ChangeBlockType(
+      pos.blockIndex,
+      type,
+      policies: _schema.policies,
+    ).apply(_document);
     _syncToTextField(modelSelection: modelSel);
   }
 
@@ -298,8 +377,11 @@ class EditorController extends TextEditingController {
 
     final current = block.metadata['checked'] == true;
     _pushUndo();
-    _document = SetBlockMetadata(pos.blockIndex, 'checked', !current)
-        .apply(_document);
+    _document = SetBlockMetadata(
+      pos.blockIndex,
+      'checked',
+      !current,
+    ).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     notifyListeners();
   }
@@ -391,8 +473,8 @@ class EditorController extends TextEditingController {
   void _onValueChanged() {
     if (_isSyncing) return;
 
-    final isComposing = value.composing.isValid &&
-        value.composing.start != value.composing.end;
+    final isComposing =
+        value.composing.isValid && value.composing.start != value.composing.end;
 
     // Track composing lifecycle. On first composing frame, save the
     // pre-composing state and push one undo entry for the whole sequence.
@@ -501,11 +583,13 @@ class EditorController extends TextEditingController {
       final ops = <EditOperation>[];
 
       if (startPos.blockIndex == endPos.blockIndex) {
-        ops.add(DeleteText(
-          startPos.blockIndex,
-          startPos.localOffset,
-          diff.deletedLength,
-        ));
+        ops.add(
+          DeleteText(
+            startPos.blockIndex,
+            startPos.localOffset,
+            diff.deletedLength,
+          ),
+        );
       } else if (endPos.blockIndex == startPos.blockIndex + 1 &&
           startPos.localOffset ==
               _document.allBlocks[startPos.blockIndex].length &&
@@ -514,21 +598,25 @@ class EditorController extends TextEditingController {
         // Delete exactly one block boundary — use MergeBlocks for input rules.
         ops.add(MergeBlocks(endPos.blockIndex));
       } else {
-        ops.add(DeleteRange(
-          startPos.blockIndex,
-          startPos.localOffset,
-          endPos.blockIndex,
-          endPos.localOffset,
-        ));
+        ops.add(
+          DeleteRange(
+            startPos.blockIndex,
+            startPos.localOffset,
+            endPos.blockIndex,
+            endPos.localOffset,
+          ),
+        );
       }
 
       if (diff.insertedText.isNotEmpty) {
-        ops.add(InsertText(
-          startPos.blockIndex,
-          startPos.localOffset,
-          diff.insertedText,
-          styles: _activeStyles,
-        ));
+        ops.add(
+          InsertText(
+            startPos.blockIndex,
+            startPos.localOffset,
+            diff.insertedText,
+            styles: _activeStyles,
+          ),
+        );
       }
 
       return Transaction(operations: ops, selectionAfter: selection);
@@ -584,18 +672,34 @@ class EditorController extends TextEditingController {
 
   // -- Rendering --
 
+  void _disposeRecognizers() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+  }
+
   @override
   TextSpan buildTextSpan({
     required BuildContext context,
     TextStyle? style,
     required bool withComposing,
   }) {
-    return spans.buildDocumentSpan(_document, style, _schema);
+    // Dispose previous batch of recognizers before building new ones.
+    _disposeRecognizers();
+    return spans.buildDocumentSpan(
+      _document,
+      style,
+      _schema,
+      onLinkTap: _onLinkTap,
+      recognizers: _recognizers,
+    );
   }
 
   @override
   void dispose() {
     removeListener(_onValueChanged);
+    _disposeRecognizers();
     super.dispose();
   }
 }

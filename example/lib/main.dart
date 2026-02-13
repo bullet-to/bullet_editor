@@ -46,7 +46,10 @@ class _EditorScreenState extends State<EditorScreen> {
         segments: [
           const StyledSegment('This is a '),
           const StyledSegment('bold', {InlineStyle.bold}),
-          const StyledSegment(' paragraph.'),
+          const StyledSegment(' paragraph with a '),
+          const StyledSegment('link', {InlineStyle.link},
+              {'url': 'https://flutter.dev'}),
+          const StyledSegment('.'),
         ],
       ),
       TextBlock(
@@ -103,6 +106,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
     _controller = EditorController(
       document: doc,
+      onLinkTap: (url) => debugPrint('Link tapped: $url'),
       inputRules: [
         PrefixBlockRule('###', BlockType.h3), // ### before ## before #
         PrefixBlockRule('##', BlockType.h2),
@@ -131,6 +135,43 @@ class _EditorScreenState extends State<EditorScreen> {
     _focusNode.dispose();
     _undoController.dispose();
     super.dispose();
+  }
+
+  void _showLinkDialog() {
+    if (!_controller.value.selection.isValid ||
+        _controller.value.selection.isCollapsed) return;
+
+    final urlController = TextEditingController();
+    showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Insert Link'),
+        content: TextField(
+          controller: urlController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'https://...',
+            labelText: 'URL',
+          ),
+          onSubmitted: (url) => Navigator.of(ctx).pop(url),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(urlController.text),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    ).then((url) {
+      if (url != null && url.isNotEmpty) {
+        _controller.setLink(url);
+        _focusNode.requestFocus();
+      }
+    });
   }
 
   /// Intercept Tab / Shift+Tab before Flutter's focus system eats them.
@@ -172,6 +213,9 @@ class _EditorScreenState extends State<EditorScreen> {
         _controller.toggleStyle(InlineStyle.italic);
         setState(() {});
         return KeyEventResult.handled;
+      case LogicalKeyboardKey.keyK:
+        _showLinkDialog();
+        return KeyEventResult.handled;
       case LogicalKeyboardKey.keyS:
         if (HardwareKeyboard.instance.isShiftPressed) {
           _controller.toggleStyle(InlineStyle.strikethrough);
@@ -194,7 +238,25 @@ class _EditorScreenState extends State<EditorScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Toolbar.
-            EditorToolbar(controller: _controller, editorFocusNode: _focusNode),
+            Row(
+              children: [
+                Expanded(
+                  child: EditorToolbar(
+                      controller: _controller, editorFocusNode: _focusNode),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(
+                    Icons.link,
+                    color: _controller.activeStyles.contains(InlineStyle.link)
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                  tooltip: 'Link (Cmd+K)',
+                  onPressed: _showLinkDialog,
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             // The editor — wrapped in Focus to intercept Tab/Shift+Tab.
             Expanded(

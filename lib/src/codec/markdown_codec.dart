@@ -4,6 +4,7 @@ import '../model/inline_style.dart';
 import '../schema/editor_schema.dart';
 import 'block_codec.dart';
 import 'format.dart';
+import 'inline_codec.dart';
 
 /// Markdown codec: encode/decode documents using schema-driven block and
 /// inline codecs.
@@ -17,7 +18,7 @@ import 'format.dart';
 /// indentation (2-space nesting), and tree building.
 class MarkdownCodec {
   MarkdownCodec({EditorSchema? schema})
-      : _schema = schema ?? EditorSchema.standard();
+    : _schema = schema ?? EditorSchema.standard();
 
   final EditorSchema _schema;
 
@@ -62,16 +63,28 @@ class MarkdownCodec {
     }
   }
 
-  /// Encode segments using inline codecs. Wraps styled text with the
-  /// appropriate delimiters from innermost to outermost.
+  /// Encode segments using inline codecs.
+  ///
+  /// Simple styles use symmetric wrap delimiters. Data-carrying styles
+  /// (links) use their full encode function with segment attributes.
   String _encodeSegments(List<StyledSegment> segments) {
     final wrapMap = _inlineWrapMap();
+    final encodeMap = _inlineEncodeMap();
     final buffer = StringBuffer();
 
     for (final seg in segments) {
       var text = seg.text;
-      // Wrap in order: strikethrough, italic, bold (innermost to outermost).
-      // We iterate all registered styles and apply their wraps.
+
+      // First, apply data-carrying style encoders (e.g. link → [text](url)).
+      // These replace the text entirely for their style.
+      for (final style in seg.styles) {
+        final encodeFn = encodeMap[style];
+        if (encodeFn != null) {
+          text = encodeFn(text, seg.attributes);
+        }
+      }
+
+      // Then, apply symmetric wrap delimiters for simple styles.
       for (final style in seg.styles) {
         final wrap = wrapMap[style];
         if (wrap != null) {
@@ -120,7 +133,8 @@ class MarkdownCodec {
       // Pick the match that consumed the most prefix (shortest remaining
       // content). This correctly resolves '### ' over '## ' over '# ',
       // and '- [ ] ' over '- '.
-      if (bestMatch == null || match.content.length < bestMatch.content.length) {
+      if (bestMatch == null ||
+          match.content.length < bestMatch.content.length) {
         bestKey = entry.key;
         bestMatch = match;
       }
@@ -136,50 +150,109 @@ class MarkdownCodec {
     }
 
     // Fallback: paragraph.
-    return TextBlock(
-      id: generateBlockId(),
-      segments: _decodeSegments(text),
-    );
+    return TextBlock(id: generateBlockId(), segments: _decodeSegments(text));
   }
 
-  /// Decode inline styles from text using registered InlineCodec wraps.
-  /// Builds a combined regex from all registered symmetric delimiters,
-  /// sorted by length descending to avoid shorter delimiters matching first
-  /// (e.g. `**` before `*`).
+  /// Decode inline styles from text using registered InlineCodec wraps and
+  /// data-carrying decoders.
+  ///
+  /// Data-carrying decoders (links, mentions) are tried at each position
+  /// before the wrap-based regex. This ensures `[text](url)` is decoded as
+  /// a link rather than being partially matched by wrap delimiters.
   List<StyledSegment> _decodeSegments(String text) {
     final wrapEntries = _inlineWrapEntries();
-    if (wrapEntries.isEmpty) return [StyledSegment(text)];
+    final decodeEntries = _inlineDecodeEntries();
 
-    // Build regex: sort wraps by length descending, then build alternation.
-    wrapEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
-    final alternatives = wrapEntries.map((e) {
-      final escaped = RegExp.escape(e.wrap);
-      return '$escaped(.+?)$escaped';
-    }).join('|');
-    final pattern = RegExp(alternatives);
+    if (wrapEntries.isEmpty && decodeEntries.isEmpty) {
+      return [StyledSegment(text)];
+    }
+
+    // Build wrap regex (same as before).
+    RegExp? wrapPattern;
+    if (wrapEntries.isNotEmpty) {
+      wrapEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
+      final alternatives = wrapEntries
+          .map((e) {
+            final escaped = RegExp.escape(e.wrap);
+            return '$escaped(.+?)$escaped';
+          })
+          .join('|');
+      wrapPattern = RegExp(alternatives);
+    }
 
     final segments = <StyledSegment>[];
     var pos = 0;
 
-    for (final match in pattern.allMatches(text)) {
-      if (match.start > pos) {
-        segments.add(StyledSegment(text.substring(pos, match.start)));
-      }
-
-      // Find which group matched (1-indexed, one group per wrap entry).
-      for (var i = 0; i < wrapEntries.length; i++) {
-        final content = match.group(i + 1);
-        if (content != null) {
-          segments.add(
-              StyledSegment(content, {wrapEntries[i].key as InlineStyle}));
+    while (pos < text.length) {
+      // Try data-carrying decoders at the current position.
+      final remaining = text.substring(pos);
+      _InlineDecodedResult? decoded;
+      for (final entry in decodeEntries) {
+        final match = entry.decode(remaining);
+        if (match != null) {
+          decoded = _InlineDecodedResult(entry.key, match);
           break;
         }
       }
-      pos = match.end;
-    }
 
-    if (pos < text.length) {
-      segments.add(StyledSegment(text.substring(pos)));
+      if (decoded != null) {
+        if (decoded.match.fullMatchLength <= 0) {
+          // Safety: avoid infinite loop on zero-length match.
+          pos++;
+          continue;
+        }
+        segments.add(
+          StyledSegment(decoded.match.text, {
+            decoded.key as InlineStyle,
+          }, decoded.match.attributes),
+        );
+        pos += decoded.match.fullMatchLength;
+        continue;
+      }
+
+      // Try wrap-based regex match at current position.
+      if (wrapPattern != null) {
+        final match = wrapPattern.matchAsPrefix(text, pos);
+        if (match != null) {
+          // Find which group matched.
+          for (var i = 0; i < wrapEntries.length; i++) {
+            final content = match.group(i + 1);
+            if (content != null) {
+              segments.add(
+                StyledSegment(content, {wrapEntries[i].key as InlineStyle}),
+              );
+              break;
+            }
+          }
+          pos = match.end;
+          continue;
+        }
+      }
+
+      // No match — consume one character as plain text.
+      // Collect consecutive plain characters for efficiency.
+      final plainStart = pos;
+      pos++;
+      while (pos < text.length) {
+        // Check if any decoder matches here.
+        final rem = text.substring(pos);
+        var anyMatch = false;
+        for (final entry in decodeEntries) {
+          if (entry.decode(rem) != null) {
+            anyMatch = true;
+            break;
+          }
+        }
+        if (anyMatch) break;
+
+        // Check if wrap pattern matches here.
+        if (wrapPattern != null &&
+            wrapPattern.matchAsPrefix(text, pos) != null) {
+          break;
+        }
+        pos++;
+      }
+      segments.add(StyledSegment(text.substring(plainStart, pos)));
     }
 
     if (segments.isEmpty) {
@@ -227,13 +300,26 @@ class MarkdownCodec {
     return _schema.blockDef(blockType).codecs?[Format.markdown];
   }
 
-  /// Build a map of inline style key → wrap string for encoding.
+  /// Build a map of inline style key → wrap string for encoding (simple styles).
   Map<Object, String> _inlineWrapMap() {
     final map = <Object, String>{};
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
       if (codec?.wrap != null) {
         map[entry.key] = codec!.wrap!;
+      }
+    }
+    return map;
+  }
+
+  /// Build a map of inline style key → encode function for data-carrying styles.
+  Map<Object, String Function(String, Map<String, dynamic>)>
+  _inlineEncodeMap() {
+    final map = <Object, String Function(String, Map<String, dynamic>)>{};
+    for (final entry in _schema.inlineStyles.entries) {
+      final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.encode != null) {
+        map[entry.key] = codec!.encode!;
       }
     }
     return map;
@@ -250,10 +336,34 @@ class MarkdownCodec {
     }
     return entries;
   }
+
+  /// Collect inline decode entries for data-carrying styles.
+  List<_InlineDecodeEntry> _inlineDecodeEntries() {
+    final entries = <_InlineDecodeEntry>[];
+    for (final entry in _schema.inlineStyles.entries) {
+      final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.decode != null) {
+        entries.add(_InlineDecodeEntry(entry.key, codec!.decode!));
+      }
+    }
+    return entries;
+  }
 }
 
 class _InlineWrapEntry {
   const _InlineWrapEntry(this.key, this.wrap);
   final Object key;
   final String wrap;
+}
+
+class _InlineDecodeEntry {
+  const _InlineDecodeEntry(this.key, this.decode);
+  final Object key;
+  final InlineDecodeMatch? Function(String) decode;
+}
+
+class _InlineDecodedResult {
+  const _InlineDecodedResult(this.key, this.match);
+  final Object key;
+  final InlineDecodeMatch match;
 }

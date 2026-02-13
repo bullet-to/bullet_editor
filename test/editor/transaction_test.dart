@@ -207,8 +207,16 @@ void main() {
   group('IndentBlock', () {
     test('makes block a child of its previous sibling', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
-        TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('first')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('second')],
+        ),
       ]);
       final result = IndentBlock(1).apply(doc);
       // 'b' should now be a child of 'a'.
@@ -222,7 +230,11 @@ void main() {
 
     test('no-op when block has no previous sibling', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('only')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('only')],
+        ),
       ]);
       final result = IndentBlock(0).apply(doc);
       expect(result.blocks.length, 1);
@@ -233,9 +245,18 @@ void main() {
   group('OutdentBlock', () {
     test('moves nested block to parent level', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('parent')], children: [
-          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
-        ]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('parent')],
+          children: [
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('child')],
+            ),
+          ],
+        ),
       ]);
       final result = OutdentBlock(1).apply(doc);
       // 'b' should now be a sibling after 'a' at root level.
@@ -247,7 +268,11 @@ void main() {
 
     test('no-op when block is already at root', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('root')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('root')],
+        ),
       ]);
       final result = OutdentBlock(0).apply(doc);
       expect(result.blocks.length, 1);
@@ -275,19 +300,22 @@ void main() {
       expect(result.allBlocks[0].plainText, 'helrld');
     });
 
-    test('across 3+ blocks removes middle blocks and merges first and last', () {
-      final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('aaa')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('bbb')]),
-        TextBlock(id: 'c', segments: [const StyledSegment('ccc')]),
-        TextBlock(id: 'd', segments: [const StyledSegment('ddd')]),
-      ]);
-      // Delete from offset 1 in block 0 to offset 2 in block 3.
-      // Keeps 'a' + 'd' = 'ad', blocks b and c removed.
-      final result = DeleteRange(0, 1, 3, 2).apply(doc);
-      expect(result.allBlocks.length, 1);
-      expect(result.allBlocks[0].plainText, 'ad');
-    });
+    test(
+      'across 3+ blocks removes middle blocks and merges first and last',
+      () {
+        final doc = Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('aaa')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('bbb')]),
+          TextBlock(id: 'c', segments: [const StyledSegment('ccc')]),
+          TextBlock(id: 'd', segments: [const StyledSegment('ddd')]),
+        ]);
+        // Delete from offset 1 in block 0 to offset 2 in block 3.
+        // Keeps 'a' + 'd' = 'ad', blocks b and c removed.
+        final result = DeleteRange(0, 1, 3, 2).apply(doc);
+        expect(result.allBlocks.length, 1);
+        expect(result.allBlocks[0].plainText, 'ad');
+      },
+    );
 
     test('delete entire blocks leaves empty first block', () {
       final doc = Document([
@@ -369,6 +397,95 @@ void main() {
       ]);
       final result = SetBlockMetadata(5, 'key', 'value').apply(doc);
       expect(result.allBlocks.length, 1);
+    });
+  });
+
+  group('ToggleStyle with attributes', () {
+    test('applies link style with URL attribute', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('click here')]),
+      ]);
+      final result = ToggleStyle(
+        0,
+        0,
+        10,
+        InlineStyle.link,
+        attributes: {'url': 'https://example.com'},
+      ).apply(doc);
+      final seg = result.allBlocks[0].segments[0];
+      expect(seg.styles, contains(InlineStyle.link));
+      expect(seg.attributes['url'], 'https://example.com');
+    });
+
+    test('removing link style clears URL attribute', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment(
+              'linked',
+              {InlineStyle.link},
+              {'url': 'https://example.com'},
+            ),
+          ],
+        ),
+      ]);
+      final result = ToggleStyle(
+        0,
+        0,
+        6,
+        InlineStyle.link,
+        attributes: {'url': 'https://example.com'},
+      ).apply(doc);
+      final seg = result.allBlocks[0].segments[0];
+      expect(seg.styles, isNot(contains(InlineStyle.link)));
+      expect(seg.attributes.containsKey('url'), isFalse);
+    });
+
+    test('link on partial range splits segments correctly', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+      ]);
+      final result = ToggleStyle(
+        0,
+        6,
+        11,
+        InlineStyle.link,
+        attributes: {'url': 'https://w.com'},
+      ).apply(doc);
+      final segs = result.allBlocks[0].segments;
+      expect(segs.length, 2);
+      expect(segs[0].text, 'hello ');
+      expect(segs[0].styles, isEmpty);
+      expect(segs[1].text, 'world');
+      expect(segs[1].styles, {InlineStyle.link});
+      expect(segs[1].attributes['url'], 'https://w.com');
+    });
+  });
+
+  group('InsertText with attributes', () {
+    test('inserts text with link attributes', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+      ]);
+      final result = InsertText(
+        0,
+        7,
+        'link',
+        styles: {InlineStyle.link},
+        attributes: {'url': 'https://x.com'},
+      ).apply(doc);
+      final segs = result.allBlocks[0].segments;
+      // Should have: 'before ' + 'link' (linked) + 'after'
+      expect(
+        segs.any(
+          (s) =>
+              s.text == 'link' &&
+              s.styles.contains(InlineStyle.link) &&
+              s.attributes['url'] == 'https://x.com',
+        ),
+        isTrue,
+      );
     });
   });
 }
