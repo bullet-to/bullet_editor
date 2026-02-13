@@ -1,6 +1,9 @@
 library;
 
 // Codec
+export 'src/codec/block_codec.dart';
+export 'src/codec/format.dart';
+export 'src/codec/inline_codec.dart';
 export 'src/codec/markdown_codec.dart';
 // Editor
 export 'src/editor/edit_operation.dart';

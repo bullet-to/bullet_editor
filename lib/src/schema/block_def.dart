@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../codec/block_codec.dart';
+import '../codec/format.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
@@ -7,8 +9,8 @@ import '../model/document.dart';
 /// Defines the behavior and appearance of a block type.
 ///
 /// Each block type in the editor has a corresponding [BlockDef] that bundles
-/// its policies, rendering, and metadata in one place. Register block defs
-/// in an [EditorSchema] to make them available to the editor.
+/// its policies, rendering, codecs, and metadata in one place. Register block
+/// defs in an [EditorSchema] to make them available to the editor.
 class BlockDef {
   const BlockDef({
     required this.label,
@@ -17,6 +19,7 @@ class BlockDef {
     this.splitInheritsType = false,
     this.baseStyle,
     this.prefixBuilder,
+    this.codecs,
   });
 
   /// Human-readable label for toolbars and UI (e.g. "Heading 1", "Paragraph").
@@ -45,4 +48,8 @@ class BlockDef {
   /// ordinals for numbered lists).
   final Widget? Function(Document doc, int flatIndex, TextBlock block)?
       prefixBuilder;
+
+  /// Serialization codecs keyed by [Format]. Each codec defines how this
+  /// block type encodes/decodes in that format.
+  final Map<Format, BlockCodec>? codecs;
 }

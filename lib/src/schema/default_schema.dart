@@ -1,5 +1,8 @@
 import 'package:flutter/widgets.dart';
 
+import '../codec/block_codec.dart';
+import '../codec/format.dart';
+import '../codec/inline_codec.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
@@ -9,13 +12,22 @@ import 'editor_schema.dart';
 import 'inline_style_def.dart';
 
 /// Builds the standard [EditorSchema] with all built-in block types and
-/// inline styles.
+/// inline styles, including markdown codecs.
+///
+/// **Block ordering matters for decode.** Longer/more-specific prefixes must
+/// come before shorter ones (h3 before h2 before h1, taskItem before listItem)
+/// so the decoder tries them first.
 EditorSchema buildStandardSchema() {
   return EditorSchema(
     blocks: {
-      BlockType.paragraph: const BlockDef(
+      BlockType.paragraph: BlockDef(
         label: 'Paragraph',
-        policies: BlockPolicies(canBeChild: true, canHaveChildren: false),
+        policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}${ctx.content}',
+          ),
+        },
       ),
       BlockType.h1: BlockDef(
         label: 'Heading 1',
@@ -28,6 +40,15 @@ EditorSchema buildStandardSchema() {
           fontWeight: FontWeight.bold,
           height: 1.3,
         ),
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}# ${ctx.content}',
+            decode: (line) {
+              if (!line.startsWith('# ')) return null;
+              return DecodeMatch(line.substring(2));
+            },
+          ),
+        },
       ),
       BlockType.h2: BlockDef(
         label: 'Heading 2',
@@ -40,6 +61,15 @@ EditorSchema buildStandardSchema() {
           fontWeight: FontWeight.bold,
           height: 1.3,
         ),
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}## ${ctx.content}',
+            decode: (line) {
+              if (!line.startsWith('## ')) return null;
+              return DecodeMatch(line.substring(3));
+            },
+          ),
+        },
       ),
       BlockType.h3: BlockDef(
         label: 'Heading 3',
@@ -52,6 +82,15 @@ EditorSchema buildStandardSchema() {
           fontWeight: FontWeight.w600,
           height: 1.3,
         ),
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}### ${ctx.content}',
+            decode: (line) {
+              if (!line.startsWith('### ')) return null;
+              return DecodeMatch(line.substring(4));
+            },
+          ),
+        },
       ),
       BlockType.listItem: BlockDef(
         label: 'Bullet List',
@@ -63,6 +102,15 @@ EditorSchema buildStandardSchema() {
         isListLike: true,
         splitInheritsType: true,
         prefixBuilder: _bulletPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
+            decode: (line) {
+              if (!line.startsWith('- ')) return null;
+              return DecodeMatch(line.substring(2));
+            },
+          ),
+        },
       ),
       BlockType.numberedList: BlockDef(
         label: 'Numbered List',
@@ -74,6 +122,17 @@ EditorSchema buildStandardSchema() {
         isListLike: true,
         splitInheritsType: true,
         prefixBuilder: _numberedPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) =>
+                '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
+            decode: (line) {
+              final match = RegExp(r'^\d+\. ').firstMatch(line);
+              if (match == null) return null;
+              return DecodeMatch(line.substring(match.end));
+            },
+          ),
+        },
       ),
       BlockType.taskItem: BlockDef(
         label: 'Task',
@@ -85,21 +144,43 @@ EditorSchema buildStandardSchema() {
         isListLike: true,
         splitInheritsType: true,
         prefixBuilder: _taskPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) {
+              final checked = block.metadata['checked'] == true;
+              return '${ctx.indent}- [${checked ? 'x' : ' '}] ${ctx.content}';
+            },
+            decode: (line) {
+              if (line.startsWith('- [x] ')) {
+                return DecodeMatch(line.substring(6),
+                    metadata: {'checked': true});
+              }
+              if (line.startsWith('- [ ] ')) {
+                return DecodeMatch(line.substring(6),
+                    metadata: {'checked': false});
+              }
+              return null;
+            },
+          ),
+        },
       ),
     },
     inlineStyles: {
       InlineStyle.bold: InlineStyleDef(
         label: 'Bold',
         applyStyle: (base) => base.copyWith(fontWeight: FontWeight.bold),
+        codecs: {Format.markdown: const InlineCodec(wrap: '**')},
       ),
       InlineStyle.italic: InlineStyleDef(
         label: 'Italic',
         applyStyle: (base) => base.copyWith(fontStyle: FontStyle.italic),
+        codecs: {Format.markdown: const InlineCodec(wrap: '*')},
       ),
       InlineStyle.strikethrough: InlineStyleDef(
         label: 'Strikethrough',
         applyStyle: (base) =>
             base.copyWith(decoration: TextDecoration.lineThrough),
+        codecs: {Format.markdown: const InlineCodec(wrap: '~~')},
       ),
     },
   );

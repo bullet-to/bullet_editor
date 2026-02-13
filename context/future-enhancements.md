@@ -75,3 +75,20 @@ When new block types need them, add these fields to `BlockPolicies`:
 - **`allowedInlineStyles: Set<InlineStyle>?`** — Restrict which inline styles are valid inside this block type. `null` = all, `{}` = none. Needed for code blocks (no formatting inside).
 
 Both are no-ops to add — just new fields on the existing class + checks in the relevant operations (`ToggleStyle` for inline styles, `IndentBlock` for allowed children).
+
+---
+
+## Open Block Type Keys (Custom Block Types in the Model)
+
+Currently `TextBlock.blockType` is typed as `BlockType` (a closed enum). The schema layer (`EditorSchema.blocks`) already accepts `Object` keys, so rendering, policies, toolbar labels, and codecs can be customized. But the document model itself can't hold a custom block type — you're limited to the built-in `BlockType` values.
+
+**To support third-party custom block types**, `TextBlock.blockType` needs to widen from `BlockType` to `Object`. This ripples through:
+
+- `EditOperation` subclasses (`ChangeBlockType`, `SplitBlock`, etc.)
+- `InputRule` subclasses (pattern matching on block types)
+- `EditorController` (anywhere that checks or sets block type)
+- `MarkdownCodec._decodeBlock` (currently casts decoded key to `BlockType`)
+
+**Trade-off:** Widening to `Object` loses exhaustive `switch` on block types. Mitigation: keep the `BlockType` enum as the default key set with exhaustive switches internally, but accept `Object` at API boundaries.
+
+**When to do it:** When shipping as a package that third parties extend without forking. Not needed while block types are added to the library directly.
