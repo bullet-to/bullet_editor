@@ -330,7 +330,9 @@ class DeleteRange extends EditOperation {
     //    Remove from high index to low to avoid index shifting.
     var result = doc.replaceBlock(startBlockIndex, mergedBlock);
     for (var i = endBlockIndex; i > startBlockIndex; i--) {
-      result = result.removeBlock(i);
+      if (i < result.allBlocks.length) {
+        result = result.removeBlock(i);
+      }
     }
 
     return result;
@@ -416,9 +418,17 @@ class PasteBlocks extends EditOperation {
     );
 
     // 2. Merge first pasted block's segments into the head.
+    // If pasting at the very start of the block (offset 0), use the first
+    // pasted block's type — don't force the target's type on pasted content.
+    // Preserve children from the first pasted block.
     final firstPasted = pastedBlocks.first;
+    final headType = offset == 0 ? firstPasted.blockType : target.blockType;
     final headBlock = target.copyWith(
+      blockType: headType,
       segments: mergeSegments([...headSegs, ...firstPasted.segments]),
+      children: firstPasted.children.isNotEmpty
+          ? firstPasted.children
+          : target.children,
     );
 
     // 3. Merge last pasted block's segments with the tail.
@@ -434,14 +444,32 @@ class PasteBlocks extends EditOperation {
         ? pastedBlocks.sublist(1, pastedBlocks.length - 1)
         : <TextBlock>[];
 
-    // 5. Apply: replace target with head, then insert middle + tail after.
+    // 5. Replace target with head, insert middle + tail as root siblings.
+    //    Build the new root block list directly to avoid insertAfterFlatIndex
+    //    nesting issues with children.
     var result = doc.replaceBlock(blockIndex, headBlock);
-    var insertAfter = blockIndex;
-    for (final mid in middleBlocks) {
-      result = result.insertAfterFlatIndex(insertAfter, mid);
-      insertAfter++;
+
+    // Find the head block's position in the root list and insert after it.
+    final rootIdx =
+        result.blocks.indexWhere((b) => b.id == headBlock.id);
+    if (rootIdx >= 0) {
+      final newRoots = List<TextBlock>.of(result.blocks);
+      var insertAt = rootIdx + 1;
+      for (final mid in middleBlocks) {
+        newRoots.insert(insertAt, mid);
+        insertAt++;
+      }
+      newRoots.insert(insertAt, tailBlock);
+      result = Document(newRoots);
+    } else {
+      // Fallback: head is nested. Use insertAfterFlatIndex.
+      var insertAfter = blockIndex;
+      for (final mid in middleBlocks) {
+        result = result.insertAfterFlatIndex(insertAfter, mid);
+        insertAfter++;
+      }
+      result = result.insertAfterFlatIndex(insertAfter, tailBlock);
     }
-    result = result.insertAfterFlatIndex(insertAfter, tailBlock);
 
     return result;
   }

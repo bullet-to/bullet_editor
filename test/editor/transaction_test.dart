@@ -579,4 +579,103 @@ void main() {
           contains(InlineStyle.italic));
     });
   });
+
+  group('PasteBlocks on heading', () {
+    test('multi-block paste on heading: head keeps heading, rest are pasted types', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('Title')],
+        ),
+      ]);
+      // Paste paragraph + list item after "Title"
+      final pasted = [
+        TextBlock(id: 'p1', segments: [const StyledSegment(' extra')]),
+        TextBlock(
+          id: 'p2',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('item')],
+        ),
+      ];
+      final result = PasteBlocks(0, 5, pasted).apply(doc);
+      // Head should still be h1 with "Title extra"
+      expect(result.allBlocks[0].blockType, BlockType.h1);
+      expect(result.allBlocks[0].plainText, 'Title extra');
+      // Tail should be list item with "item"
+      expect(result.allBlocks[1].blockType, BlockType.listItem);
+      expect(result.allBlocks[1].plainText, 'item');
+    });
+  });
+
+  group('PasteBlocks nesting', () {
+    test('pasting nested markdown preserves tree structure', () {
+      final codec = MarkdownCodec();
+      final decoded = codec.decode('- Parent\n\n  - Nested\n\n- After');
+      // decoded should have: Parent (with child Nested), After
+      expect(decoded.blocks.length, 2);
+      expect(decoded.blocks[0].children.length, 1);
+
+      // Paste into an empty document
+      final doc = Document([
+        TextBlock(id: 'a', segments: const []),
+      ]);
+      final result = PasteBlocks(0, 0, decoded.blocks).apply(doc);
+      final flat = result.allBlocks;
+      // Should have: Parent, Nested (child), After — 3 flat blocks
+      expect(flat.length, greaterThanOrEqualTo(3));
+    });
+  });
+
+  group('PasteBlocks sibling ordering with nested blocks', () {
+    test('blocks after a nested parent are siblings, not children', () {
+      // Simulate pasting: listItem(with child), divider, numberedList
+      final doc = Document([
+        TextBlock(id: 'a', segments: const []),
+      ]);
+      final pasted = [
+        TextBlock(
+          id: 'p1',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent')],
+          children: [
+            TextBlock(
+              id: 'p1c',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('Child')],
+            ),
+          ],
+        ),
+        TextBlock(id: 'p2', blockType: BlockType.divider),
+        TextBlock(
+          id: 'p3',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('Number')],
+        ),
+      ];
+      final result = PasteBlocks(0, 0, pasted).apply(doc);
+      final flat = result.allBlocks;
+      // Expect 4 flat blocks: Parent, Child, divider, Number
+      expect(flat.length, 4);
+      // Divider and Number should be root-level, NOT children of Parent.
+      expect(result.blocks.length, 3,
+          reason: 'Should have 3 roots: listItem(+child), divider, numberedList');
+      expect(result.blocks[1].blockType, BlockType.divider);
+      expect(result.blocks[2].blockType, BlockType.numberedList);
+    });
+  });
+
+  group('DeleteRange edge cases', () {
+    test('delete all content in multi-block document does not crash', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('second')]),
+        TextBlock(id: 'c', segments: [const StyledSegment('third')]),
+      ]);
+      // Delete everything: offset 0 to end (5 + 1 + 6 + 1 + 5 = 18)
+      final result = DeleteRange(0, 0, 2, 5).apply(doc);
+      // Should not crash, should leave at least one block
+      expect(result.allBlocks.isNotEmpty, isTrue);
+    });
+  });
 }

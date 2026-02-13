@@ -153,6 +153,22 @@ Theming, typography, and visual customisation of the editor and its content.
 
 ---
 
+## Phase 12: Rugged Markdown Serialization Testing
+
+Stress-test the markdown codec to guarantee lossless round-trips across all block types, edge cases, and adversarial input.
+
+- **Round-trip property tests:** Encode → decode → encode for every block type/inline style combination; output must be identical
+- **Edge cases:** Empty blocks, blocks with only whitespace, nested styles (`***bold italic***`), adjacent styled segments, trailing newlines, leading/trailing spaces in segments
+- **Ambiguous markdown:** Overlapping emphasis markers, unclosed delimiters, escaped characters (`\*`, `\[`), raw HTML fragments — codec should either round-trip or degrade gracefully
+- **Multi-block structures:** Nested lists at varying depths, blockquotes containing headings/lists, mixed block types in sequence
+- **Large documents:** Performance and correctness at 1k+ blocks — no silent truncation or style drift
+- **Fuzz testing:** Random document generation → encode → decode → assert structural equality
+- **Regression suite:** Capture every real bug as a named test case so it never recurs
+
+**Key question answered:** Can we trust the markdown codec as the source-of-truth serialization format without silent data loss?
+
+---
+
 ## Future Phases (unordered)
 
 - WidgetSpan blocks (images, tables, embeds)

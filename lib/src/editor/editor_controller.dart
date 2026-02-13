@@ -700,9 +700,9 @@ class EditorController extends TextEditingController {
     }
 
     // Multi-character insert (paste heuristic): try markdown decode.
-    // If the decoded result has formatting (styles, block types, multiple blocks),
-    // use PasteBlocks. Otherwise fall through to plain text handling.
-    if (diff.insertedText.length > 1 && diff.deletedLength == 0) {
+    // Fires for both pure inserts and selection replacements (delete + insert).
+    // If the decoded result has formatting, use PasteBlocks.
+    if (diff.insertedText.length > 1) {
       final pasteResult = _tryMarkdownPaste(diff, selection);
       if (pasteResult != null) return pasteResult;
     }
@@ -803,7 +803,25 @@ class EditorController extends TextEditingController {
 
     if (!hasFormatting) return null;
 
+    final ops = <EditOperation>[];
+
+    // If there's a deletion (selection replacement), delete first.
+    if (diff.deletedLength > 0) {
+      final startPos = _document.blockAt(diff.start);
+      final deleteEnd = diff.start + diff.deletedLength;
+      final endPos = _document.blockAt(deleteEnd);
+      if (startPos.blockIndex == endPos.blockIndex) {
+        ops.add(DeleteText(
+            startPos.blockIndex, startPos.localOffset, diff.deletedLength));
+      } else {
+        ops.add(DeleteRange(startPos.blockIndex, startPos.localOffset,
+            endPos.blockIndex, endPos.localOffset));
+      }
+    }
+
     final pos = _document.blockAt(diff.start);
+
+    ops.add(PasteBlocks(pos.blockIndex, pos.localOffset, decoded.blocks));
 
     // Compute cursor position: end of the last pasted block.
     var cursorOffset = diff.start;
@@ -814,7 +832,7 @@ class EditorController extends TextEditingController {
     cursorOffset += blocks.length - 1;
 
     return Transaction(
-      operations: [PasteBlocks(pos.blockIndex, pos.localOffset, blocks)],
+      operations: ops,
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
   }

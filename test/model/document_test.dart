@@ -232,10 +232,13 @@ void main() {
   group('extractRange', () {
     test('single block partial extraction', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('Hello '),
-          const StyledSegment('world', {InlineStyle.bold}),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('Hello '),
+            const StyledSegment('world', {InlineStyle.bold}),
+          ],
+        ),
       ]);
       // Extract "lo wo" (offset 3..8)
       final blocks = doc.extractRange(3, 8);
@@ -253,10 +256,7 @@ void main() {
           blockType: BlockType.h1,
           segments: [const StyledSegment('Title')],
         ),
-        TextBlock(
-          id: 'b',
-          segments: [const StyledSegment('Body text')],
-        ),
+        TextBlock(id: 'b', segments: [const StyledSegment('Body text')]),
       ]);
       // Extract "tle\nBody " (offset 2..11) — crosses block boundary
       // Title(5) + \n(1) + "Body "(5) = 11
@@ -287,13 +287,71 @@ void main() {
 
     test('extracts link attributes', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment(
-              'click', {InlineStyle.link}, {'url': 'https://x.com'}),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment(
+              'click',
+              {InlineStyle.link},
+              {'url': 'https://x.com'},
+            ),
+          ],
+        ),
       ]);
       final blocks = doc.extractRange(0, 5);
       expect(blocks[0].segments[0].attributes['url'], 'https://x.com');
+    });
+
+    test('preserves nesting (parent with child)', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent')],
+          children: [
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('Child')],
+            ),
+          ],
+        ),
+      ]);
+      // Select all: "Parent\nChild" = 12 chars
+      final blocks = doc.extractRange(0, 12);
+      expect(blocks.length, 1, reason: 'Should be 1 root with 1 child');
+      expect(blocks[0].plainText, 'Parent');
+      expect(blocks[0].children.length, 1);
+      expect(blocks[0].children[0].plainText, 'Child');
+    });
+
+    test('nested extraction round-trips through markdown codec', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent')],
+          children: [
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('Nested')],
+            ),
+          ],
+        ),
+      ]);
+      final extracted = doc.extractRange(0, 13); // "Parent\nNested"
+      final tempDoc = Document(extracted);
+      final codec = MarkdownCodec();
+      final md = codec.encode(tempDoc);
+      expect(md, contains('- Parent'));
+      expect(md, contains('  - Nested'));
+
+      // Decode it back and verify nesting is preserved.
+      final decoded = codec.decode(md);
+      expect(decoded.blocks.length, 1);
+      expect(decoded.blocks[0].children.length, 1);
+      expect(decoded.blocks[0].children[0].plainText, 'Nested');
     });
   });
 }

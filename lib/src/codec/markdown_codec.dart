@@ -27,12 +27,27 @@ class MarkdownCodec {
   // -----------------------------------------------------------------------
 
   String encode(Document doc) {
-    final lines = <String>[];
-    _encodeBlocks(doc.blocks, 0, lines);
-    return lines.join('\n\n');
+    final entries = <_EncodedLine>[];
+    _encodeBlocks(doc.blocks, 0, entries);
+
+    // Join: use \n between consecutive list-like siblings at the same depth,
+    // \n\n otherwise (paragraph breaks).
+    final buf = StringBuffer();
+    for (var i = 0; i < entries.length; i++) {
+      if (i > 0) {
+        final prev = entries[i - 1];
+        final curr = entries[i];
+        final tightPair = _isListLike(prev.blockType) &&
+            _isListLike(curr.blockType);
+        buf.write(tightPair ? '\n' : '\n\n');
+      }
+      buf.write(entries[i].line);
+    }
+    return buf.toString();
   }
 
-  void _encodeBlocks(List<TextBlock> blocks, int depth, List<String> lines) {
+  void _encodeBlocks(
+      List<TextBlock> blocks, int depth, List<_EncodedLine> entries) {
     var numberedOrdinal = 0;
     for (final block in blocks) {
       final content = _encodeSegments(block.segments);
@@ -52,14 +67,13 @@ class MarkdownCodec {
       );
 
       final codec = _blockCodec(block.blockType);
-      if (codec != null) {
-        lines.add(codec.encode(block, ctx));
-      } else {
-        // Fallback: plain content with indent.
-        lines.add('$indent$content');
-      }
+      final line = codec != null
+          ? codec.encode(block, ctx)
+          : '$indent$content';
 
-      _encodeBlocks(block.children, depth + 1, lines);
+      entries.add(_EncodedLine(line, block.blockType, depth));
+
+      _encodeBlocks(block.children, depth + 1, entries);
     }
   }
 
@@ -102,7 +116,21 @@ class MarkdownCodec {
 
   Document decode(String markdown) {
     if (markdown.isEmpty) return Document.empty();
-    final paragraphs = markdown.split('\n\n');
+    // Split on \n\n for paragraph breaks, then further split tight lists
+    // (consecutive lines that each match a block prefix).
+    final rawParagraphs = markdown.split('\n\n');
+    final paragraphs = <String>[];
+    for (final p in rawParagraphs) {
+      if (p.contains('\n')) {
+        // Check if this paragraph has multiple lines that are each block-typed.
+        final lines = p.split('\n');
+        if (lines.length > 1 && lines.every((l) => _looksLikeBlock(l))) {
+          paragraphs.addAll(lines);
+          continue;
+        }
+      }
+      paragraphs.add(p);
+    }
 
     final parsed = paragraphs.map((text) {
       var depth = 0;
@@ -367,3 +395,26 @@ class _InlineDecodedResult {
   final Object key;
   final InlineDecodeMatch match;
 }
+
+class _EncodedLine {
+  const _EncodedLine(this.line, this.blockType, this.depth);
+  final String line;
+  final BlockType blockType;
+  final int depth;
+}
+
+/// Check if a line looks like a block-level element (has a prefix marker).
+bool _looksLikeBlock(String line) {
+  final trimmed = line.trimLeft();
+  return trimmed.startsWith('- ') ||
+      trimmed.startsWith('* ') ||
+      trimmed.startsWith('+ ') ||
+      trimmed.startsWith('# ') ||
+      trimmed.startsWith('---') ||
+      RegExp(r'^\d+\. ').hasMatch(trimmed);
+}
+
+bool _isListLike(BlockType type) =>
+    type == BlockType.listItem ||
+    type == BlockType.numberedList ||
+    type == BlockType.taskItem;

@@ -119,11 +119,11 @@ void main() {
           ],
         ),
       ]);
-      expect(codec.encode(doc), '- parent\n\n  - child');
+      expect(codec.encode(doc), '- parent\n  - child');
     });
 
     test('decode nested list items', () {
-      final doc = codec.decode('- parent\n\n  - child');
+      final doc = codec.decode('- parent\n  - child');
       expect(doc.blocks.length, 1);
       expect(doc.blocks[0].blockType, BlockType.listItem);
       expect(doc.blocks[0].plainText, 'parent');
@@ -222,11 +222,11 @@ void main() {
           segments: [const StyledSegment('second')],
         ),
       ]);
-      expect(codec.encode(doc), '1. first\n\n2. second');
+      expect(codec.encode(doc), '1. first\n2. second');
     });
 
     test('decode numbered list', () {
-      final doc = codec.decode('1. first\n\n2. second');
+      final doc = codec.decode('1. first\n2. second');
       expect(doc.blocks.length, 2);
       expect(doc.blocks[0].blockType, BlockType.numberedList);
       expect(doc.blocks[0].plainText, 'first');
@@ -249,11 +249,11 @@ void main() {
           metadata: {'checked': true},
         ),
       ]);
-      expect(codec.encode(doc), '- [ ] undone\n\n- [x] done');
+      expect(codec.encode(doc), '- [ ] undone\n- [x] done');
     });
 
     test('decode task items', () {
-      final doc = codec.decode('- [ ] undone\n\n- [x] done');
+      final doc = codec.decode('- [ ] undone\n- [x] done');
       expect(doc.blocks.length, 2);
       expect(doc.blocks[0].blockType, BlockType.taskItem);
       expect(doc.blocks[0].plainText, 'undone');
@@ -365,6 +365,64 @@ void main() {
       expect(segs[1].text, ' and ');
       expect(segs[2].text, 'B');
       expect(segs[2].attributes['url'], 'url2');
+    });
+
+    test('encode consecutive list items without blank lines between', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('first')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('second')],
+        ),
+        TextBlock(
+          id: 'c',
+          segments: [const StyledSegment('paragraph after')],
+        ),
+      ]);
+      final md = codec.encode(doc);
+      // List siblings should be separated by \n, not \n\n.
+      expect(md, contains('- first\n- second'));
+      // But paragraph after the list should have \n\n.
+      expect(md, contains('second\n\nparagraph after'));
+    });
+
+    test('encode consecutive numbered list items without blank lines', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('first')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('second')],
+        ),
+      ]);
+      expect(codec.encode(doc), '1. first\n2. second');
+    });
+
+    test('full document round-trip preserves structure', () {
+      final md = '# Welcome\n\n'
+          'Paragraph\n\n'
+          '- Parent\n\n'
+          '  - Child\n\n'
+          '- Sibling\n\n'
+          '---\n\n'
+          '1. First\n\n'
+          '2. Second';
+      final decoded = codec.decode(md);
+      // Parent should have Child as nested.
+      expect(decoded.blocks.length, 7); // h1, para, list(+child), list, divider, num, num
+      final parentBlock = decoded.blocks.firstWhere(
+          (b) => b.plainText == 'Parent');
+      expect(parentBlock.children.length, 1);
+      expect(parentBlock.children[0].plainText, 'Child');
     });
   });
 }

@@ -1415,6 +1415,58 @@ void main() {
         // Should have multiple blocks with heading type.
         expect(controller.document.allBlocks.length, greaterThanOrEqualTo(2));
       });
+
+      test('pasting on empty paragraph preserves block types correctly', () {
+        final controller = EditorController(
+          document: Document.empty(),
+        );
+        // Paste markdown with mixed block types.
+        final md = '# Title\n\nParagraph\n\n- List item';
+        controller.value = TextEditingValue(
+          text: '\u200B', // empty block placeholder
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+        controller.value = TextEditingValue(
+          text: md,
+          selection: TextSelection.collapsed(offset: md.length),
+        );
+        final blocks = controller.document.allBlocks;
+        expect(blocks.length, greaterThanOrEqualTo(3));
+        // First block should be h1.
+        expect(blocks[0].blockType, BlockType.h1);
+        // Should have a list item somewhere.
+        expect(blocks.any((b) => b.blockType == BlockType.listItem), isTrue);
+      });
+
+      test('paste on heading does not make everything a heading', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Title')],
+            ),
+          ]),
+        );
+        // Cursor at end of heading.
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 5),
+        );
+        // Paste "plain\n\nparagraph" after the heading.
+        final pasteText = 'plain\n\nparagraph';
+        controller.value = TextEditingValue(
+          text: 'Title$pasteText',
+          selection: TextSelection.collapsed(offset: 5 + pasteText.length),
+        );
+        // The pasted paragraphs should NOT be headings.
+        final blocks = controller.document.allBlocks;
+        expect(blocks.length, greaterThanOrEqualTo(2));
+        // At least one block after the heading should be paragraph.
+        final nonHeadings = blocks.where(
+            (b) => b.blockType == BlockType.paragraph);
+        expect(nonHeadings.isNotEmpty, isTrue,
+            reason: 'Pasted blocks should not all inherit heading type');
+      });
     });
 
     group('canIndent / canOutdent', () {

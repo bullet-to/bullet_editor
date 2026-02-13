@@ -1,6 +1,7 @@
-import 'package:bullet_editor/bullet_editor.dart';
-import 'package:bullet_editor/bullet_editor.dart' as offsetMapper
+import 'package:bullet_editor/bullet_editor.dart'
+    as offsetMapper
     show displayToModel, modelToDisplay;
+import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -49,8 +50,11 @@ class _EditorScreenState extends State<EditorScreen> {
           const StyledSegment('This is a '),
           const StyledSegment('bold', {InlineStyle.bold}),
           const StyledSegment(' paragraph with a '),
-          const StyledSegment('link', {InlineStyle.link},
-              {'url': 'https://flutter.dev'}),
+          const StyledSegment(
+            'link',
+            {InlineStyle.link},
+            {'url': 'https://flutter.dev'},
+          ),
           const StyledSegment('.'),
         ],
       ),
@@ -129,7 +133,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
     // If cursor is inside an existing link, pre-fill its URL.
     final existingUrl = _controller.currentAttributes['url'] as String?;
-    final isEditing = existingUrl != null &&
+    final isEditing =
+        existingUrl != null &&
         _controller.activeStyles.contains(InlineStyle.link);
 
     // For new links, require a selection. For editing, collapsed is fine.
@@ -212,19 +217,51 @@ class _EditorScreenState extends State<EditorScreen> {
           // Convert local offsets to display offsets.
           final globalStart = doc.globalOffset(pos.blockIndex, segStart);
           final globalEnd = doc.globalOffset(pos.blockIndex, segEnd);
-          final displayStart =
-              offsetMapper.modelToDisplay(doc, globalStart, schema);
-          final displayEnd =
-              offsetMapper.modelToDisplay(doc, globalEnd, schema);
+          final displayStart = offsetMapper.modelToDisplay(
+            doc,
+            globalStart,
+            schema,
+          );
+          final displayEnd = offsetMapper.modelToDisplay(
+            doc,
+            globalEnd,
+            schema,
+          );
           _controller.value = _controller.value.copyWith(
             selection: TextSelection(
-                baseOffset: displayStart, extentOffset: displayEnd),
+              baseOffset: displayStart,
+              extentOffset: displayEnd,
+            ),
           );
         }
         break;
       }
       segStart = segEnd;
     }
+  }
+
+  String _buildDebugText() {
+    final buf = StringBuffer();
+    buf.writeln(
+      'Document (${_controller.document.allBlocks.length} blocks, '
+      '${_controller.document.blocks.length} roots)',
+    );
+    for (final entry in _controller.document.allBlocks.asMap().entries) {
+      final i = entry.key;
+      final block = entry.value;
+      final depth = _controller.document.depthOf(i);
+      final indent = '  ' * depth;
+      final meta = block.metadata.isNotEmpty ? ' ${block.metadata}' : '';
+      final attrs = block.segments
+          .where((s) => s.attributes.isNotEmpty)
+          .map((s) => s.attributes)
+          .toList();
+      final attrStr = attrs.isNotEmpty ? ' $attrs' : '';
+      buf.writeln(
+        '$indent[$i] ${block.blockType.name}$meta: "${block.plainText}"$attrStr',
+      );
+    }
+    return buf.toString();
   }
 
   /// Intercept Tab / Shift+Tab before Flutter's focus system eats them.
@@ -267,12 +304,26 @@ class _EditorScreenState extends State<EditorScreen> {
         }
         return KeyEventResult.ignored; // no selection, let Flutter handle
       case LogicalKeyboardKey.keyX:
-        // Rich cut: encode selection as markdown, let Flutter handle deletion.
+        // Rich cut: encode selection as markdown + delete selection.
+        // Must handle both ourselves — returning ignored would let Flutter
+        // overwrite our markdown clipboard with plain text.
         final md = _controller.encodeSelection();
         if (md != null) {
           Clipboard.setData(ClipboardData(text: md));
+          // Delete the selection by simulating an empty replacement.
+          final sel = _controller.value.selection;
+          if (!sel.isCollapsed) {
+            final start = sel.start;
+            _controller.value = _controller.value.copyWith(
+              text:
+                  _controller.text.substring(0, sel.start) +
+                  _controller.text.substring(sel.end),
+              selection: TextSelection.collapsed(offset: start),
+            );
+          }
+          return KeyEventResult.handled;
         }
-        return KeyEventResult.ignored; // let Flutter delete the selection
+        return KeyEventResult.ignored;
       case LogicalKeyboardKey.keyB:
         _controller.toggleStyle(InlineStyle.bold);
         setState(() {});
@@ -310,7 +361,9 @@ class _EditorScreenState extends State<EditorScreen> {
               children: [
                 Expanded(
                   child: EditorToolbar(
-                      controller: _controller, editorFocusNode: _focusNode),
+                    controller: _controller,
+                    editorFocusNode: _focusNode,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
@@ -358,38 +411,13 @@ class _EditorScreenState extends State<EditorScreen> {
                   border: Border.all(color: Colors.grey[300]!),
                 ),
                 child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Document (${_controller.document.allBlocks.length} blocks, '
-                        '${_controller.document.blocks.length} roots)',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      ..._controller.document.allBlocks.asMap().entries.map((
-                        entry,
-                      ) {
-                        final i = entry.key;
-                        final block = entry.value;
-                        final depth = _controller.document.depthOf(i);
-                        final indent = '  ' * depth;
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Text(
-                            '$indent[$i] ${block.blockType.name}${block.metadata.isNotEmpty ? ' ${block.metadata}' : ''}: "${block.plainText}"',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'monospace',
-                              color: Colors.grey[800],
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
+                  child: SelectableText(
+                    _buildDebugText(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: Colors.grey[800],
+                    ),
                   ),
                 ),
               ),
