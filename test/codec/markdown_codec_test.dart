@@ -407,6 +407,81 @@ void main() {
       expect(codec.encode(doc), '1. first\n2. second');
     });
 
+    test('encode overlapping bold+italic uses nested delimiters', () {
+      // "1 " bold, "2" bold+italic, " 3" bold → **1 *2* 3**
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('1 ', {InlineStyle.bold}),
+            const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
+            const StyledSegment(' 3', {InlineStyle.bold}),
+          ],
+        ),
+      ]);
+      expect(codec.encode(doc), '**1 *2* 3**');
+    });
+
+    test('decode nested bold+italic **1 *2* 3**', () {
+      final doc = codec.decode('**1 *2* 3**');
+      final segs = doc.blocks[0].segments;
+      // Should produce 3 segments: bold, bold+italic, bold.
+      expect(segs.length, 3);
+      expect(segs[0].text, '1 ');
+      expect(segs[0].styles, {InlineStyle.bold});
+      expect(segs[1].text, '2');
+      expect(segs[1].styles, {InlineStyle.bold, InlineStyle.italic});
+      expect(segs[2].text, ' 3');
+      expect(segs[2].styles, {InlineStyle.bold});
+    });
+
+    test('round-trip bold span with italic subset', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('1 ', {InlineStyle.bold}),
+            const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
+            const StyledSegment(' 3', {InlineStyle.bold}),
+          ],
+        ),
+      ]);
+      final md = codec.encode(doc);
+      final decoded = codec.decode(md);
+      final segs = decoded.blocks[0].segments;
+      expect(segs.length, 3);
+      expect(segs[0].styles, {InlineStyle.bold});
+      expect(segs[1].styles, {InlineStyle.bold, InlineStyle.italic});
+      expect(segs[2].styles, {InlineStyle.bold});
+    });
+
+    test('encode bold link uses nested delimiters', () {
+      // bold + link → **[text](url)**
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('plain '),
+            const StyledSegment(
+              'click',
+              {InlineStyle.bold, InlineStyle.link},
+              {'url': 'https://x.com'},
+            ),
+            const StyledSegment(' more'),
+          ],
+        ),
+      ]);
+      expect(codec.encode(doc), 'plain **[click](https://x.com)** more');
+    });
+
+    test('decode ***text*** as bold+italic', () {
+      final doc = codec.decode('***text***');
+      final segs = doc.blocks[0].segments;
+      expect(segs.length, 1);
+      expect(segs[0].text, 'text');
+      expect(segs[0].styles, {InlineStyle.bold, InlineStyle.italic});
+    });
+
     test('full document round-trip preserves structure', () {
       final md = '# Welcome\n\n'
           'Paragraph\n\n'

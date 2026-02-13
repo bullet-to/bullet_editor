@@ -97,6 +97,34 @@ class EditorController extends TextEditingController {
 
   // -- Offset helpers (delegate to offset_mapper) --
 
+  /// Return ordered (start, end) from a possibly-reversed selection.
+  static (int, int) _orderedRange(TextSelection sel) {
+    final a = sel.baseOffset;
+    final b = sel.extentOffset;
+    return a < b ? (a, b) : (b, a);
+  }
+
+  /// Iterate blocks within a model offset range, calling [visitor] with
+  /// the flat block index, the block, and the local (start, end) offsets.
+  void _forEachBlockInRange(
+    int start,
+    int end,
+    void Function(int flatIndex, TextBlock block, int localStart, int localEnd)
+        visitor,
+  ) {
+    final startPos = _document.blockAt(start);
+    final endPos = _document.blockAt(end);
+    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
+      final block = _document.allBlocks[i];
+      final localStart = i == startPos.blockIndex ? startPos.localOffset : 0;
+      final localEnd =
+          i == endPos.blockIndex ? endPos.localOffset : block.length;
+      if (localEnd > localStart) {
+        visitor(i, block, localStart, localEnd);
+      }
+    }
+  }
+
   int _displayToModel(int displayOffset) =>
       mapper.displayToModel(_document, displayOffset, _schema);
 
@@ -118,43 +146,23 @@ class EditorController extends TextEditingController {
       return _document.stylesAt(modelSel.baseOffset);
     }
 
-    final start = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.baseOffset
-        : modelSel.extentOffset;
-    final end = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.extentOffset
-        : modelSel.baseOffset;
-
+    final (start, end) = _orderedRange(modelSel);
     if (start == end) return _document.stylesAt(start);
 
     // Walk segments in the range, intersect their styles.
-    final startPos = _document.blockAt(start);
-    final endPos = _document.blockAt(end);
     Set<InlineStyle>? result;
-
-    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
-      final block = _document.allBlocks[i];
-      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final blockEnd = i == endPos.blockIndex
-          ? endPos.localOffset
-          : block.length;
-      if (blockEnd <= blockStart) continue;
-
+    _forEachBlockInRange(start, end, (_, block, localStart, localEnd) {
       var offset = 0;
       for (final seg in block.segments) {
         final segStart = offset;
         final segEnd = offset + seg.text.length;
         offset = segEnd;
-
-        if (segEnd <= blockStart || segStart >= blockEnd) continue;
-
-        if (result == null) {
-          result = Set.of(seg.styles);
-        } else {
-          result = result.intersection(seg.styles);
-        }
+        if (segEnd <= localStart || segStart >= localEnd) continue;
+        result = result == null
+            ? Set.of(seg.styles)
+            : result!.intersection(seg.styles);
       }
-    }
+    });
 
     return result ?? {};
   }
@@ -181,39 +189,29 @@ class EditorController extends TextEditingController {
   }
 
   /// Undo the last edit. Restores the document and cursor from the snapshot.
-  void undo() {
-    final entry = _undoManager.undo();
-    if (entry == null) return;
-
-    final modelSel = _selectionToModel(value.selection);
-    _undoManager.pushRedo(
-      UndoEntry(
-        document: _document,
-        selection: modelSel,
-        timestamp: DateTime.now(),
-      ),
-    );
-
-    _document = entry.document;
-    _syncToTextField(modelSelection: entry.selection);
-    _activeStyles = _document.stylesAt(
-      entry.selection.baseOffset.clamp(0, _document.plainText.length),
-    );
-  }
+  void undo() => _applyUndoRedo(
+        retrieve: _undoManager.undo,
+        stash: _undoManager.pushRedo,
+      );
 
   /// Redo the last undone edit. Restores the document and cursor from the snapshot.
-  void redo() {
-    final entry = _undoManager.redo();
+  void redo() => _applyUndoRedo(
+        retrieve: _undoManager.redo,
+        stash: _undoManager.pushUndoRaw,
+      );
+
+  void _applyUndoRedo({
+    required UndoEntry? Function() retrieve,
+    required void Function(UndoEntry) stash,
+  }) {
+    final entry = retrieve();
     if (entry == null) return;
 
-    final modelSel = _selectionToModel(value.selection);
-    _undoManager.pushUndoRaw(
-      UndoEntry(
-        document: _document,
-        selection: modelSel,
-        timestamp: DateTime.now(),
-      ),
-    );
+    stash(UndoEntry(
+      document: _document,
+      selection: _selectionToModel(value.selection),
+      timestamp: DateTime.now(),
+    ));
 
     _document = entry.document;
     _syncToTextField(modelSelection: entry.selection);
@@ -229,12 +227,7 @@ class EditorController extends TextEditingController {
   String? encodeSelection() {
     if (!value.selection.isValid || value.selection.isCollapsed) return null;
     final modelSel = _selectionToModel(value.selection);
-    final start = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.baseOffset
-        : modelSel.extentOffset;
-    final end = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.extentOffset
-        : modelSel.baseOffset;
+    final (start, end) = _orderedRange(modelSel);
     final blocks = _document.extractRange(start, end);
     if (blocks.isEmpty) return null;
     final tempDoc = Document(blocks);
@@ -368,27 +361,12 @@ class EditorController extends TextEditingController {
 
     // Non-collapsed: apply ToggleStyle to each block in the range.
     final modelSel = _selectionToModel(value.selection);
-    final start = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.baseOffset
-        : modelSel.extentOffset;
-    final end = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.extentOffset
-        : modelSel.baseOffset;
-
-    final startPos = _document.blockAt(start);
-    final endPos = _document.blockAt(end);
+    final (start, end) = _orderedRange(modelSel);
 
     final ops = <EditOperation>[];
-    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
-      final block = _document.allBlocks[i];
-      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final blockEnd = i == endPos.blockIndex
-          ? endPos.localOffset
-          : block.length;
-      if (blockEnd > blockStart) {
-        ops.add(ToggleStyle(i, blockStart, blockEnd, style));
-      }
-    }
+    _forEachBlockInRange(start, end, (i, _, localStart, localEnd) {
+      ops.add(ToggleStyle(i, localStart, localEnd, style));
+    });
 
     if (ops.isEmpty) return;
 
@@ -413,35 +391,21 @@ class EditorController extends TextEditingController {
     if (!value.selection.isValid || value.selection.isCollapsed) return;
 
     final modelSel = _selectionToModel(value.selection);
-    final start = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.baseOffset
-        : modelSel.extentOffset;
-    final end = modelSel.baseOffset < modelSel.extentOffset
-        ? modelSel.extentOffset
-        : modelSel.baseOffset;
-
-    final startPos = _document.blockAt(start);
-    final endPos = _document.blockAt(end);
+    final (start, end) = _orderedRange(modelSel);
     final attrs = {'url': url};
 
     // Build ops: if any part of the range already has a link, remove it first
     // so the toggle always adds. This makes setLink idempotent for edits.
     final removeOps = <EditOperation>[];
     final addOps = <EditOperation>[];
-    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
-      final block = _document.allBlocks[i];
-      final blockStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final blockEnd = i == endPos.blockIndex
-          ? endPos.localOffset
-          : block.length;
-      if (blockEnd <= blockStart) continue;
-
+    _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
       // Check if this range already has link style — if so, remove first.
       var hasLink = false;
       var offset = 0;
       for (final seg in block.segments) {
         final segEnd = offset + seg.text.length;
-        if (segEnd > blockStart && offset < blockEnd &&
+        if (segEnd > localStart &&
+            offset < localEnd &&
             seg.styles.contains(InlineStyle.link)) {
           hasLink = true;
           break;
@@ -449,12 +413,12 @@ class EditorController extends TextEditingController {
         offset = segEnd;
       }
       if (hasLink) {
-        removeOps.add(ToggleStyle(i, blockStart, blockEnd, InlineStyle.link,
-            attributes: attrs));
+        removeOps.add(ToggleStyle(
+            i, localStart, localEnd, InlineStyle.link, attributes: attrs));
       }
-      addOps.add(ToggleStyle(i, blockStart, blockEnd, InlineStyle.link,
-          attributes: attrs));
-    }
+      addOps.add(ToggleStyle(
+          i, localStart, localEnd, InlineStyle.link, attributes: attrs));
+    });
 
     if (addOps.isEmpty) return;
 
@@ -499,7 +463,7 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
     final block = _document.allBlocks[pos.blockIndex];
     if (block.blockType != BlockType.taskItem) return false;
-    return block.metadata['checked'] == true;
+    return block.metadata[kCheckedKey] == true;
   }
 
   /// Toggle checked state of the task at the cursor.
@@ -510,11 +474,11 @@ class EditorController extends TextEditingController {
     final block = _document.allBlocks[pos.blockIndex];
     if (block.blockType != BlockType.taskItem) return;
 
-    final current = block.metadata['checked'] == true;
+    final current = block.metadata[kCheckedKey] == true;
     _pushUndo();
     _document = SetBlockMetadata(
       pos.blockIndex,
-      'checked',
+      kCheckedKey,
       !current,
     ).apply(_document);
     _syncToTextField(modelSelection: modelSel);

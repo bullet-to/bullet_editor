@@ -264,7 +264,7 @@ class TaskItemRule extends InputRule {
         ...pending.operations,
         DeleteText(i, 0, prefixLen),
         ChangeBlockType(i, BlockType.taskItem),
-        SetBlockMetadata(i, 'checked', checked),
+        SetBlockMetadata(i, kCheckedKey, checked),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
         baseOffset: blockStart,

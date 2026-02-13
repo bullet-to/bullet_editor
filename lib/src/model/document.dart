@@ -24,17 +24,24 @@ class BlockPosition {
 /// [allBlocks] is a depth-first flattening — what the TextField sees.
 /// All offset mapping uses [allBlocks].
 class Document {
-  const Document(this.blocks);
+  Document(this.blocks) : _allBlocks = _flatten(blocks);
 
-  factory Document.empty() =>
-      Document([TextBlock(id: generateBlockId(), segments: const [])]);
+  factory Document.empty() => Document(
+        [TextBlock(id: generateBlockId(), segments: const [])],
+      );
 
   /// Top-level blocks (tree roots). May have children.
   final List<TextBlock> blocks;
 
+  /// Cached depth-first flattening of the entire tree.
+  final List<TextBlock> _allBlocks;
+
   /// Depth-first flattening of the entire tree.
   /// This is the linear sequence the TextField renders.
-  List<TextBlock> get allBlocks {
+  /// Cached — O(1) after first construction.
+  List<TextBlock> get allBlocks => _allBlocks;
+
+  static List<TextBlock> _flatten(List<TextBlock> roots) {
     final result = <TextBlock>[];
     void walk(List<TextBlock> nodes) {
       for (final node in nodes) {
@@ -42,8 +49,8 @@ class Document {
         walk(node.children);
       }
     }
-    walk(blocks);
-    return result;
+    walk(roots);
+    return List.unmodifiable(result);
   }
 
   /// Plain text as it appears in the TextField. Blocks separated by '\n'.
@@ -52,8 +59,14 @@ class Document {
   int get textLength => plainText.length;
 
   /// Map a global TextField offset to (flatIndex, localOffset).
+  ///
+  /// Clamps to valid range: negative offsets map to (0, 0),
+  /// offsets beyond the document map to the end of the last block.
   BlockPosition blockAt(int globalOffset) {
-    final flat = allBlocks;
+    final flat = _allBlocks;
+    if (flat.isEmpty) return const BlockPosition(0, 0);
+    if (globalOffset <= 0) return const BlockPosition(0, 0);
+
     var remaining = globalOffset;
     for (var i = 0; i < flat.length; i++) {
       final blockLen = flat[i].length;
@@ -66,10 +79,14 @@ class Document {
   }
 
   /// Reverse mapping: flat index + local offset -> global TextField offset.
+  ///
+  /// Clamps [flatIndex] to `[0, allBlocks.length - 1]`.
   int globalOffset(int flatIndex, int localOffset) {
-    final flat = allBlocks;
+    final flat = _allBlocks;
+    if (flat.isEmpty) return 0;
+    final clampedIndex = flatIndex.clamp(0, flat.length - 1);
     var offset = 0;
-    for (var i = 0; i < flatIndex; i++) {
+    for (var i = 0; i < clampedIndex; i++) {
       offset += flat[i].length + 1;
     }
     return offset + localOffset;
@@ -98,8 +115,9 @@ class Document {
   /// Block types and nesting are maintained. For partial blocks, only
   /// the selected segment slice is included. Used for copy/encode.
   List<TextBlock> extractRange(int start, int end) {
-    if (start >= end) return [];
-    final flat = allBlocks;
+    if (start >= end || start < 0) return [];
+    final flat = _allBlocks;
+    if (flat.isEmpty) return [];
     final startPos = blockAt(start);
     final endPos = blockAt(end);
 
@@ -122,7 +140,7 @@ class Document {
     }
 
     // Rebuild tree from (depth, block) pairs.
-    return _buildTreeFromPairs(items, items.isEmpty ? 0 : items.first.$1);
+    return buildTreeFromPairs(items, items.isEmpty ? 0 : items.first.$1);
   }
 
   // -- Tree mutation helpers --
@@ -203,46 +221,51 @@ class Document {
 }
 
 // -- Tree manipulation internals --
+//
+// All tree mutations use a single recursive visitor pattern.
+// Each operation provides a callback that receives the target node
+// and returns a list of replacement nodes (empty = remove, >1 = insert after).
 
-List<TextBlock> _replaceInTree(List<TextBlock> nodes, String targetId, TextBlock replacement) {
-  return nodes.map((node) {
-    if (node.id == targetId) return replacement;
-    final newChildren = _replaceInTree(node.children, targetId, replacement);
-    if (identical(newChildren, node.children)) return node;
-    return node.copyWith(children: newChildren);
-  }).toList();
-}
-
-List<TextBlock> _removeFromTree(List<TextBlock> nodes, String targetId) {
-  final result = <TextBlock>[];
-  for (final node in nodes) {
-    if (node.id == targetId) continue; // skip this node
-    final newChildren = _removeFromTree(node.children, targetId);
-    if (identical(newChildren, node.children)) {
-      result.add(node);
-    } else {
-      result.add(node.copyWith(children: newChildren));
-    }
-  }
-  return result;
-}
-
-List<TextBlock> _insertAfterInTree(List<TextBlock> nodes, String targetId, TextBlock newBlock) {
+/// Walk [nodes] recursively looking for the block with [targetId].
+/// When found, call [onFound] which returns the replacement node list.
+/// Returns (newNodes, found) — `found` prevents unnecessary copies.
+(List<TextBlock>, bool) _visitTree(
+  List<TextBlock> nodes,
+  String targetId,
+  List<TextBlock> Function(TextBlock node) onFound,
+) {
+  var changed = false;
   final result = <TextBlock>[];
   for (final node in nodes) {
     if (node.id == targetId) {
-      result.add(node);
-      result.add(newBlock); // insert after
+      result.addAll(onFound(node));
+      changed = true;
     } else {
-      final newChildren = _insertAfterInTree(node.children, targetId, newBlock);
-      if (identical(newChildren, node.children)) {
-        result.add(node);
-      } else {
+      final (newChildren, childChanged) =
+          _visitTree(node.children, targetId, onFound);
+      if (childChanged) {
         result.add(node.copyWith(children: newChildren));
+        changed = true;
+      } else {
+        result.add(node);
       }
     }
   }
-  return result;
+  return (changed ? result : nodes, changed);
+}
+
+List<TextBlock> _replaceInTree(
+    List<TextBlock> nodes, String targetId, TextBlock replacement) {
+  return _visitTree(nodes, targetId, (_) => [replacement]).$1;
+}
+
+List<TextBlock> _removeFromTree(List<TextBlock> nodes, String targetId) {
+  return _visitTree(nodes, targetId, (_) => []).$1;
+}
+
+List<TextBlock> _insertAfterInTree(
+    List<TextBlock> nodes, String targetId, TextBlock newBlock) {
+  return _visitTree(nodes, targetId, (node) => [node, newBlock]).$1;
 }
 
 int? _depthInTree(List<TextBlock> nodes, String targetId, int currentDepth) {
@@ -254,7 +277,8 @@ int? _depthInTree(List<TextBlock> nodes, String targetId, int currentDepth) {
   return null;
 }
 
-TextBlock? _findParent(List<TextBlock> nodes, String targetId, TextBlock? parent) {
+TextBlock? _findParent(
+    List<TextBlock> nodes, String targetId, TextBlock? parent) {
   for (final node in nodes) {
     if (node.id == targetId) return parent;
     final found = _findParent(node.children, targetId, node);
@@ -263,8 +287,10 @@ TextBlock? _findParent(List<TextBlock> nodes, String targetId, TextBlock? parent
   return null;
 }
 
-/// Build a tree from (depth, block) pairs, same algorithm as MarkdownCodec._buildTree.
-List<TextBlock> _buildTreeFromPairs(
+/// Build a tree from (depth, block) pairs.
+///
+/// Shared by [Document.extractRange] and [MarkdownCodec].
+List<TextBlock> buildTreeFromPairs(
     List<(int, TextBlock)> items, int minDepth) {
   final result = <TextBlock>[];
   var i = 0;
@@ -279,7 +305,7 @@ List<TextBlock> _buildTreeFromPairs(
     }
     final children = childItems.isEmpty
         ? const <TextBlock>[]
-        : _buildTreeFromPairs(childItems, depth + 1);
+        : buildTreeFromPairs(childItems, depth + 1);
     result
         .add(children.isEmpty ? block : block.copyWith(children: children));
   }

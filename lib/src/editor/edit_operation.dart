@@ -166,15 +166,9 @@ class SplitBlock extends EditOperation {
   @override
   Document apply(Document doc) {
     final block = doc.allBlocks[blockIndex];
-    final beforeSegments = _splitSegmentsAt(
+    final (beforeSegments, afterSegments) = splitSegmentsAt(
       block.segments,
       offset,
-      takeBefore: true,
-    );
-    final afterSegments = _splitSegmentsAt(
-      block.segments,
-      offset,
-      takeBefore: false,
     );
 
     final newBlockType = isListLike(block.blockType)
@@ -183,7 +177,7 @@ class SplitBlock extends EditOperation {
 
     // For tasks, new block starts unchecked.
     final newMetadata = block.blockType == BlockType.taskItem
-        ? <String, dynamic>{'checked': false}
+        ? <String, dynamic>{kCheckedKey: false}
         : <String, dynamic>{};
 
     final updatedBlock = block.copyWith(
@@ -309,18 +303,10 @@ class DeleteRange extends EditOperation {
     final endBlock = flat[endBlockIndex];
 
     // 1. Truncate start block: keep text before startOffset.
-    final startSegs = _splitSegmentsAt(
-      startBlock.segments,
-      startOffset,
-      takeBefore: true,
-    );
+    final (startSegs, _) = splitSegmentsAt(startBlock.segments, startOffset);
 
     // 2. Truncate end block: keep text after endOffset.
-    final endSegs = _splitSegmentsAt(
-      endBlock.segments,
-      endOffset,
-      takeBefore: false,
-    );
+    final (_, endSegs) = splitSegmentsAt(endBlock.segments, endOffset);
 
     // 3. Merge remaining: start block's head + end block's tail.
     final mergedSegments = mergeSegments([...startSegs, ...endSegs]);
@@ -388,34 +374,22 @@ class PasteBlocks extends EditOperation {
     final target = flat[blockIndex];
 
     if (pastedBlocks.length == 1) {
-      // Single block paste: insert pasted segments at offset, preserving styles.
-      final pasted = pastedBlocks[0];
-      final before = _splitSegmentsAt(
-        target.segments,
-        offset,
-        takeBefore: true,
-      );
-      final after = _splitSegmentsAt(
-        target.segments,
-        offset,
-        takeBefore: false,
-      );
-      final merged = mergeSegments([...before, ...pasted.segments, ...after]);
-      return doc.replaceBlock(blockIndex, target.copyWith(segments: merged));
+      return _applySingleBlock(doc, target);
     }
 
-    // Multi-block paste:
+    return _applyMultiBlock(doc, target);
+  }
+
+  Document _applySingleBlock(Document doc, TextBlock target) {
+    final pasted = pastedBlocks[0];
+    final (before, after) = splitSegmentsAt(target.segments, offset);
+    final merged = mergeSegments([...before, ...pasted.segments, ...after]);
+    return doc.replaceBlock(blockIndex, target.copyWith(segments: merged));
+  }
+
+  Document _applyMultiBlock(Document doc, TextBlock target) {
     // 1. Split target into head (before offset) and tail (after offset).
-    final headSegs = _splitSegmentsAt(
-      target.segments,
-      offset,
-      takeBefore: true,
-    );
-    final tailSegs = _splitSegmentsAt(
-      target.segments,
-      offset,
-      takeBefore: false,
-    );
+    final (headSegs, tailSegs) = splitSegmentsAt(target.segments, offset);
 
     // 2. Merge first pasted block's segments into the head.
     // If pasting at the very start of the block (offset 0), use the first
@@ -685,47 +659,47 @@ List<StyledSegment> _spliceDelete(
   return result;
 }
 
-/// Split segment list at [offset], returning either the before or after half.
-List<StyledSegment> _splitSegmentsAt(
+/// Split segment list at [offset], returning both halves.
+///
+/// Returns a record `(before, after)` where `before` contains segments
+/// up to [offset] and `after` contains segments from [offset] onward.
+(List<StyledSegment>, List<StyledSegment>) splitSegmentsAt(
   List<StyledSegment> segments,
-  int offset, {
-  required bool takeBefore,
-}) {
+  int offset,
+) {
   var pos = 0;
-  final result = <StyledSegment>[];
+  final before = <StyledSegment>[];
+  final after = <StyledSegment>[];
 
   for (final seg in segments) {
     final segStart = pos;
     final segEnd = pos + seg.text.length;
 
-    if (takeBefore) {
-      if (segEnd <= offset) {
-        result.add(seg);
-      } else if (segStart < offset) {
-        result.add(
-          StyledSegment(
-            seg.text.substring(0, offset - segStart),
-            seg.styles,
-            seg.attributes,
-          ),
-        );
-      }
+    if (segEnd <= offset) {
+      before.add(seg);
+    } else if (segStart >= offset) {
+      after.add(seg);
     } else {
-      if (segStart >= offset) {
-        result.add(seg);
-      } else if (segEnd > offset) {
-        result.add(
-          StyledSegment(
-            seg.text.substring(offset - segStart),
-            seg.styles,
-            seg.attributes,
-          ),
-        );
-      }
+      // Split point is inside this segment.
+      final splitAt = offset - segStart;
+      before.add(
+        StyledSegment(
+          seg.text.substring(0, splitAt),
+          seg.styles,
+          seg.attributes,
+        ),
+      );
+      after.add(
+        StyledSegment(
+          seg.text.substring(splitAt),
+          seg.styles,
+          seg.attributes,
+        ),
+      );
     }
 
     pos = segEnd;
   }
 
-  return result;
+  return (before, after);
 }

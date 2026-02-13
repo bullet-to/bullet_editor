@@ -79,18 +79,30 @@ class MarkdownCodec {
 
   /// Encode segments using inline codecs.
   ///
-  /// Simple styles use symmetric wrap delimiters. Data-carrying styles
-  /// (links) use their full encode function with segment attributes.
+  /// Uses a style-stack to correctly nest wrap delimiters across segments.
+  /// For example, segments [bold:"1 ", bold+italic:"2", bold:" 3"] produce
+  /// `**1 *2* 3**` instead of per-segment wrapping which creates ambiguous
+  /// adjacent delimiters.
+  ///
+  /// Data-carrying styles (links) use their full encode function.
   String _encodeSegments(List<StyledSegment> segments) {
     final wrapMap = _inlineWrapMap();
     final encodeMap = _inlineEncodeMap();
+
+    // Fixed nesting order: longer delimiters are outer (bold before italic).
+    final wrapOrder = wrapMap.keys.toList()
+      ..sort((a, b) {
+        final cmp = wrapMap[b]!.length.compareTo(wrapMap[a]!.length);
+        return cmp != 0 ? cmp : wrapMap[a]!.compareTo(wrapMap[b]!);
+      });
+
     final buffer = StringBuffer();
+    final open = <Object>[]; // Currently open wrap styles, in wrapOrder.
 
     for (final seg in segments) {
       var text = seg.text;
 
-      // First, apply data-carrying style encoders (e.g. link → [text](url)).
-      // These replace the text entirely for their style.
+      // Apply data-carrying style encoders (e.g. link → [text](url)).
       for (final style in seg.styles) {
         final encodeFn = encodeMap[style];
         if (encodeFn != null) {
@@ -98,15 +110,37 @@ class MarkdownCodec {
         }
       }
 
-      // Then, apply symmetric wrap delimiters for simple styles.
-      for (final style in seg.styles) {
-        final wrap = wrapMap[style];
-        if (wrap != null) {
-          text = '$wrap$text$wrap';
-        }
+      // Desired stack for this segment, in nesting order.
+      final desired = wrapOrder.where((s) => seg.styles.contains(s)).toList();
+
+      // Find longest common prefix between open and desired.
+      var commonLen = 0;
+      while (commonLen < open.length &&
+          commonLen < desired.length &&
+          open[commonLen] == desired[commonLen]) {
+        commonLen++;
       }
+
+      // Close everything after the common prefix (innermost first).
+      for (var i = open.length - 1; i >= commonLen; i--) {
+        buffer.write(wrapMap[open[i]]);
+      }
+      open.removeRange(commonLen, open.length);
+
+      // Open everything after the common prefix.
+      for (var i = commonLen; i < desired.length; i++) {
+        open.add(desired[i]);
+        buffer.write(wrapMap[desired[i]]);
+      }
+
       buffer.write(text);
     }
+
+    // Close all remaining open styles (innermost first).
+    for (var i = open.length - 1; i >= 0; i--) {
+      buffer.write(wrapMap[open[i]]);
+    }
+
     return buffer.toString();
   }
 
@@ -124,7 +158,7 @@ class MarkdownCodec {
       if (p.contains('\n')) {
         // Check if this paragraph has multiple lines that are each block-typed.
         final lines = p.split('\n');
-        if (lines.length > 1 && lines.every((l) => _looksLikeBlock(l))) {
+        if (lines.length > 1 && lines.every(_looksLikeBlock)) {
           paragraphs.addAll(lines);
           continue;
         }
@@ -133,16 +167,34 @@ class MarkdownCodec {
     }
 
     final parsed = paragraphs.map((text) {
-      var depth = 0;
-      var remaining = text;
-      while (remaining.startsWith('  ')) {
-        depth++;
-        remaining = remaining.substring(2);
-      }
-      return (depth, _decodeBlock(remaining));
+      final (depth, content) = _stripIndent(text);
+      return (depth, _decodeBlock(content));
     }).toList();
 
-    return Document(_buildTree(parsed, 0));
+    return Document(buildTreeFromPairs(parsed, 0));
+  }
+
+  /// Strip leading indentation and return (depth, remaining content).
+  ///
+  /// Supports 2-space, 4-space, and tab indentation. Normalizes to
+  /// depth levels (each tab or 2 spaces = 1 level).
+  static (int, String) _stripIndent(String text) {
+    var depth = 0;
+    var i = 0;
+    while (i < text.length) {
+      if (text[i] == '\t') {
+        depth++;
+        i++;
+      } else if (i + 1 < text.length &&
+          text[i] == ' ' &&
+          text[i + 1] == ' ') {
+        depth++;
+        i += 2;
+      } else {
+        break;
+      }
+    }
+    return (depth, text.substring(i));
   }
 
   /// Try all registered block decoders. If multiple match, pick the most
@@ -168,10 +220,10 @@ class MarkdownCodec {
       }
     }
 
-    if (bestMatch != null) {
+    if (bestMatch != null && bestKey is BlockType) {
       return TextBlock(
         id: generateBlockId(),
-        blockType: bestKey! as BlockType,
+        blockType: bestKey,
         segments: _decodeSegments(bestMatch.content),
         metadata: bestMatch.metadata,
       );
@@ -181,13 +233,18 @@ class MarkdownCodec {
     return TextBlock(id: generateBlockId(), segments: _decodeSegments(text));
   }
 
+  static const _maxDecodeDepth = 10;
+
   /// Decode inline styles from text using registered InlineCodec wraps and
   /// data-carrying decoders.
   ///
   /// Data-carrying decoders (links, mentions) are tried at each position
   /// before the wrap-based regex. This ensures `[text](url)` is decoded as
   /// a link rather than being partially matched by wrap delimiters.
-  List<StyledSegment> _decodeSegments(String text) {
+  ///
+  /// Wrap matches are recursively decoded so that `**1 *2* 3**` correctly
+  /// produces bold("1 ") + bold+italic("2") + bold(" 3").
+  List<StyledSegment> _decodeSegments(String text, [int _depth = 0]) {
     final wrapEntries = _inlineWrapEntries();
     final decodeEntries = _inlineDecodeEntries();
 
@@ -195,17 +252,34 @@ class MarkdownCodec {
       return [StyledSegment(text)];
     }
 
-    // Build wrap regex (same as before).
+    // Build wrap regex with combined delimiters for overlapping styles.
+    // E.g. bold(**) + italic(*) → combined ***(.+?)*** tried first.
     RegExp? wrapPattern;
+    final combinedEntries = <_InlineCombinedWrapEntry>[];
     if (wrapEntries.isNotEmpty) {
       wrapEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
-      final alternatives = wrapEntries
-          .map((e) {
-            final escaped = RegExp.escape(e.wrap);
-            return '$escaped(.+?)$escaped';
-          })
-          .join('|');
-      wrapPattern = RegExp(alternatives);
+
+      // Generate combined entries for all pairs of wrap styles.
+      for (var i = 0; i < wrapEntries.length; i++) {
+        for (var j = i + 1; j < wrapEntries.length; j++) {
+          final combined = wrapEntries[i].wrap + wrapEntries[j].wrap;
+          combinedEntries.add(_InlineCombinedWrapEntry(
+            {wrapEntries[i].key, wrapEntries[j].key},
+            combined,
+          ));
+        }
+      }
+      // Sort combined by length descending so longest matches first.
+      combinedEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
+
+      // Build regex: combined patterns first, then individual.
+      final alternatives = <String>[
+        for (final e in combinedEntries)
+          '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
+        for (final e in wrapEntries)
+          '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
+      ];
+      wrapPattern = RegExp(alternatives.join('|'));
     }
 
     final segments = <StyledSegment>[];
@@ -229,10 +303,13 @@ class MarkdownCodec {
           pos++;
           continue;
         }
+        final style = decoded.key;
+        if (style is! InlineStyle) {
+          pos += decoded.match.fullMatchLength;
+          continue;
+        }
         segments.add(
-          StyledSegment(decoded.match.text, {
-            decoded.key as InlineStyle,
-          }, decoded.match.attributes),
+          StyledSegment(decoded.match.text, {style}, decoded.match.attributes),
         );
         pos += decoded.match.fullMatchLength;
         continue;
@@ -242,15 +319,40 @@ class MarkdownCodec {
       if (wrapPattern != null) {
         final match = wrapPattern.matchAsPrefix(text, pos);
         if (match != null) {
-          // Find which group matched.
-          for (var i = 0; i < wrapEntries.length; i++) {
+          // Find which group matched. Combined entries come first in the
+          // alternation, then individual wrap entries.
+          final totalGroups = combinedEntries.length + wrapEntries.length;
+          for (var i = 0; i < totalGroups; i++) {
             final content = match.group(i + 1);
-            if (content != null) {
-              segments.add(
-                StyledSegment(content, {wrapEntries[i].key as InlineStyle}),
-              );
-              break;
+            if (content == null) continue;
+
+            Set<InlineStyle> styles;
+            if (i < combinedEntries.length) {
+              // Combined entry — extract InlineStyle keys.
+              styles = combinedEntries[i]
+                  .keys
+                  .whereType<InlineStyle>()
+                  .toSet();
+            } else {
+              final key = wrapEntries[i - combinedEntries.length].key;
+              styles = key is InlineStyle ? {key} : {};
             }
+
+            if (styles.isNotEmpty && _depth < _maxDecodeDepth) {
+              final inner = _decodeSegments(content, _depth + 1);
+              for (final seg in inner) {
+                segments.add(StyledSegment(
+                  seg.text,
+                  {...seg.styles, ...styles},
+                  seg.attributes,
+                ));
+              }
+            } else if (styles.isNotEmpty) {
+              segments.add(StyledSegment(content, styles));
+            } else {
+              segments.add(StyledSegment(content));
+            }
+            break;
           }
           pos = match.end;
           continue;
@@ -288,35 +390,6 @@ class MarkdownCodec {
     }
 
     return segments;
-  }
-
-  // -----------------------------------------------------------------------
-  // Tree building (format-level grammar — unchanged)
-  // -----------------------------------------------------------------------
-
-  List<TextBlock> _buildTree(List<(int, TextBlock)> items, int minDepth) {
-    final result = <TextBlock>[];
-    var i = 0;
-
-    while (i < items.length) {
-      final (depth, block) = items[i];
-      if (depth < minDepth) break;
-
-      i++;
-      final childItems = <(int, TextBlock)>[];
-      while (i < items.length && items[i].$1 > depth) {
-        childItems.add(items[i]);
-        i++;
-      }
-
-      final children = childItems.isEmpty
-          ? const <TextBlock>[]
-          : _buildTree(childItems, depth + 1);
-
-      result.add(children.isEmpty ? block : block.copyWith(children: children));
-    }
-
-    return result;
   }
 
   // -----------------------------------------------------------------------
@@ -376,6 +449,20 @@ class MarkdownCodec {
     }
     return entries;
   }
+
+  /// Check if a line looks like a block-level element by trying registered
+  /// block decoders. Schema-driven — no hardcoded prefixes.
+  bool _looksLikeBlock(String line) {
+    final trimmed = line.trimLeft();
+    if (trimmed.isEmpty) return false;
+    for (final entry in _schema.blocks.entries) {
+      final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.decode != null && codec!.decode!(trimmed) != null) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 class _InlineWrapEntry {
@@ -396,22 +483,17 @@ class _InlineDecodedResult {
   final InlineDecodeMatch match;
 }
 
+class _InlineCombinedWrapEntry {
+  const _InlineCombinedWrapEntry(this.keys, this.wrap);
+  final Set<Object> keys;
+  final String wrap;
+}
+
 class _EncodedLine {
   const _EncodedLine(this.line, this.blockType, this.depth);
   final String line;
   final BlockType blockType;
   final int depth;
-}
-
-/// Check if a line looks like a block-level element (has a prefix marker).
-bool _looksLikeBlock(String line) {
-  final trimmed = line.trimLeft();
-  return trimmed.startsWith('- ') ||
-      trimmed.startsWith('* ') ||
-      trimmed.startsWith('+ ') ||
-      trimmed.startsWith('# ') ||
-      trimmed.startsWith('---') ||
-      RegExp(r'^\d+\. ').hasMatch(trimmed);
 }
 
 bool _isListLike(BlockType type) =>

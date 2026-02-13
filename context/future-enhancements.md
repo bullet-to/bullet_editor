@@ -92,3 +92,15 @@ Currently `TextBlock.blockType` is typed as `BlockType` (a closed enum). The sch
 **Trade-off:** Widening to `Object` loses exhaustive `switch` on block types. Mitigation: keep the `BlockType` enum as the default key set with exhaustive switches internally, but accept `Object` at API boundaries.
 
 **When to do it:** When shipping as a package that third parties extend without forking. Not needed while block types are added to the library directly.
+
+---
+
+## Nested Inline Style Decoding
+
+The markdown codec does not recursively decode nested inline styles. For example, `**bold *italic* text**` decodes as bold text containing the literal `*italic*` markers rather than a bold segment wrapping an italic segment.
+
+**Why:** The wrap-based regex uses non-greedy `.+?` matching with alternation. Once the outer `**...**` matches, its content is treated as a flat string — the decoder doesn't recurse into the captured group.
+
+**Impact:** Documents authored in this editor round-trip correctly (segments are per-character, so bold+italic produces `***text***` which decodes fine). The issue only affects markdown authored externally with nested delimiters like `**bold *italic* more**`.
+
+**Fix:** After the initial decode pass, re-run `_decodeSegments` on each segment's text to resolve inner styles. Requires care to avoid infinite recursion on malformed input.

@@ -55,6 +55,9 @@ class StyledSegment {
 /// The type of a block. Determines rendering and behavior.
 enum BlockType { paragraph, h1, h2, h3, listItem, numberedList, taskItem, divider }
 
+/// Standard metadata key for task item checked state.
+const kCheckedKey = 'checked';
+
 /// Whether a block type behaves like a list item (nestable, gets a prefix,
 /// shares enter/backspace/indent behavior).
 bool isListLike(BlockType type) =>

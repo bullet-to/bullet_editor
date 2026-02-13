@@ -103,20 +103,20 @@ EditorSchema buildStandardSchema() {
         codecs: {
           Format.markdown: BlockCodec(
             encode: (block, ctx) {
-              final checked = block.metadata['checked'] == true;
+              final checked = block.metadata[kCheckedKey] == true;
               return '${ctx.indent}- [${checked ? 'x' : ' '}] ${ctx.content}';
             },
             decode: (line) {
               if (line.startsWith('- [x] ')) {
                 return DecodeMatch(
                   line.substring(6),
-                  metadata: {'checked': true},
+                  metadata: {kCheckedKey: true},
                 );
               }
               if (line.startsWith('- [ ] ')) {
                 return DecodeMatch(
                   line.substring(6),
-                  metadata: {'checked': false},
+                  metadata: {kCheckedKey: false},
                 );
               }
               return null;
@@ -284,7 +284,7 @@ Widget? _dividerPrefix(Document doc, int flatIndex, TextBlock block) {
 }
 
 Widget? _taskPrefix(Document doc, int flatIndex, TextBlock block) {
-  final checked = block.metadata['checked'] == true;
+  final checked = block.metadata[kCheckedKey] == true;
   return Text(
     checked ? '☑  ' : '☐  ',
     textAlign: TextAlign.right,
