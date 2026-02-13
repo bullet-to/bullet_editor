@@ -388,14 +388,19 @@ void main() {
         inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
       );
 
+      // Display text: "\uFFFCfirst" (prefix + text). Enter at end.
       controller.value = const TextEditingValue(
-        text: 'first\n',
-        selection: TextSelection.collapsed(offset: 6),
+        text: '\uFFFCfirst\n',
+        selection: TextSelection.collapsed(offset: 7),
       );
 
       expect(controller.document.blocks.length, 2);
       expect(controller.document.blocks[0].blockType, BlockType.listItem);
       expect(controller.document.blocks[1].blockType, BlockType.listItem);
+      // Bug 1: cursor should move to the new block, not stay on the old one.
+      // The new list item has a prefix, so display offset should be after \n\uFFFC.
+      // Display: "\uFFFCfirst\n\uFFFC" — cursor at 8 (start of new empty list item text).
+      expect(controller.value.selection.baseOffset, 8);
     });
 
     test('Enter on empty list item converts to paragraph', () {
@@ -406,10 +411,10 @@ void main() {
         inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
       );
 
-      // Press Enter on empty list item.
+      // Display text: "\uFFFC" (prefix, no content). Enter.
       controller.value = const TextEditingValue(
-        text: '\n',
-        selection: TextSelection.collapsed(offset: 1),
+        text: '\uFFFC\n',
+        selection: TextSelection.collapsed(offset: 2),
       );
 
       // Should convert to paragraph, not split.
@@ -433,13 +438,22 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), BoldWrapRule()],
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          ListItemBackspaceRule(),
+          BoldWrapRule(),
+        ],
       );
 
-      // Cursor in nested paragraph.
+      // Cursor in nested paragraph — use display text from the controller.
+      // Display: "\uFFFCparent\nnested para" — nested para is at display offset 8.
       controller.value = TextEditingValue(
         text: controller.text,
-        selection: TextSelection.collapsed(offset: controller.document.globalOffset(1, 0)),
+        selection: TextSelection.collapsed(
+          offset: controller.text.indexOf('nested'),
+        ),
       );
 
       controller.outdent();
@@ -454,34 +468,117 @@ void main() {
       final controller = EditorController(
         document: Document([
           TextBlock(id: 'a', segments: [const StyledSegment('above')]),
-          TextBlock(
-            id: 'b',
-            blockType: BlockType.listItem,
-            segments: const [],
-          ),
+          TextBlock(id: 'b', blockType: BlockType.listItem, segments: const []),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), BoldWrapRule()],
+        inputRules: [
+          HeadingRule(),
+          ListItemRule(),
+          EmptyListItemRule(),
+          ListItemBackspaceRule(),
+          BoldWrapRule(),
+        ],
       );
 
-      // "above\n" — cursor at start of empty list item (offset 6).
-      expect(controller.text, 'above\n');
+      // Display: "above\n\uFFFC" — empty list item with prefix.
+      expect(controller.text, 'above\n\uFFFC');
 
       controller.value = const TextEditingValue(
-        text: 'above\n',
-        selection: TextSelection.collapsed(offset: 6),
+        text: 'above\n\uFFFC',
+        selection: TextSelection.collapsed(offset: 7),
       );
 
-      // Backspace removes the \n — Flutter sends "above" with cursor at 5.
+      // Backspace removes the \n\uFFFC — Flutter sends "above" with cursor at 5.
       controller.value = const TextEditingValue(
         text: 'above',
         selection: TextSelection.collapsed(offset: 5),
       );
 
       // The list item should become a paragraph, NOT merge.
-      // Cursor should stay at offset 6 (start of the now-paragraph block).
       expect(controller.document.allBlocks.length, 2);
       expect(controller.document.allBlocks[1].blockType, BlockType.paragraph);
-      expect(controller.value.selection.baseOffset, 6);
+    });
+
+    test('backspace chain: nested para → outdent → root para → merge', () {
+      // "hello" (list item) with nested "boss" (paragraph).
+      // Backspace on "boss": first outdents to root, second merges into "hello".
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('hello')],
+            children: [
+              TextBlock(
+                id: 'b',
+                blockType: BlockType.paragraph,
+                segments: [const StyledSegment('boss')],
+              ),
+            ],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), NestedBackspaceRule(), BoldWrapRule()],
+      );
+
+      // Step 1: backspace on nested "boss" → should outdent to root.
+      var displayText = controller.text;
+      var bossStart = displayText.indexOf('boss');
+      controller.value = TextEditingValue(
+        text: '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
+        selection: TextSelection.collapsed(offset: bossStart - 1),
+      );
+
+      // "boss" should now be at root level, sibling after "hello".
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[1].plainText, 'boss');
+
+      // Step 2: backspace on root "boss" → should merge into "helloboss".
+      displayText = controller.text;
+      bossStart = displayText.indexOf('boss');
+      controller.value = TextEditingValue(
+        text: '${displayText.substring(0, bossStart - 1)}${displayText.substring(bossStart)}',
+        selection: TextSelection.collapsed(offset: bossStart - 1),
+      );
+
+      expect(controller.document.allBlocks.length, 1);
+      expect(controller.document.allBlocks[0].plainText, 'helloboss');
+    });
+
+    test('backspace on nested paragraph outdents instead of merging', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('parent')],
+            children: [
+              TextBlock(
+                id: 'b',
+                blockType: BlockType.paragraph,
+                segments: [const StyledSegment('child')],
+              ),
+            ],
+          ),
+        ]),
+        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule(), ListItemBackspaceRule(), NestedBackspaceRule(), BoldWrapRule()],
+      );
+
+      // Display: "\uFFFCparent\n\uFFFCchild"
+      final displayText = controller.text;
+      final childStart = displayText.indexOf('child');
+
+      // Backspace at start of nested "child" — delete the prefix.
+      final before = displayText.substring(0, childStart - 1);
+      final after = displayText.substring(childStart);
+      controller.value = TextEditingValue(
+        text: '$before$after',
+        selection: TextSelection.collapsed(offset: childStart - 1),
+      );
+
+      // Should outdent, not merge. "child" moves to root level as sibling.
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[0].id, 'a');
+      expect(controller.document.blocks[1].id, 'b');
+      expect(controller.document.blocks[1].plainText, 'child');
     });
 
     test('bold rule in second block of example doc', () {

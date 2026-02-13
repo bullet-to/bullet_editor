@@ -199,7 +199,37 @@ class ListItemBackspaceRule extends InputRule {
     // Cursor should stay at the start of this block, not jump to the previous one.
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
-      operations: [ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph)],
+      operations: [
+        ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph),
+      ],
+      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    );
+  }
+}
+
+/// Backspace at start of a nested block (non-list-item) outdents instead of merging.
+///
+/// This gives the Notion/Google Docs behavior: backspace reduces nesting
+/// step by step until root level, then merges.
+class NestedBackspaceRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
+    if (mergeOp == null) return null;
+
+    final flat = doc.allBlocks;
+    if (mergeOp.secondBlockIndex >= flat.length) return null;
+
+    final block = flat[mergeOp.secondBlockIndex];
+    // Only for non-list-item blocks (list items are handled by ListItemBackspaceRule).
+    if (block.blockType == BlockType.listItem) return null;
+    // Only if nested (depth > 0). Root blocks merge normally.
+    if (doc.depthOf(mergeOp.secondBlockIndex) == 0) return null;
+
+    // Outdent instead of merging.
+    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
+    return Transaction(
+      operations: [OutdentBlock(mergeOp.secondBlockIndex)],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
   }

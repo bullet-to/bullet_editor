@@ -74,6 +74,7 @@ class _EditorScreenState extends State<EditorScreen> {
         ListItemRule(),
         EmptyListItemRule(),
         ListItemBackspaceRule(),
+        NestedBackspaceRule(),
         BoldWrapRule(),
       ],
     );
