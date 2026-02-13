@@ -6,6 +6,8 @@ export 'src/codec/markdown_codec.dart';
 export 'src/editor/edit_operation.dart';
 export 'src/editor/editor_controller.dart';
 export 'src/editor/input_rule.dart';
+export 'src/editor/offset_mapper.dart';
+export 'src/editor/span_builder.dart';
 export 'src/editor/text_diff.dart';
 export 'src/editor/transaction.dart';
 export 'src/editor/undo_manager.dart';
