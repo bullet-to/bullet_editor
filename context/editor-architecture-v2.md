@@ -261,6 +261,10 @@ class ImageBlock extends Block {
 - Offset mapping stays 1:1 (the widget is 1 char in the string).
 - **Editing inside widget blocks** (e.g. typing in a table cell) requires nested focus management — the WidgetSpan's widget gets its own TextField. This is the main complexity.
 
+#### Visual Prefix Approach (\uFFFC placeholder chars)
+
+List items and nested blocks get a `\uFFFC` placeholder char in the display text, rendered as a WidgetSpan (bullet/indentation). This works for rendering and offset mapping, but creates an extra cursor stop at each prefix position. Arrow key interception is used to skip over prefix chars. This is a pragmatic workaround — the cleaner alternatives (custom paint, per-block rendering) are significantly more work. If the arrow key patching becomes too brittle, switch to per-block rendering.
+
 #### WidgetSpan Probe Results (Phase 3)
 
 Tested embedding a nested TextField inside a WidgetSpan within the outer TextField. Findings:

@@ -125,6 +125,31 @@ class EditorController extends TextEditingController {
     );
   }
 
+  /// If the cursor is sitting on a prefix char, nudge it past.
+  /// Returns null if no adjustment needed.
+  TextSelection? _skipPrefixChars(TextSelection sel) {
+    if (!sel.isValid || !sel.isCollapsed) return null;
+    final offset = sel.baseOffset;
+    final displayText = text;
+    if (offset < 0 || offset >= displayText.length) return null;
+    if (displayText[offset] != _prefixChar) return null;
+
+    // Determine direction from previous cursor position.
+    final prevOffset = _previousValue.selection.baseOffset;
+    if (offset > prevOffset) {
+      // Moving right — skip past the prefix char.
+      return TextSelection.collapsed(offset: offset + 1);
+    } else if (offset < prevOffset) {
+      // Moving left — skip before the prefix char (to end of previous block).
+      return TextSelection.collapsed(offset: offset > 0 ? offset - 1 : 0);
+    }
+
+    // Same position (e.g. click) — skip forward.
+    return TextSelection.collapsed(
+      offset: (offset + 1).clamp(0, displayText.length),
+    );
+  }
+
   // -- Public actions --
 
   void indent() {
@@ -163,7 +188,14 @@ class EditorController extends TextEditingController {
     final diff = diffTexts(_previousValue.text, text, cursorOffset: cursor);
 
     if (diff == null) {
-      // Selection-only change.
+      // Selection-only change — skip cursor over prefix chars.
+      final adjusted = _skipPrefixChars(value.selection);
+      if (adjusted != null) {
+        _isSyncing = true;
+        value = value.copyWith(selection: adjusted);
+        _previousValue = value;
+        _isSyncing = false;
+      }
       final modelOffset = _displayToModel(value.selection.baseOffset);
       _activeStyles = _document.stylesAt(modelOffset);
       _previousValue = value;
