@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'block.dart';
 import 'inline_style.dart';
 
@@ -25,7 +27,7 @@ class Document {
   const Document(this.blocks);
 
   factory Document.empty() =>
-      Document([TextBlock(id: _nextId(), segments: const [])]);
+      Document([TextBlock(id: generateBlockId(), segments: const [])]);
 
   /// Top-level blocks (tree roots). May have children.
   final List<TextBlock> blocks;
@@ -88,6 +90,39 @@ class Document {
       offset = segEnd;
     }
     return {};
+  }
+
+  /// Extract blocks/segments within a global offset range [start, end).
+  ///
+  /// Returns a list of [TextBlock]s with tree structure preserved.
+  /// Block types and nesting are maintained. For partial blocks, only
+  /// the selected segment slice is included. Used for copy/encode.
+  List<TextBlock> extractRange(int start, int end) {
+    if (start >= end) return [];
+    final flat = allBlocks;
+    final startPos = blockAt(start);
+    final endPos = blockAt(end);
+
+    // Build flat list of (depth, block) pairs.
+    final items = <(int, TextBlock)>[];
+    for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
+      final block = flat[i];
+      final localStart = i == startPos.blockIndex ? startPos.localOffset : 0;
+      final localEnd =
+          i == endPos.blockIndex ? endPos.localOffset : block.length;
+
+      final sliced = _sliceSegments(block.segments, localStart, localEnd);
+      final extracted = TextBlock(
+        id: generateBlockId(),
+        blockType: block.blockType,
+        segments: sliced,
+        metadata: block.metadata,
+      );
+      items.add((depthOf(i), extracted));
+    }
+
+    // Rebuild tree from (depth, block) pairs.
+    return _buildTreeFromPairs(items, items.isEmpty ? 0 : items.first.$1);
   }
 
   // -- Tree mutation helpers --
@@ -228,7 +263,63 @@ TextBlock? _findParent(List<TextBlock> nodes, String targetId, TextBlock? parent
   return null;
 }
 
-// Simple incrementing ID generator.
-int _idCounter = 0;
-String generateBlockId() => _nextId();
-String _nextId() => 'block_${_idCounter++}';
+/// Build a tree from (depth, block) pairs, same algorithm as MarkdownCodec._buildTree.
+List<TextBlock> _buildTreeFromPairs(
+    List<(int, TextBlock)> items, int minDepth) {
+  final result = <TextBlock>[];
+  var i = 0;
+  while (i < items.length) {
+    final (depth, block) = items[i];
+    if (depth < minDepth) break;
+    i++;
+    final childItems = <(int, TextBlock)>[];
+    while (i < items.length && items[i].$1 > depth) {
+      childItems.add(items[i]);
+      i++;
+    }
+    final children = childItems.isEmpty
+        ? const <TextBlock>[]
+        : _buildTreeFromPairs(childItems, depth + 1);
+    result
+        .add(children.isEmpty ? block : block.copyWith(children: children));
+  }
+  return result;
+}
+
+/// Generate a unique block ID.
+///
+/// Uses random hex to avoid collisions across documents, paste operations,
+/// and persistence round-trips.
+final _random = Random();
+String generateBlockId() {
+  final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+  final rand = _random.nextInt(0xFFFF).toRadixString(16).padLeft(4, '0');
+  return 'blk_${timestamp}_$rand';
+}
+
+/// Slice segments to extract the range [start, end) within a block.
+List<StyledSegment> _sliceSegments(
+    List<StyledSegment> segments, int start, int end) {
+  final result = <StyledSegment>[];
+  var pos = 0;
+  for (final seg in segments) {
+    final segStart = pos;
+    final segEnd = pos + seg.text.length;
+    pos = segEnd;
+
+    // Skip segments entirely outside the range.
+    if (segEnd <= start || segStart >= end) continue;
+
+    // Compute the overlap.
+    final overlapStart = (start - segStart).clamp(0, seg.text.length);
+    final overlapEnd = (end - segStart).clamp(0, seg.text.length);
+    if (overlapEnd <= overlapStart) continue;
+
+    result.add(StyledSegment(
+      seg.text.substring(overlapStart, overlapEnd),
+      seg.styles,
+      seg.attributes,
+    ));
+  }
+  return result;
+}

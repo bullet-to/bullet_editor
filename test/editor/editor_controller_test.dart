@@ -1320,6 +1320,103 @@ void main() {
       });
     });
 
+    group('encodeSelection', () {
+      test('encodes bold text as markdown', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment('plain '),
+              const StyledSegment('bold', {InlineStyle.bold}),
+              const StyledSegment(' text'),
+            ]),
+          ]),
+        );
+        // Select "bold" (offset 6..10).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 6, extentOffset: 10),
+        );
+        final md = controller.encodeSelection();
+        expect(md, '**bold**');
+      });
+
+      test('encodes cross-block selection', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Title')],
+            ),
+            TextBlock(
+              id: 'b',
+              segments: [const StyledSegment('Body')],
+            ),
+          ]),
+        );
+        // Select all (0..10).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 10),
+        );
+        final md = controller.encodeSelection();
+        expect(md, contains('# Title'));
+        expect(md, contains('Body'));
+      });
+
+      test('returns null for collapsed cursor', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+        expect(controller.encodeSelection(), isNull);
+      });
+    });
+
+    group('paste markdown', () {
+      test('pasting bold markdown preserves formatting', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+          ]),
+        );
+        // Simulate paste of "**bold**" at offset 7 (between "before " and "after").
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 7),
+        );
+        // Simulate the paste by setting value as if Flutter inserted the text.
+        controller.value = const TextEditingValue(
+          text: 'before **bold**after',
+          selection: TextSelection.collapsed(offset: 15),
+        );
+        // The paste heuristic should decode **bold** as bold.
+        final segs = controller.document.allBlocks[0].segments;
+        expect(
+          segs.any(
+              (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold)),
+          isTrue,
+          reason: 'Pasted **bold** should be decoded as bold text',
+        );
+      });
+
+      test('pasting heading markdown creates H1 block', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('existing')]),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 8),
+        );
+        // Paste "# Heading\n\nParagraph" — should create blocks.
+        controller.value = TextEditingValue(
+          text: 'existing# Heading\n\nParagraph',
+          selection: const TextSelection.collapsed(offset: 28),
+        );
+        // Should have multiple blocks with heading type.
+        expect(controller.document.allBlocks.length, greaterThanOrEqualTo(2));
+      });
+    });
+
     group('canIndent / canOutdent', () {
       test('canIndent true for list item with previous sibling', () {
         final controller = EditorController(

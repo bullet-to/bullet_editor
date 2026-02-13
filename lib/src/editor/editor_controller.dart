@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
+import '../codec/markdown_codec.dart';
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
@@ -222,6 +223,23 @@ class EditorController extends TextEditingController {
   }
 
   // -- Public queries --
+
+  /// Encode the current selection as markdown. Returns null if no selection.
+  /// Used for rich copy — put the result on the clipboard.
+  String? encodeSelection() {
+    if (!value.selection.isValid || value.selection.isCollapsed) return null;
+    final modelSel = _selectionToModel(value.selection);
+    final start = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.baseOffset
+        : modelSel.extentOffset;
+    final end = modelSel.baseOffset < modelSel.extentOffset
+        ? modelSel.extentOffset
+        : modelSel.baseOffset;
+    final blocks = _document.extractRange(start, end);
+    if (blocks.isEmpty) return null;
+    final tempDoc = Document(blocks);
+    return MarkdownCodec(schema: _schema).encode(tempDoc);
+  }
 
   /// Whether the block at the cursor can be indented.
   bool get canIndent {
@@ -681,8 +699,16 @@ class EditorController extends TextEditingController {
       return null;
     }
 
+    // Multi-character insert (paste heuristic): try markdown decode.
+    // If the decoded result has formatting (styles, block types, multiple blocks),
+    // use PasteBlocks. Otherwise fall through to plain text handling.
+    if (diff.insertedText.length > 1 && diff.deletedLength == 0) {
+      final pasteResult = _tryMarkdownPaste(diff, selection);
+      if (pasteResult != null) return pasteResult;
+    }
+
     // Pure newline insert → split (no delete involved).
-    if (diff.insertedText.contains('\n') && diff.deletedLength == 0) {
+    if (diff.insertedText == '\n' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
       return Transaction(
         operations: [SplitBlock(pos.blockIndex, pos.localOffset)],
@@ -755,6 +781,42 @@ class EditorController extends TextEditingController {
     }
 
     return null;
+  }
+
+  // -- Paste helpers --
+
+  /// Try to decode pasted text as markdown. Returns a transaction with
+  /// PasteBlocks if the decoded result has formatting, or null to fall
+  /// through to plain text handling.
+  Transaction? _tryMarkdownPaste(TextDiff diff, TextSelection selection) {
+    final codec = MarkdownCodec(schema: _schema);
+    final decoded = codec.decode(diff.insertedText);
+    final blocks = decoded.allBlocks;
+
+    // Check if the decoded result has any formatting worth preserving.
+    // If it's just a single paragraph with no styles/attributes, skip — let
+    // the normal plain-text pipeline handle it.
+    final hasFormatting = blocks.length > 1 ||
+        blocks.any((b) => b.blockType != BlockType.paragraph) ||
+        blocks.any((b) => b.segments.any((s) =>
+            s.styles.isNotEmpty || s.attributes.isNotEmpty));
+
+    if (!hasFormatting) return null;
+
+    final pos = _document.blockAt(diff.start);
+
+    // Compute cursor position: end of the last pasted block.
+    var cursorOffset = diff.start;
+    for (final b in blocks) {
+      cursorOffset += b.length;
+    }
+    // Add separators between blocks.
+    cursorOffset += blocks.length - 1;
+
+    return Transaction(
+      operations: [PasteBlocks(pos.blockIndex, pos.localOffset, blocks)],
+      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    );
   }
 
   // -- TextField sync --

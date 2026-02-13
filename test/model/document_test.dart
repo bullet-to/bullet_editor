@@ -228,4 +228,72 @@ void main() {
       expect(seg.attributes, isEmpty);
     });
   });
+
+  group('extractRange', () {
+    test('single block partial extraction', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment('Hello '),
+          const StyledSegment('world', {InlineStyle.bold}),
+        ]),
+      ]);
+      // Extract "lo wo" (offset 3..8)
+      final blocks = doc.extractRange(3, 8);
+      expect(blocks.length, 1);
+      expect(blocks[0].plainText, 'lo wo');
+      // Should have 2 segments: "lo " (plain) + "wo" (bold)
+      expect(blocks[0].segments.length, 2);
+      expect(blocks[0].segments[1].styles, {InlineStyle.bold});
+    });
+
+    test('cross-block extraction preserves block types', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('Title')],
+        ),
+        TextBlock(
+          id: 'b',
+          segments: [const StyledSegment('Body text')],
+        ),
+      ]);
+      // Extract "tle\nBody " (offset 2..11) — crosses block boundary
+      // Title(5) + \n(1) + "Body "(5) = 11
+      final blocks = doc.extractRange(2, 11);
+      expect(blocks.length, 2);
+      expect(blocks[0].blockType, BlockType.h1);
+      expect(blocks[0].plainText, 'tle');
+      expect(blocks[1].blockType, BlockType.paragraph);
+      expect(blocks[1].plainText, 'Body ');
+    });
+
+    test('full block extraction', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('second')],
+        ),
+        TextBlock(id: 'c', segments: [const StyledSegment('third')]),
+      ]);
+      // Extract entire second block: "first\n" = 6 chars, second = 6..12
+      final blocks = doc.extractRange(6, 12);
+      expect(blocks.length, 1);
+      expect(blocks[0].blockType, BlockType.listItem);
+      expect(blocks[0].plainText, 'second');
+    });
+
+    test('extracts link attributes', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment(
+              'click', {InlineStyle.link}, {'url': 'https://x.com'}),
+        ]),
+      ]);
+      final blocks = doc.extractRange(0, 5);
+      expect(blocks[0].segments[0].attributes['url'], 'https://x.com');
+    });
+  });
 }

@@ -362,6 +362,95 @@ class RemoveBlock extends EditOperation {
   String toString() => 'RemoveBlock(flat: $flatIndex)';
 }
 
+/// Paste one or more blocks at [blockIndex]:[offset] in the document.
+///
+/// Single-block paste: merges the pasted block's segments into the target
+/// block at the given offset, preserving styles and attributes.
+///
+/// Multi-block paste: splits the target block at the offset, merges the
+/// first pasted block into the first half, inserts middle blocks as siblings,
+/// and merges the last pasted block with the second half.
+class PasteBlocks extends EditOperation {
+  PasteBlocks(this.blockIndex, this.offset, this.pastedBlocks);
+
+  final int blockIndex;
+  final int offset;
+  final List<TextBlock> pastedBlocks;
+
+  @override
+  Document apply(Document doc) {
+    if (pastedBlocks.isEmpty) return doc;
+    final flat = doc.allBlocks;
+    if (blockIndex >= flat.length) return doc;
+
+    final target = flat[blockIndex];
+
+    if (pastedBlocks.length == 1) {
+      // Single block paste: insert pasted segments at offset, preserving styles.
+      final pasted = pastedBlocks[0];
+      final before = _splitSegmentsAt(
+        target.segments,
+        offset,
+        takeBefore: true,
+      );
+      final after = _splitSegmentsAt(
+        target.segments,
+        offset,
+        takeBefore: false,
+      );
+      final merged = mergeSegments([...before, ...pasted.segments, ...after]);
+      return doc.replaceBlock(blockIndex, target.copyWith(segments: merged));
+    }
+
+    // Multi-block paste:
+    // 1. Split target into head (before offset) and tail (after offset).
+    final headSegs = _splitSegmentsAt(
+      target.segments,
+      offset,
+      takeBefore: true,
+    );
+    final tailSegs = _splitSegmentsAt(
+      target.segments,
+      offset,
+      takeBefore: false,
+    );
+
+    // 2. Merge first pasted block's segments into the head.
+    final firstPasted = pastedBlocks.first;
+    final headBlock = target.copyWith(
+      segments: mergeSegments([...headSegs, ...firstPasted.segments]),
+    );
+
+    // 3. Merge last pasted block's segments with the tail.
+    final lastPasted = pastedBlocks.last;
+    final tailBlock = TextBlock(
+      id: generateBlockId(),
+      blockType: lastPasted.blockType,
+      segments: mergeSegments([...lastPasted.segments, ...tailSegs]),
+    );
+
+    // 4. Middle blocks (if any) go between head and tail.
+    final middleBlocks = pastedBlocks.length > 2
+        ? pastedBlocks.sublist(1, pastedBlocks.length - 1)
+        : <TextBlock>[];
+
+    // 5. Apply: replace target with head, then insert middle + tail after.
+    var result = doc.replaceBlock(blockIndex, headBlock);
+    var insertAfter = blockIndex;
+    for (final mid in middleBlocks) {
+      result = result.insertAfterFlatIndex(insertAfter, mid);
+      insertAfter++;
+    }
+    result = result.insertAfterFlatIndex(insertAfter, tailBlock);
+
+    return result;
+  }
+
+  @override
+  String toString() =>
+      'PasteBlocks(block: $blockIndex, offset: $offset, ${pastedBlocks.length} blocks)';
+}
+
 /// Set a metadata field on a block.
 ///
 /// Used for toggling task checked state, etc.
@@ -585,21 +674,25 @@ List<StyledSegment> _splitSegmentsAt(
       if (segEnd <= offset) {
         result.add(seg);
       } else if (segStart < offset) {
-        result.add(StyledSegment(
-          seg.text.substring(0, offset - segStart),
-          seg.styles,
-          seg.attributes,
-        ));
+        result.add(
+          StyledSegment(
+            seg.text.substring(0, offset - segStart),
+            seg.styles,
+            seg.attributes,
+          ),
+        );
       }
     } else {
       if (segStart >= offset) {
         result.add(seg);
       } else if (segEnd > offset) {
-        result.add(StyledSegment(
-          seg.text.substring(offset - segStart),
-          seg.styles,
-          seg.attributes,
-        ));
+        result.add(
+          StyledSegment(
+            seg.text.substring(offset - segStart),
+            seg.styles,
+            seg.attributes,
+          ),
+        );
       }
     }
 

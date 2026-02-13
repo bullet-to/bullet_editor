@@ -258,6 +258,21 @@ class _EditorScreenState extends State<EditorScreen> {
         }
         setState(() {});
         return KeyEventResult.handled;
+      case LogicalKeyboardKey.keyC:
+        // Rich copy: encode selection as markdown.
+        final md = _controller.encodeSelection();
+        if (md != null) {
+          Clipboard.setData(ClipboardData(text: md));
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored; // no selection, let Flutter handle
+      case LogicalKeyboardKey.keyX:
+        // Rich cut: encode selection as markdown, let Flutter handle deletion.
+        final md = _controller.encodeSelection();
+        if (md != null) {
+          Clipboard.setData(ClipboardData(text: md));
+        }
+        return KeyEventResult.ignored; // let Flutter delete the selection
       case LogicalKeyboardKey.keyB:
         _controller.toggleStyle(InlineStyle.bold);
         setState(() {});

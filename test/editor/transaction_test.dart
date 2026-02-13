@@ -522,4 +522,61 @@ void main() {
       expect(seg1.attributes['url'], 'https://x.com');
     });
   });
+
+  group('PasteBlocks', () {
+    test('single block paste inserts styled segments', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+      ]);
+      final pasted = [
+        TextBlock(id: 'p1', segments: [
+          const StyledSegment('bold', {InlineStyle.bold}),
+        ]),
+      ];
+      final result = PasteBlocks(0, 5, pasted).apply(doc);
+      expect(result.allBlocks.length, 1);
+      expect(result.allBlocks[0].plainText, 'hellobold world');
+      expect(
+        result.allBlocks[0].segments.any(
+            (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold)),
+        isTrue,
+      );
+    });
+
+    test('multi-block paste splits and inserts', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+      ]);
+      final pasted = [
+        TextBlock(id: 'p1', segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'p2',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('heading')],
+        ),
+        TextBlock(id: 'p3', segments: [const StyledSegment('last')]),
+      ];
+      final result = PasteBlocks(0, 7, pasted).apply(doc);
+      expect(result.allBlocks.length, 3);
+      expect(result.allBlocks[0].plainText, 'before first');
+      expect(result.allBlocks[1].blockType, BlockType.h1);
+      expect(result.allBlocks[1].plainText, 'heading');
+      expect(result.allBlocks[2].plainText, 'lastafter');
+    });
+
+    test('paste at start of block', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('existing')]),
+      ]);
+      final pasted = [
+        TextBlock(id: 'p1', segments: [
+          const StyledSegment('new ', {InlineStyle.italic}),
+        ]),
+      ];
+      final result = PasteBlocks(0, 0, pasted).apply(doc);
+      expect(result.allBlocks[0].plainText, 'new existing');
+      expect(result.allBlocks[0].segments.first.styles,
+          contains(InlineStyle.italic));
+    });
+  });
 }
