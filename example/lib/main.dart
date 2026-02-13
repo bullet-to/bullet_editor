@@ -119,6 +119,7 @@ class _EditorScreenState extends State<EditorScreen> {
         DividerBackspaceRule(),
         ListItemBackspaceRule(),
         NestedBackspaceRule(),
+        LinkWrapRule(), // before bold/italic to avoid partial matches
         BoldWrapRule(), // ** before * — order matters
         ItalicWrapRule(),
         StrikethroughWrapRule(),

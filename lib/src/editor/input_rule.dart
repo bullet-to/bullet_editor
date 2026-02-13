@@ -102,6 +102,57 @@ class StrikethroughWrapRule extends InlineWrapRule {
   StrikethroughWrapRule() : super('~~', InlineStyle.strikethrough);
 }
 
+/// Detects `[text](url)` typed inline and converts to a link.
+///
+/// Fires when the user types the closing `)` that completes the pattern.
+/// Strips the markdown syntax, applies the link style, and sets the URL
+/// attribute on the resulting text.
+class LinkWrapRule extends InputRule {
+  static final _pattern = RegExp(r'\[([^\]]+)\]\(([^)]+)\)');
+
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final insertOp = _findInsertOp(pending);
+    if (insertOp == null || insertOp.text != ')') return null;
+
+    final resultDoc = pending.apply(doc);
+    final i = insertOp.blockIndex;
+    if (i >= resultDoc.allBlocks.length) return null;
+
+    final block = resultDoc.allBlocks[i];
+    final text = block.plainText;
+    final editEnd = insertOp.offset + insertOp.text.length;
+
+    final match = _pattern
+        .allMatches(text)
+        .cast<RegExpMatch?>()
+        .firstWhere((m) => m!.end == editEnd, orElse: () => null);
+    if (match == null) return null;
+
+    final linkText = match.group(1)!;
+    final url = match.group(2)!;
+    final fullMatchStart = match.start;
+    final fullMatchLength = match.end - match.start;
+
+    final blockStartGlobal = resultDoc.globalOffset(i, 0);
+    final cursorOffset = blockStartGlobal + fullMatchStart + linkText.length;
+
+    return Transaction(
+      operations: [
+        ...pending.operations,
+        // Delete the entire [text](url) and replace with just the text.
+        DeleteText(i, fullMatchStart, fullMatchLength),
+        InsertText(i, fullMatchStart, linkText,
+            styles: {InlineStyle.link}, attributes: {'url': url}),
+      ],
+      selectionAfter: pending.selectionAfter?.copyWith(
+        baseOffset: cursorOffset,
+        extentOffset: cursorOffset,
+      ),
+    );
+  }
+}
+
 /// Detects a prefix (e.g. "# ", "- ") typed at the start of a paragraph
 /// and converts the block to the specified type.
 ///

@@ -584,4 +584,67 @@ void main() {
       expect(result.allBlocks.length, 1);
     });
   });
+
+  group('LinkWrapRule', () {
+    test('[text](url) converts to link with URL attribute', () {
+      // Doc has "[Google](https://google.com" typed; user types ")".
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('[Google](https://google.com')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 27, ')')],
+        selectionAfter: const TextSelection.collapsed(offset: 28),
+      );
+      final rule = LinkWrapRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final applied = result!.apply(doc);
+      final seg = applied.allBlocks[0].segments[0];
+      expect(seg.text, 'Google');
+      expect(seg.styles, {InlineStyle.link});
+      expect(seg.attributes['url'], 'https://google.com');
+    });
+
+    test('does not fire without closing paren', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('[Google](https://google.com')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 27, 'x')],
+        selectionAfter: const TextSelection.collapsed(offset: 28),
+      );
+      expect(LinkWrapRule().tryTransform(pending, doc), isNull);
+    });
+
+    test('[text](url) mid-paragraph works', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          segments: [const StyledSegment('Visit [Google](https://g.co')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 27, ')')],
+        selectionAfter: const TextSelection.collapsed(offset: 28),
+      );
+      final result = LinkWrapRule().tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final applied = result!.apply(doc);
+      final segs = applied.allBlocks[0].segments;
+      expect(segs.any((s) => s.text == 'Visit '), isTrue);
+      expect(
+        segs.any((s) =>
+            s.text == 'Google' &&
+            s.styles.contains(InlineStyle.link) &&
+            s.attributes['url'] == 'https://g.co'),
+        isTrue,
+      );
+    });
+  });
 }
