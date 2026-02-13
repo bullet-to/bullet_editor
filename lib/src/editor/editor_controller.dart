@@ -44,6 +44,9 @@ class EditorController extends TextEditingController {
   /// Set to -1 when no override is active.
   int _styleOverrideOffset = -1;
   TextEditingValue _previousValue = TextEditingValue.empty;
+  /// Snapshot of the value BEFORE composing started.
+  /// Set on the first composing frame; used to diff when composing resolves.
+  TextEditingValue? _preComposingValue;
   Set<InlineStyle> _activeStyles = {};
 
   Document get document => _document;
@@ -349,14 +352,24 @@ class EditorController extends TextEditingController {
   void _onValueChanged() {
     if (_isSyncing) return;
 
-    if (value.composing.isValid &&
-        value.composing.start != value.composing.end) {
+    final isComposing = value.composing.isValid &&
+        value.composing.start != value.composing.end;
+
+    if (isComposing) {
+      // Composing in progress — save the pre-composing state on first entry,
+      // then let Flutter handle rendering. Don't process as an edit.
+      _preComposingValue ??= _previousValue;
       _previousValue = value;
       return;
     }
 
+    // If composing just resolved, diff against the pre-composing state
+    // (before the dead key was pressed) instead of the mid-composing state.
+    final effectivePrevious = _preComposingValue ?? _previousValue;
+    _preComposingValue = null;
+
     final cursor = value.selection.isValid ? value.selection.baseOffset : null;
-    final diff = diffTexts(_previousValue.text, text, cursorOffset: cursor);
+    final diff = diffTexts(effectivePrevious.text, text, cursorOffset: cursor);
 
     // 1. Selection-only change (no text edit).
     if (diff == null) {
@@ -367,7 +380,7 @@ class EditorController extends TextEditingController {
     // Translate diff from display to model space.
     final cleanInserted = diff.insertedText.replaceAll(mapper.prefixChar, '');
     final modelStart = _displayToModel(diff.start);
-    final deletedText = _previousValue.text.substring(
+    final deletedText = effectivePrevious.text.substring(
       diff.start,
       diff.start + diff.deletedLength,
     );

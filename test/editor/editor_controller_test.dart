@@ -924,5 +924,199 @@ void main() {
       );
       expect(controller.activeStyles.contains(InlineStyle.bold), isFalse);
     });
+
+    group('IME / Composing', () {
+      test('diacritic at end of paragraph does not corrupt document', () {
+        // Two blocks: "hello" paragraph, then "- item" list item.
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('item')],
+            ),
+          ]),
+        );
+
+        // Display: "hello\n\uFFFCitem" — 11 chars
+        // Cursor at end of "hello" (display offset 5).
+        final baseText = controller.text;
+        expect(baseText, 'hello\n\uFFFCitem');
+
+        // Step 1: User presses Option+E (dead key).
+        // Flutter inserts composing placeholder — e.g. accent mark.
+        // Text becomes "hello´\n\uFFFCitem", composing range covers the ´.
+        controller.value = TextEditingValue(
+          text: 'hello\u0301\n\uFFFCitem',
+          selection: const TextSelection.collapsed(offset: 6),
+          composing: const TextRange(start: 5, end: 6),
+        );
+
+        // During composing, document should be UNCHANGED.
+        expect(controller.document.allBlocks.length, 2,
+            reason: 'block count must not change during composing');
+        expect(controller.document.allBlocks[0].plainText, 'hello',
+            reason: 'first block must not change during composing');
+
+        // Step 2: User presses E to complete the diacritic.
+        // Flutter resolves composing: replaces the ´ with é.
+        controller.value = TextEditingValue(
+          text: 'helloé\n\uFFFCitem',
+          selection: const TextSelection.collapsed(offset: 6),
+          composing: TextRange.empty,
+        );
+
+        // Document should have 2 blocks, first block is "helloé".
+        expect(controller.document.allBlocks.length, 2,
+            reason: 'block count must stay 2 after composing resolves');
+        expect(controller.document.allBlocks[0].plainText, 'helloé');
+        expect(controller.document.allBlocks[1].plainText, 'item');
+      });
+
+      test('diacritic mid-word composes in place', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+
+        // Cursor between 'l' and 'o' (offset 3: hel|lo).
+        controller.value = const TextEditingValue(
+          text: 'hello',
+          selection: TextSelection.collapsed(offset: 3),
+        );
+
+        // Step 1: Dead key inserts composing placeholder between l and o.
+        // "hel´lo" with composing range at the ´.
+        controller.value = const TextEditingValue(
+          text: 'hel\u0301lo',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange(start: 3, end: 4),
+        );
+
+        // Document unchanged during composing.
+        expect(controller.document.blocks[0].plainText, 'hello',
+            reason: 'document unchanged during composing');
+
+        // Step 2: Resolve composing — ´ becomes é.
+        controller.value = const TextEditingValue(
+          text: 'helélo',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange.empty,
+        );
+
+        // Document should be "helélo" — the é inserted, o NOT replaced.
+        expect(controller.document.blocks[0].plainText, 'helélo');
+        expect(controller.value.selection.baseOffset, 4);
+      });
+
+      test('diacritic on prefixed block (list item) works correctly', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('cafe')],
+            ),
+          ]),
+        );
+
+        // Display: "\uFFFCcafe" — cursor at end (display offset 5).
+        expect(controller.text, '\uFFFCcafe');
+
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafe',
+          selection: TextSelection.collapsed(offset: 5),
+        );
+
+        // Step 1: Dead key — "cafe" becomes "cafe´" in display.
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafe\u0301',
+          selection: TextSelection.collapsed(offset: 6),
+          composing: TextRange(start: 5, end: 6),
+        );
+
+        expect(controller.document.allBlocks[0].plainText, 'cafe',
+            reason: 'model unchanged during composing');
+
+        // Step 2: Resolve — "café".
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafé',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange.empty,
+        );
+
+        expect(controller.document.allBlocks[0].plainText, 'café');
+      });
+
+      test('composing cancelled leaves document unchanged', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          ]),
+        );
+
+        // Step 1: Dead key starts composing.
+        controller.value = const TextEditingValue(
+          text: 'hello\u0301',
+          selection: TextSelection.collapsed(offset: 6),
+          composing: TextRange(start: 5, end: 6),
+        );
+
+        expect(controller.document.blocks[0].plainText, 'hello');
+
+        // Step 2: User presses Escape or another key that cancels composing.
+        // Flutter removes the placeholder, text goes back to "hello".
+        controller.value = const TextEditingValue(
+          text: 'hello',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange.empty,
+        );
+
+        expect(controller.document.blocks[0].plainText, 'hello',
+            reason: 'document unchanged after cancelled composing');
+      });
+
+      test('multi-step composing resolves correctly', () {
+        // Simulates CJK-style input where composing text changes multiple
+        // times before resolving.
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [const StyledSegment('ab')]),
+          ]),
+        );
+
+        // Cursor at end.
+        controller.value = const TextEditingValue(
+          text: 'ab',
+          selection: TextSelection.collapsed(offset: 2),
+        );
+
+        // Step 1: First composing char.
+        controller.value = const TextEditingValue(
+          text: 'abx',
+          selection: TextSelection.collapsed(offset: 3),
+          composing: TextRange(start: 2, end: 3),
+        );
+        expect(controller.document.blocks[0].plainText, 'ab');
+
+        // Step 2: Composing text changes (user picks different candidate).
+        controller.value = const TextEditingValue(
+          text: 'abxy',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange(start: 2, end: 4),
+        );
+        expect(controller.document.blocks[0].plainText, 'ab');
+
+        // Step 3: Resolve.
+        controller.value = const TextEditingValue(
+          text: 'abZ',
+          selection: TextSelection.collapsed(offset: 3),
+          composing: TextRange.empty,
+        );
+        expect(controller.document.blocks[0].plainText, 'abZ');
+      });
+    });
   });
 }
