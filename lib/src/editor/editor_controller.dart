@@ -7,6 +7,7 @@ import 'edit_operation.dart';
 import 'input_rule.dart';
 import 'text_diff.dart';
 import 'transaction.dart';
+import 'undo_manager.dart';
 
 /// Placeholder character used for visual-only WidgetSpan prefixes (bullets).
 /// Occupies exactly 1 offset position in the display text.
@@ -19,9 +20,17 @@ const _prefixChar = '\uFFFC';
 /// offsets (what Flutter sees) and model offsets (what the document uses)
 /// go through [_displayToModel] and [_modelToDisplay].
 class EditorController extends TextEditingController {
-  EditorController({Document? document, List<InputRule>? inputRules})
-    : _document = document ?? Document.empty(),
-      _inputRules = inputRules ?? [] {
+  EditorController({
+    Document? document,
+    List<InputRule>? inputRules,
+    ShouldGroupUndo? undoGrouping,
+    int maxUndoStack = 100,
+  }) : _document = document ?? Document.empty(),
+       _inputRules = inputRules ?? [],
+       _undoManager = UndoManager(
+         grouping: undoGrouping,
+         maxStackSize: maxUndoStack,
+       ) {
     _syncToTextField();
     _activeStyles = _document.stylesAt(
       _displayToModel(value.selection.baseOffset),
@@ -31,12 +40,15 @@ class EditorController extends TextEditingController {
 
   Document _document;
   final List<InputRule> _inputRules;
+  final UndoManager _undoManager;
   bool _isSyncing = false;
   TextEditingValue _previousValue = TextEditingValue.empty;
   Set<InlineStyle> _activeStyles = {};
 
   Document get document => _document;
   Set<InlineStyle> get activeStyles => _activeStyles;
+  bool get canUndo => _undoManager.canUndo;
+  bool get canRedo => _undoManager.canRedo;
 
   // -- Offset translation --
 
@@ -150,6 +162,68 @@ class EditorController extends TextEditingController {
     );
   }
 
+  // -- Undo / Redo --
+
+  /// Capture the current state as an undo entry and push it.
+  ///
+  /// Uses [_previousValue.selection] because inside [_onValueChanged],
+  /// Flutter has already updated [value] to the post-edit state. We want
+  /// the *pre-edit* cursor position so undo restores it correctly.
+  ///
+  /// For [indent]/[outdent], [value.selection] is still the pre-edit
+  /// position (key handler calls us before mutation), so both work.
+  void _pushUndo() {
+    final displaySel = _previousValue.selection.isValid
+        ? _previousValue.selection
+        : value.selection;
+    final modelSel = _selectionToModel(displaySel);
+    _undoManager.push(UndoEntry(
+      document: _document,
+      selection: modelSel,
+      timestamp: DateTime.now(),
+    ));
+  }
+
+  /// Undo the last edit. Restores the document and cursor from the snapshot.
+  void undo() {
+    final entry = _undoManager.undo();
+    if (entry == null) return;
+
+    // Push current state to redo before restoring.
+    final modelSel = _selectionToModel(value.selection);
+    _undoManager.pushRedo(UndoEntry(
+      document: _document,
+      selection: modelSel,
+      timestamp: DateTime.now(),
+    ));
+
+    _document = entry.document;
+    _syncToTextField(modelSelection: entry.selection);
+    _activeStyles = _document.stylesAt(
+      entry.selection.baseOffset.clamp(0, _document.plainText.length),
+    );
+  }
+
+  /// Redo the last undone edit. Restores the document and cursor from the snapshot.
+  void redo() {
+    final entry = _undoManager.redo();
+    if (entry == null) return;
+
+    // Push current state back to undo before restoring.
+    final modelSel = _selectionToModel(value.selection);
+    _undoManager.pushUndoRaw(UndoEntry(
+      document: _document,
+      selection: modelSel,
+      timestamp: DateTime.now(),
+    ));
+
+    _document = entry.document;
+    _syncToTextField(modelSelection: entry.selection);
+    _activeStyles = _document.stylesAt(
+      entry.selection.baseOffset.clamp(0, _document.plainText.length),
+    );
+  }
+
   // -- Public actions --
 
   void indent() {
@@ -157,6 +231,7 @@ class EditorController extends TextEditingController {
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
 
+    _pushUndo();
     _document = IndentBlock(pos.blockIndex).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
@@ -167,6 +242,7 @@ class EditorController extends TextEditingController {
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
 
+    _pushUndo();
     _document = OutdentBlock(pos.blockIndex).apply(_document);
     _syncToTextField(modelSelection: modelSel);
     _activeStyles = _document.stylesAt(modelSel.baseOffset);
@@ -240,6 +316,7 @@ class EditorController extends TextEditingController {
           }
         }
 
+        _pushUndo();
         _document = finalMergeTx.apply(_document);
         final TextSelection afterSel;
         if (finalMergeTx != mergeTx && finalMergeTx.selectionAfter != null) {
@@ -281,6 +358,7 @@ class EditorController extends TextEditingController {
       }
     }
 
+    _pushUndo();
     _document = finalTx.apply(_document);
 
     // If an input rule set selectionAfter explicitly, use it (it's in model space).

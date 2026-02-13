@@ -64,3 +64,14 @@ class Annotation {
 - `buildTextSpan()` overlays annotation styling on top of the model's formatting.
 - Annotations are referenced by block ID + offset, so they survive block reordering.
 - Google Docs, Notion, and ProseMirror all use this pattern.
+
+---
+
+## BlockPolicies: Additional Fields
+
+When new block types need them, add these fields to `BlockPolicies`:
+
+- **`allowedChildren: Set<BlockType>?`** — Restrict which block types can be nested under this one. `null` = any, specific set = only those. Needed when e.g. blockquotes should allow paragraphs but not headings.
+- **`allowedInlineStyles: Set<InlineStyle>?`** — Restrict which inline styles are valid inside this block type. `null` = all, `{}` = none. Needed for code blocks (no formatting inside).
+
+Both are no-ops to add — just new fields on the existing class + checks in the relevant operations (`ToggleStyle` for inline styles, `IndentBlock` for allowed children).

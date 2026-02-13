@@ -63,7 +63,21 @@ Move from flat list to tree-structured document.
 
 ---
 
-## Phase 5: Toolbar + Shortcuts
+## Phase 5: Selection Operations (Cross-Block Delete/Replace)
+
+Handle non-collapsed selections: delete a range spanning multiple blocks, replace selection with typed text.
+
+- **Cross-block delete:** Delete from middle of block A to middle of block B → merge remaining halves, remove blocks in between
+- **Replace selection:** Select text + type → delete range then insert at cursor
+- **Same-block range delete:** Select within a single block + delete → already partly works, needs hardening
+- **Update `_transactionFromDiff`:** Detect when the diff spans `\n` boundaries and build multi-op transactions (DeleteText + MergeBlocks sequences)
+- **Input rules on selection replace:** e.g. select text, type `#` — should still work through the pipeline
+
+**Key question answered:** Does the transaction system compose cleanly for multi-block operations?
+
+---
+
+## Phase 6: Toolbar + Shortcuts (was Phase 5)
 
 - **Toolbar widget:** Reads formatting at cursor via `DocumentReader.getStylesAt()`
 - **Toggle actions:** Bold, italic, code, strikethrough — create transactions
@@ -74,7 +88,7 @@ Move from flat list to tree-structured document.
 
 ---
 
-## Phase 6: Editor Modes
+## Phase 7: Editor Modes (was Phase 6)
 
 - **Mode 2 (Bear-like):** Markdown tokens in text, contextual reveal (shrink when cursor away, show when near)
 - **Mode 3 (WYSIWYG):** Plain text in controller, formatting from span model only
@@ -84,7 +98,7 @@ Move from flat list to tree-structured document.
 
 ---
 
-## Phase 7: Schema-as-Configuration (API Design)
+## Phase 8: Schema-as-Configuration (was Phase 7)
 
 Refactor toward the aspirational API:
 

@@ -29,6 +29,7 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   late final EditorController _controller;
   late final FocusNode _focusNode;
+  final _undoController = UndoHistoryController();
 
   @override
   void initState() {
@@ -87,6 +88,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
+    _undoController.dispose();
     super.dispose();
   }
 
@@ -101,6 +103,19 @@ class _EditorScreenState extends State<EditorScreen> {
         _controller.outdent();
       } else {
         _controller.indent();
+      }
+      setState(() {});
+      return KeyEventResult.handled;
+    }
+
+    // Cmd+Z / Ctrl+Z → undo, Cmd+Shift+Z / Ctrl+Shift+Z → redo.
+    final isMeta = HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed;
+    if (isMeta && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        _controller.redo();
+      } else {
+        _controller.undo();
       }
       setState(() {});
       return KeyEventResult.handled;
@@ -126,6 +141,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: TextField(
                   controller: _controller,
                   focusNode: _focusNode,
+                  undoController: _undoController,
                   maxLines: null,
                   expands: true,
                   textAlignVertical: TextAlignVertical.top,

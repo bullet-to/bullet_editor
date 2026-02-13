@@ -274,6 +274,16 @@ Tested embedding a nested TextField inside a WidgetSpan within the outer TextFie
 - **Conclusion:** The single-TextField approach supports non-interactive embeds (images, dividers, read-only widgets). For interactive embeds (table cells, editable widgets), a per-block rendering approach is needed — each interactive block gets its own TextField widget, rendered in a Column/ListView, with focus management between them. This is the same approach super_editor uses.
 - **Impact on architecture:** The model, transactions, operations, input rules, and codec are rendering-agnostic — they don't change. Only the controller/rendering layer would need a second implementation for interactive embeds. The current single-TextField renderer remains valid for text-only documents.
 
+#### Alternative: Overlay-based Interactive Embeds
+
+Instead of per-block rendering, use Flutter's `Overlay` to float independent TextFields on top of the main TextField at placeholder positions. The main TextField keeps `\uFFFC` + a `SizedBox` WidgetSpan to reserve space; a `CompositedTransformFollower`/`LayerLink` positions a real TextField overlay on top.
+
+**Solves:** gesture interception (overlay gets its own hit testing), focus/caret independence.
+
+**Still hard:** cross-widget selection (selecting from paragraph into table cell), scroll sync (overlay must track scroll position), position tracking (re-query after every layout pass), keyboard navigation between main and overlay TextFields.
+
+**Best for:** isolated interactive blocks (tables, code blocks) where selection doesn't span across the boundary. Not suitable for inline interactive elements. Worth a probe before committing to full per-block rendering.
+
 ### Tree operations
 
 - **Collapsible sections:** Collapse H1 = hide `h1.children`. No scanning/inference needed.

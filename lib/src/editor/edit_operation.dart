@@ -1,4 +1,5 @@
 import '../model/block.dart';
+import '../model/block_policies.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
 
@@ -26,7 +27,12 @@ class InsertText extends EditOperation {
   @override
   Document apply(Document doc) {
     final block = doc.allBlocks[blockIndex];
-    final newSegments = _spliceInsert(block.segments, offset, text, styles: styles);
+    final newSegments = _spliceInsert(
+      block.segments,
+      offset,
+      text,
+      styles: styles,
+    );
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
     return doc.replaceBlock(blockIndex, newBlock);
   }
@@ -128,14 +134,24 @@ class SplitBlock extends EditOperation {
   @override
   Document apply(Document doc) {
     final block = doc.allBlocks[blockIndex];
-    final beforeSegments = _splitSegmentsAt(block.segments, offset, takeBefore: true);
-    final afterSegments = _splitSegmentsAt(block.segments, offset, takeBefore: false);
+    final beforeSegments = _splitSegmentsAt(
+      block.segments,
+      offset,
+      takeBefore: true,
+    );
+    final afterSegments = _splitSegmentsAt(
+      block.segments,
+      offset,
+      takeBefore: false,
+    );
 
     final newBlockType = block.blockType == BlockType.listItem
         ? BlockType.listItem
         : BlockType.paragraph;
 
-    final updatedBlock = block.copyWith(segments: mergeSegments(beforeSegments));
+    final updatedBlock = block.copyWith(
+      segments: mergeSegments(beforeSegments),
+    );
     final newBlock = TextBlock(
       id: generateBlockId(),
       blockType: newBlockType,
@@ -168,7 +184,10 @@ class MergeBlocks extends EditOperation {
     final first = flat[secondBlockIndex - 1];
     final second = flat[secondBlockIndex];
 
-    final mergedSegments = mergeSegments([...first.segments, ...second.segments]);
+    final mergedSegments = mergeSegments([
+      ...first.segments,
+      ...second.segments,
+    ]);
     final mergedBlock = first.copyWith(segments: mergedSegments);
 
     var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
@@ -189,6 +208,14 @@ class ChangeBlockType extends EditOperation {
 
   @override
   Document apply(Document doc) {
+    // Policy: if the new type can't be a child and the block is nested, reject.
+    final newPolicy = defaultPolicies[newType];
+    if (newPolicy != null &&
+        !newPolicy.canBeChild &&
+        doc.depthOf(blockIndex) > 0) {
+      return doc;
+    }
+
     final block = doc.allBlocks[blockIndex];
     return doc.replaceBlock(blockIndex, block.copyWith(blockType: newType));
   }
@@ -212,6 +239,20 @@ class IndentBlock extends EditOperation {
     if (prevSibling == null) return doc; // No previous sibling — can't indent.
 
     final block = doc.allBlocks[flatIndex];
+
+    // Policy: block must be allowed to be a child.
+    final blockPolicy = defaultPolicies[block.blockType];
+    if (blockPolicy != null && !blockPolicy.canBeChild) return doc;
+
+    // Policy: target parent must accept children.
+    final parentPolicy = defaultPolicies[prevSibling.blockType];
+    if (parentPolicy != null && !parentPolicy.canHaveChildren) return doc;
+
+    // Policy: respect maxDepth.
+    if (blockPolicy?.maxDepth != null) {
+      final newDepth = doc.depthOf(flatIndex) + 1;
+      if (newDepth > blockPolicy!.maxDepth!) return doc;
+    }
 
     // Remove block from current position.
     var result = doc.removeBlockByFlatIndex(flatIndex);
