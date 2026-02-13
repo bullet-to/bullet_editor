@@ -1,3 +1,4 @@
+import '../editor/input_rule.dart';
 import '../model/block_policies.dart';
 import 'block_def.dart';
 import 'default_schema.dart';
@@ -39,6 +40,14 @@ class EditorSchema {
 
   /// Whether the block type identified by [key] is a void block (no text).
   bool isVoid(Object key) => blocks[key]?.isVoid ?? false;
+
+  /// Collect all input rules from block defs then inline style defs,
+  /// in map insertion order. This determines rule priority — specific
+  /// rules must come before general ones in the schema's map ordering.
+  List<InputRule> get inputRules => [
+        for (final def in blocks.values) ...def.inputRules,
+        for (final def in inlineStyles.values) ...def.inputRules,
+      ];
 
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');
   static final _fallbackInlineStyleDef = InlineStyleDef(

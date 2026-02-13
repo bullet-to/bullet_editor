@@ -107,23 +107,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _controller = EditorController(
       document: doc,
       onLinkTap: (url) => debugPrint('Link tapped: $url'),
-      inputRules: [
-        PrefixBlockRule('###', BlockType.h3), // ### before ## before #
-        PrefixBlockRule('##', BlockType.h2),
-        HeadingRule(),
-        TaskItemRule(), // "- [ ] " before "- " — order matters
-        ListItemRule(),
-        NumberedListRule(),
-        DividerRule(),
-        EmptyListItemRule(),
-        DividerBackspaceRule(),
-        ListItemBackspaceRule(),
-        NestedBackspaceRule(),
-        LinkWrapRule(), // before bold/italic to avoid partial matches
-        BoldWrapRule(), // ** before * — order matters
-        ItalicWrapRule(),
-        StrikethroughWrapRule(),
-      ],
+      // Input rules come from the schema — no manual list needed.
     );
     _controller.addListener(() => setState(() {}));
 

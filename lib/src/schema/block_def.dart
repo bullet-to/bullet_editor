@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../codec/block_codec.dart';
 import '../codec/format.dart';
+import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
@@ -21,6 +22,7 @@ class BlockDef {
     this.baseStyle,
     this.prefixBuilder,
     this.codecs,
+    this.inputRules = const [],
   })  : assert(!isVoid || prefixBuilder != null,
             'Void blocks must have a prefixBuilder (it is their visual content)'),
         assert(!isVoid || !isListLike,
@@ -63,4 +65,8 @@ class BlockDef {
   /// Serialization codecs keyed by [Format]. Each codec defines how this
   /// block type encodes/decodes in that format.
   final Map<Format, BlockCodec>? codecs;
+
+  /// Input rules owned by this block type. Collected by the schema in map
+  /// insertion order — define specific rules before general ones.
+  final List<InputRule> inputRules;
 }

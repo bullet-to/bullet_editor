@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../codec/format.dart';
 import '../codec/inline_codec.dart';
+import '../editor/input_rule.dart';
 
 /// Defines the behavior and appearance of an inline style.
 ///
@@ -18,6 +19,7 @@ class InlineStyleDef {
     required this.applyStyle,
     this.isDataCarrying = false,
     this.codecs,
+    this.inputRules = const [],
   });
 
   /// Human-readable label for toolbars and UI (e.g. "Bold", "Italic").
@@ -38,4 +40,8 @@ class InlineStyleDef {
   /// Serialization codecs keyed by [Format]. Each codec defines how this
   /// inline style encodes/decodes in that format.
   final Map<Format, InlineCodec>? codecs;
+
+  /// Input rules owned by this inline style. Collected by the schema in map
+  /// insertion order — define specific rules before general ones.
+  final List<InputRule> inputRules;
 }

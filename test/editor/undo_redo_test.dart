@@ -191,7 +191,6 @@ void main() {
         document: Document([
           TextBlock(id: 'a', segments: [const StyledSegment('#')]),
         ]),
-        inputRules: [HeadingRule()],
         undoGrouping: (_, __) => false,
       );
 

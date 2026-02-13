@@ -24,19 +24,22 @@ typedef LinkTapCallback = void Function(String url);
 class EditorController extends TextEditingController {
   EditorController({
     Document? document,
-    List<InputRule>? inputRules,
     EditorSchema? schema,
+    List<InputRule>? additionalInputRules,
     LinkTapCallback? onLinkTap,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
   }) : _document = document ?? Document.empty(),
-       _inputRules = inputRules ?? [],
        _schema = schema ?? EditorSchema.standard(),
        _onLinkTap = onLinkTap,
        _undoManager = UndoManager(
          grouping: undoGrouping,
          maxStackSize: maxUndoStack,
        ) {
+    _inputRules = [
+      ..._schema.inputRules,
+      if (additionalInputRules != null) ...additionalInputRules,
+    ];
     _syncToTextField();
     _activeStyles = _document.stylesAt(
       mapper.displayToModel(_document, value.selection.baseOffset, _schema),
@@ -45,7 +48,7 @@ class EditorController extends TextEditingController {
   }
 
   Document _document;
-  final List<InputRule> _inputRules;
+  late final List<InputRule> _inputRules;
   final EditorSchema _schema;
   final UndoManager _undoManager;
   LinkTapCallback? _onLinkTap;

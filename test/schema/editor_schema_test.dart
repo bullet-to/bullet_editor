@@ -293,4 +293,66 @@ void main() {
       expect(result.allBlocks[1].blockType, BlockType.paragraph);
     });
   });
+
+  group('Schema-bundled input rules', () {
+    test('inputRules collects block rules then inline rules in map order', () {
+      final schema = EditorSchema.standard();
+      final rules = schema.inputRules;
+
+      // Should have rules from all block defs + inline style defs.
+      expect(rules.isNotEmpty, isTrue);
+
+      // PrefixBlockRule for ### (h3) should come before # (h1).
+      final h3Idx = rules.indexWhere((r) =>
+          r is PrefixBlockRule && r.prefix == '###');
+      final h1Idx = rules.indexWhere((r) => r is HeadingRule);
+      expect(h3Idx, lessThan(h1Idx),
+          reason: 'h3 prefix rule should come before h1');
+
+      // TaskItemRule should come before ListItemRule.
+      final taskIdx = rules.indexWhere((r) => r is TaskItemRule);
+      final listIdx = rules.indexWhere((r) => r is ListItemRule);
+      expect(taskIdx, lessThan(listIdx),
+          reason: 'task rule should come before list rule');
+
+      // Block rules should come before inline rules.
+      final lastBlockRule = rules.lastIndexWhere((r) =>
+          r is PrefixBlockRule || r is HeadingRule || r is ListItemRule ||
+          r is NumberedListRule || r is DividerRule || r is TaskItemRule ||
+          r is EmptyListItemRule || r is ListItemBackspaceRule ||
+          r is DividerBackspaceRule || r is NestedBackspaceRule);
+      final firstInlineRule = rules.indexWhere((r) =>
+          r is LinkWrapRule || r is BoldWrapRule || r is ItalicWrapRule ||
+          r is StrikethroughWrapRule);
+      expect(lastBlockRule, lessThan(firstInlineRule),
+          reason: 'all block rules should precede inline rules');
+
+      // LinkWrapRule before BoldWrapRule before ItalicWrapRule.
+      final linkIdx = rules.indexWhere((r) => r is LinkWrapRule);
+      final boldIdx = rules.indexWhere((r) => r is BoldWrapRule);
+      final italicIdx = rules.indexWhere((r) => r is ItalicWrapRule);
+      expect(linkIdx, lessThan(boldIdx));
+      expect(boldIdx, lessThan(italicIdx));
+    });
+
+    test('EditorController uses schema rules with no manual list', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: const []),
+        ]),
+      );
+
+      // Type "# " — should trigger heading rule from schema.
+      controller.value = const TextEditingValue(
+        text: '#',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+      controller.value = const TextEditingValue(
+        text: '# ',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+
+      expect(controller.document.allBlocks[0].blockType, BlockType.h1);
+    });
+  });
 }

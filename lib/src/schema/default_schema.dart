@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../codec/block_codec.dart';
 import '../codec/format.dart';
 import '../codec/inline_codec.dart';
+import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
@@ -12,43 +13,38 @@ import 'editor_schema.dart';
 import 'inline_style_def.dart';
 
 /// Builds the standard [EditorSchema] with all built-in block types and
-/// inline styles, including markdown codecs.
+/// inline styles, including markdown codecs and input rules.
 ///
-/// **Block ordering matters for decode.** Longer/more-specific prefixes must
-/// come before shorter ones (h3 before h2 before h1, taskItem before listItem)
-/// so the decoder tries them first.
+/// **Block ordering matters for input rules and codec decode.** More-specific
+/// prefixes must come before shorter ones (h3 before h2 before h1, taskItem
+/// before listItem) so they are tried first. The toolbar sorts by enum index
+/// for display, independent of this map order.
 EditorSchema buildStandardSchema() {
   return EditorSchema(
     blocks: {
-      BlockType.paragraph: BlockDef(
-        label: 'Paragraph',
-        policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
-        codecs: {
-          Format.markdown: BlockCodec(
-            encode: (block, ctx) => '${ctx.indent}${ctx.content}',
-          ),
-        },
-      ),
-      BlockType.h1: BlockDef(
-        label: 'Heading 1',
+      // --- Order: specific prefix rules before general ones ---
+
+      BlockType.h3: BlockDef(
+        label: 'Heading 3',
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
         ),
         baseStyle: (base) => (base ?? const TextStyle()).copyWith(
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
           height: 1.3,
         ),
         codecs: {
           Format.markdown: BlockCodec(
-            encode: (block, ctx) => '${ctx.indent}# ${ctx.content}',
+            encode: (block, ctx) => '${ctx.indent}### ${ctx.content}',
             decode: (line) {
-              if (!line.startsWith('# ')) return null;
-              return DecodeMatch(line.substring(2));
+              if (!line.startsWith('### ')) return null;
+              return DecodeMatch(line.substring(4));
             },
           ),
         },
+        inputRules: [PrefixBlockRule('###', BlockType.h3)],
       ),
       BlockType.h2: BlockDef(
         label: 'Heading 2',
@@ -70,87 +66,29 @@ EditorSchema buildStandardSchema() {
             },
           ),
         },
+        inputRules: [PrefixBlockRule('##', BlockType.h2)],
       ),
-      BlockType.h3: BlockDef(
-        label: 'Heading 3',
+      BlockType.h1: BlockDef(
+        label: 'Heading 1',
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
         ),
         baseStyle: (base) => (base ?? const TextStyle()).copyWith(
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
           height: 1.3,
         ),
         codecs: {
           Format.markdown: BlockCodec(
-            encode: (block, ctx) => '${ctx.indent}### ${ctx.content}',
+            encode: (block, ctx) => '${ctx.indent}# ${ctx.content}',
             decode: (line) {
-              if (!line.startsWith('### ')) return null;
-              return DecodeMatch(line.substring(4));
-            },
-          ),
-        },
-      ),
-      BlockType.listItem: BlockDef(
-        label: 'Bullet List',
-        policies: const BlockPolicies(
-          canBeChild: true,
-          canHaveChildren: true,
-          maxDepth: 6,
-        ),
-        isListLike: true,
-        splitInheritsType: true,
-        prefixBuilder: _bulletPrefix,
-        codecs: {
-          Format.markdown: BlockCodec(
-            encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
-            decode: (line) {
-              if (!line.startsWith('- ')) return null;
+              if (!line.startsWith('# ')) return null;
               return DecodeMatch(line.substring(2));
             },
           ),
         },
-      ),
-      BlockType.numberedList: BlockDef(
-        label: 'Numbered List',
-        policies: const BlockPolicies(
-          canBeChild: true,
-          canHaveChildren: true,
-          maxDepth: 6,
-        ),
-        isListLike: true,
-        splitInheritsType: true,
-        prefixBuilder: _numberedPrefix,
-        codecs: {
-          Format.markdown: BlockCodec(
-            encode: (block, ctx) =>
-                '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
-            decode: (line) {
-              final match = RegExp(r'^\d+\. ').firstMatch(line);
-              if (match == null) return null;
-              return DecodeMatch(line.substring(match.end));
-            },
-          ),
-        },
-      ),
-      BlockType.divider: BlockDef(
-        label: 'Divider',
-        isVoid: true,
-        policies: const BlockPolicies(
-          canBeChild: false,
-          canHaveChildren: false,
-        ),
-        prefixBuilder: _dividerPrefix,
-        codecs: {
-          Format.markdown: BlockCodec(
-            encode: (block, ctx) => '${ctx.indent}---',
-            decode: (line) {
-              if (line != '---') return null;
-              return const DecodeMatch('');
-            },
-          ),
-        },
+        inputRules: [HeadingRule()],
       ),
       BlockType.taskItem: BlockDef(
         label: 'Task',
@@ -185,27 +123,89 @@ EditorSchema buildStandardSchema() {
             },
           ),
         },
+        inputRules: [TaskItemRule()],
+      ),
+      BlockType.listItem: BlockDef(
+        label: 'Bullet List',
+        policies: const BlockPolicies(
+          canBeChild: true,
+          canHaveChildren: true,
+          maxDepth: 6,
+        ),
+        isListLike: true,
+        splitInheritsType: true,
+        prefixBuilder: _bulletPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
+            decode: (line) {
+              if (!line.startsWith('- ')) return null;
+              return DecodeMatch(line.substring(2));
+            },
+          ),
+        },
+        inputRules: [
+          ListItemRule(),
+          EmptyListItemRule(),
+          ListItemBackspaceRule(),
+        ],
+      ),
+      BlockType.numberedList: BlockDef(
+        label: 'Numbered List',
+        policies: const BlockPolicies(
+          canBeChild: true,
+          canHaveChildren: true,
+          maxDepth: 6,
+        ),
+        isListLike: true,
+        splitInheritsType: true,
+        prefixBuilder: _numberedPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) =>
+                '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
+            decode: (line) {
+              final match = RegExp(r'^\d+\. ').firstMatch(line);
+              if (match == null) return null;
+              return DecodeMatch(line.substring(match.end));
+            },
+          ),
+        },
+        inputRules: [NumberedListRule()],
+      ),
+      BlockType.divider: BlockDef(
+        label: 'Divider',
+        isVoid: true,
+        policies: const BlockPolicies(
+          canBeChild: false,
+          canHaveChildren: false,
+        ),
+        prefixBuilder: _dividerPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}---',
+            decode: (line) {
+              if (line != '---') return null;
+              return const DecodeMatch('');
+            },
+          ),
+        },
+        inputRules: [DividerRule(), DividerBackspaceRule()],
+      ),
+      BlockType.paragraph: BlockDef(
+        label: 'Paragraph',
+        policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}${ctx.content}',
+          ),
+        },
+        inputRules: [NestedBackspaceRule()],
       ),
     },
     inlineStyles: {
-      InlineStyle.bold: InlineStyleDef(
-        label: 'Bold',
-        applyStyle: (base, {attributes = const {}}) =>
-            base.copyWith(fontWeight: FontWeight.bold),
-        codecs: {Format.markdown: const InlineCodec(wrap: '**')},
-      ),
-      InlineStyle.italic: InlineStyleDef(
-        label: 'Italic',
-        applyStyle: (base, {attributes = const {}}) =>
-            base.copyWith(fontStyle: FontStyle.italic),
-        codecs: {Format.markdown: const InlineCodec(wrap: '*')},
-      ),
-      InlineStyle.strikethrough: InlineStyleDef(
-        label: 'Strikethrough',
-        applyStyle: (base, {attributes = const {}}) =>
-            base.copyWith(decoration: TextDecoration.lineThrough),
-        codecs: {Format.markdown: const InlineCodec(wrap: '~~')},
-      ),
+      // --- Order: link before bold before italic (specific before general) ---
+
       InlineStyle.link: InlineStyleDef(
         label: 'Link',
         isDataCarrying: true,
@@ -221,9 +221,8 @@ EditorSchema buildStandardSchema() {
               return '[$text]($url)';
             },
             decode: (text) {
-              final match = RegExp(
-                r'^\[([^\]]+)\]\(([^)]+)\)',
-              ).firstMatch(text);
+              final match =
+                  RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
               if (match == null) return null;
               return InlineDecodeMatch(
                 text: match.group(1)!,
@@ -233,6 +232,28 @@ EditorSchema buildStandardSchema() {
             },
           ),
         },
+        inputRules: [LinkWrapRule()],
+      ),
+      InlineStyle.bold: InlineStyleDef(
+        label: 'Bold',
+        applyStyle: (base, {attributes = const {}}) =>
+            base.copyWith(fontWeight: FontWeight.bold),
+        codecs: {Format.markdown: const InlineCodec(wrap: '**')},
+        inputRules: [BoldWrapRule()],
+      ),
+      InlineStyle.italic: InlineStyleDef(
+        label: 'Italic',
+        applyStyle: (base, {attributes = const {}}) =>
+            base.copyWith(fontStyle: FontStyle.italic),
+        codecs: {Format.markdown: const InlineCodec(wrap: '*')},
+        inputRules: [ItalicWrapRule()],
+      ),
+      InlineStyle.strikethrough: InlineStyleDef(
+        label: 'Strikethrough',
+        applyStyle: (base, {attributes = const {}}) =>
+            base.copyWith(decoration: TextDecoration.lineThrough),
+        codecs: {Format.markdown: const InlineCodec(wrap: '~~')},
+        inputRules: [StrikethroughWrapRule()],
       ),
     },
   );

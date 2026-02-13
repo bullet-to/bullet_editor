@@ -138,6 +138,21 @@ Rich copy/paste that preserves formatting across clipboard operations.
 
 ---
 
+## Phase 11: Styling
+
+Theming, typography, and visual customisation of the editor and its content.
+
+- **Editor theme:** `BulletEditorTheme` data class — text styles, colors, spacing, selection highlight, cursor color
+- **Block-level styling:** Per-block-type text style overrides (heading sizes, blockquote indentation/border, code block background)
+- **Inline style rendering:** Map `InlineStyle` → `TextStyle` via theme, support custom attributes (color, highlight)
+- **Theme injection:** `InheritedWidget` or constructor param so the editor respects the host app's theme out of the box
+- **Dark mode:** Light/dark variants, auto-switch with `MediaQuery.platformBrightness`
+- **Toolbar styling:** Theme-aware toolbar (icon colors, active state indicators, dividers)
+
+**Key question answered:** Can we decouple visual presentation from the document model cleanly enough that theming is a config concern, not a model concern?
+
+---
+
 ## Future Phases (unordered)
 
 - WidgetSpan blocks (images, tables, embeds)

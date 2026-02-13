@@ -62,9 +62,18 @@ class BlockTypeSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final schema = controller.schema;
     // Exclude void blocks (e.g. divider) — they aren't selectable from the dropdown.
+    // Sort by enum index for display order (independent of schema map order,
+    // which is optimized for input rule specificity).
     final entries = schema.blocks.entries
         .where((e) => !e.value.isVoid)
-        .toList();
+        .toList()
+      ..sort((a, b) {
+        if (a.key is BlockType && b.key is BlockType) {
+          return (a.key as BlockType).index
+              .compareTo((b.key as BlockType).index);
+        }
+        return 0;
+      });
 
     // If cursor is on a void block, the value won't match any item.
     // Fall back to null to avoid assertion errors.

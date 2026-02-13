@@ -10,7 +10,7 @@ void main() {
         document: Document([
           TextBlock(id: 'a', segments: [const StyledSegment('abc **trigger*')]),
         ]),
-        inputRules: [BoldWrapRule()],
+        // Rules come from schema.
       );
 
       // Simulate user typing the closing * at position 14.
@@ -188,7 +188,7 @@ void main() {
         document: Document([
           TextBlock(id: 'a', segments: [const StyledSegment('**hello*')]),
         ]),
-        inputRules: [BoldWrapRule()],
+        // Rules come from schema.
       );
 
       // Type the closing *.
@@ -212,7 +212,7 @@ void main() {
             segments: [const StyledSegment('**one** and **two*')],
           ),
         ]),
-        inputRules: [BoldWrapRule()],
+        // Rules come from schema.
       );
 
       // Complete the second **two** by typing the closing *.
@@ -268,12 +268,6 @@ void main() {
     test('# space converts paragraph to H1 via controller', () {
       final controller = EditorController(
         document: Document([TextBlock(id: 'a', segments: const [])]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          BoldWrapRule(),
-        ],
       );
 
       // Type '#'
@@ -295,12 +289,6 @@ void main() {
     test('- space converts paragraph to list item via controller', () {
       final controller = EditorController(
         document: Document([TextBlock(id: 'a', segments: const [])]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          BoldWrapRule(),
-        ],
       );
 
       controller.value = const TextEditingValue(
@@ -326,7 +314,7 @@ void main() {
           ),
           TextBlock(id: 'b', segments: [const StyledSegment('paragraph')]),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+        // Rules come from schema.
       );
 
       // "Title\nparagraph" — cursor at end of "Title" (offset 5).
@@ -363,7 +351,7 @@ void main() {
             segments: [const StyledSegment('Title')],
           ),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+        // Rules come from schema.
       );
 
       // Press Enter at end of heading.
@@ -386,7 +374,7 @@ void main() {
             segments: [const StyledSegment('first')],
           ),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+        // Rules come from schema.
       );
 
       // Display text: "\uFFFCfirst" (prefix + text). Enter at end.
@@ -409,7 +397,7 @@ void main() {
         document: Document([
           TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
         ]),
-        inputRules: [HeadingRule(), ListItemRule(), EmptyListItemRule()],
+        // Rules come from schema.
       );
 
       // Display text: "\uFFFC" (prefix, no content). Enter.
@@ -439,13 +427,6 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          ListItemBackspaceRule(),
-          BoldWrapRule(),
-        ],
       );
 
       // Cursor in nested paragraph — use display text from the controller.
@@ -471,13 +452,6 @@ void main() {
           TextBlock(id: 'a', segments: [const StyledSegment('above')]),
           TextBlock(id: 'b', blockType: BlockType.listItem, segments: const []),
         ]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          ListItemBackspaceRule(),
-          BoldWrapRule(),
-        ],
       );
 
       // Display: "above\n\uFFFC" — empty list item with prefix.
@@ -517,14 +491,6 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          ListItemBackspaceRule(),
-          NestedBackspaceRule(),
-          BoldWrapRule(),
-        ],
       );
 
       // Step 1: backspace on nested "boss" → should outdent to root.
@@ -569,14 +535,6 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [
-          HeadingRule(),
-          ListItemRule(),
-          EmptyListItemRule(),
-          ListItemBackspaceRule(),
-          NestedBackspaceRule(),
-          BoldWrapRule(),
-        ],
       );
 
       // Display: "\uFFFCparent\n\uFFFCchild"
@@ -619,7 +577,7 @@ void main() {
             ],
           ),
         ]),
-        inputRules: [BoldWrapRule()],
+        // Rules come from schema.
       );
 
       // Block 0 text: "Hello bold world! This is the POC." (34 chars)
