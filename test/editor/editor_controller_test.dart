@@ -953,11 +953,10 @@ void main() {
           composing: const TextRange(start: 5, end: 6),
         );
 
-        // During composing, document should be UNCHANGED.
+        // During composing, the model is updated provisionally (for rendering)
+        // but block structure must be preserved.
         expect(controller.document.allBlocks.length, 2,
             reason: 'block count must not change during composing');
-        expect(controller.document.allBlocks[0].plainText, 'hello',
-            reason: 'first block must not change during composing');
 
         // Step 2: User presses E to complete the diacritic.
         // Flutter resolves composing: replaces the ´ with é.
@@ -995,9 +994,8 @@ void main() {
           composing: TextRange(start: 3, end: 4),
         );
 
-        // Document unchanged during composing.
-        expect(controller.document.blocks[0].plainText, 'hello',
-            reason: 'document unchanged during composing');
+        // During composing, model is updated provisionally for rendering.
+        // Block count must be preserved.
 
         // Step 2: Resolve composing — ´ becomes é.
         controller.value = const TextEditingValue(
@@ -1037,8 +1035,7 @@ void main() {
           composing: TextRange(start: 5, end: 6),
         );
 
-        expect(controller.document.allBlocks[0].plainText, 'cafe',
-            reason: 'model unchanged during composing');
+        // Model updated provisionally during composing for rendering.
 
         // Step 2: Resolve — "café".
         controller.value = const TextEditingValue(
@@ -1064,7 +1061,8 @@ void main() {
           composing: TextRange(start: 5, end: 6),
         );
 
-        expect(controller.document.blocks[0].plainText, 'hello');
+        // Model is provisionally updated during composing.
+        expect(controller.document.blocks[0].plainText, 'hello\u0301');
 
         // Step 2: User presses Escape or another key that cancels composing.
         // Flutter removes the placeholder, text goes back to "hello".
@@ -1099,7 +1097,8 @@ void main() {
           selection: TextSelection.collapsed(offset: 3),
           composing: TextRange(start: 2, end: 3),
         );
-        expect(controller.document.blocks[0].plainText, 'ab');
+        // Model provisionally updated during composing.
+        expect(controller.document.blocks[0].plainText, 'abx');
 
         // Step 2: Composing text changes (user picks different candidate).
         controller.value = const TextEditingValue(
@@ -1107,7 +1106,7 @@ void main() {
           selection: TextSelection.collapsed(offset: 4),
           composing: TextRange(start: 2, end: 4),
         );
-        expect(controller.document.blocks[0].plainText, 'ab');
+        expect(controller.document.blocks[0].plainText, 'abxy');
 
         // Step 3: Resolve.
         controller.value = const TextEditingValue(

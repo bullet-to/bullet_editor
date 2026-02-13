@@ -278,16 +278,22 @@ class EditorController extends TextEditingController {
   /// If no input rule overrides selectionAfter, the fallback selection is
   /// computed from the current display cursor against the NEW document.
   void _commitTransaction(Transaction tx) {
+    // During composing (and the resolve frame), skip input rules and undo.
+    // One undo entry was already pushed when composing started.
+    final isProvisional = _preComposingValue != null;
+
     var finalTx = tx;
-    for (final rule in _inputRules) {
-      final transformed = rule.tryTransform(finalTx, _document);
-      if (transformed != null) {
-        finalTx = transformed;
-        break;
+    if (!isProvisional) {
+      for (final rule in _inputRules) {
+        final transformed = rule.tryTransform(finalTx, _document);
+        if (transformed != null) {
+          finalTx = transformed;
+          break;
+        }
       }
+      _pushUndo();
     }
 
-    _pushUndo();
     _document = finalTx.apply(_document);
 
     final TextSelection afterSel;
@@ -355,32 +361,32 @@ class EditorController extends TextEditingController {
     final isComposing = value.composing.isValid &&
         value.composing.start != value.composing.end;
 
-    if (isComposing) {
-      // Composing in progress — save the pre-composing state on first entry,
-      // then let Flutter handle rendering. Don't process as an edit.
-      _preComposingValue ??= _previousValue;
-      _previousValue = value;
-      return;
+    // Track composing lifecycle. On first composing frame, save the
+    // pre-composing state and push one undo entry for the whole sequence.
+    if (isComposing && _preComposingValue == null) {
+      _preComposingValue = _previousValue;
+      _pushUndo();
     }
 
-    // If composing just resolved, diff against the pre-composing state
-    // (before the dead key was pressed) instead of the mid-composing state.
-    final effectivePrevious = _preComposingValue ?? _previousValue;
-    _preComposingValue = null;
-
+    // Incremental diff — always between previous frame and current frame.
+    // This keeps the model in sync with the display text during composing,
+    // so buildTextSpan renders correctly with full styling.
     final cursor = value.selection.isValid ? value.selection.baseOffset : null;
-    final diff = diffTexts(effectivePrevious.text, text, cursorOffset: cursor);
+    final diff = diffTexts(_previousValue.text, text, cursorOffset: cursor);
 
     // 1. Selection-only change (no text edit).
     if (diff == null) {
       _handleSelectionChange();
+      if (!isComposing && _preComposingValue != null) {
+        _preComposingValue = null;
+      }
       return;
     }
 
     // Translate diff from display to model space.
     final cleanInserted = diff.insertedText.replaceAll(mapper.prefixChar, '');
     final modelStart = _displayToModel(diff.start);
-    final deletedText = effectivePrevious.text.substring(
+    final deletedText = _previousValue.text.substring(
       diff.start,
       diff.start + diff.deletedLength,
     );
@@ -393,6 +399,9 @@ class EditorController extends TextEditingController {
         prefixCharsDeleted > 0 &&
         cleanInserted.isEmpty) {
       _handlePrefixDelete(modelStart);
+      if (!isComposing && _preComposingValue != null) {
+        _preComposingValue = null;
+      }
       return;
     }
 
@@ -403,10 +412,19 @@ class EditorController extends TextEditingController {
     final tx = _transactionFromDiff(modelDiff, modelSelection);
     if (tx == null) {
       _previousValue = value;
+      if (!isComposing && _preComposingValue != null) {
+        _preComposingValue = null;
+      }
       return;
     }
 
     _commitTransaction(tx);
+
+    // Clear composing state AFTER processing the resolve frame so that
+    // _commitTransaction sees it and skips undo + input rules.
+    if (!isComposing && _preComposingValue != null) {
+      _preComposingValue = null;
+    }
   }
 
   // -- Transaction building (all in model space) --
@@ -508,12 +526,20 @@ class EditorController extends TextEditingController {
         modelSelection ??
         TextSelection.collapsed(offset: _document.plainText.length);
     final displaySel = _selectionToDisplay(modelSel);
+
+    // Preserve the composing range during IME composing so the platform
+    // knows composing is still active.
+    final composing = _preComposingValue != null && value.composing.isValid
+        ? value.composing
+        : TextRange.empty;
+
     value = TextEditingValue(
       text: displayText,
       selection: TextSelection(
         baseOffset: displaySel.baseOffset.clamp(0, displayText.length),
         extentOffset: displaySel.extentOffset.clamp(0, displayText.length),
       ),
+      composing: composing,
     );
     _previousValue = value;
     _isSyncing = false;
