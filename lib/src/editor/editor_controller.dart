@@ -417,19 +417,23 @@ class EditorController extends TextEditingController {
     }
 
     // Translate diff from display to model space.
-    final cleanInserted = diff.insertedText.replaceAll(mapper.prefixChar, '');
+    // Strip display-only characters (prefix chars and empty block placeholders).
+    final cleanInserted = diff.insertedText
+        .replaceAll(mapper.prefixChar, '')
+        .replaceAll(mapper.emptyBlockChar, '');
     final modelStart = _displayToModel(diff.start);
     final deletedText = _previousValue.text.substring(
       diff.start,
       diff.start + diff.deletedLength,
     );
-    final prefixCharsDeleted =
-        mapper.prefixChar.allMatches(deletedText).length;
-    final modelDeletedLength = diff.deletedLength - prefixCharsDeleted;
+    final displayOnlyDeleted =
+        mapper.prefixChar.allMatches(deletedText).length +
+        mapper.emptyBlockChar.allMatches(deletedText).length;
+    final modelDeletedLength = diff.deletedLength - displayOnlyDeleted;
 
-    // 2. Only prefix chars deleted (backspace over bullet).
+    // 2. Only display-only chars deleted (backspace over bullet / empty placeholder).
     if (modelDeletedLength == 0 &&
-        prefixCharsDeleted > 0 &&
+        displayOnlyDeleted > 0 &&
         cleanInserted.isEmpty) {
       _handlePrefixDelete(modelStart);
       if (!isComposing && _preComposingValue != null) {

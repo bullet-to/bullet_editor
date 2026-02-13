@@ -40,6 +40,9 @@ class EditorSchema {
   /// Whether the block type identified by [key] is list-like.
   bool isListLike(Object key) => blocks[key]?.isListLike ?? false;
 
+  /// Whether the block type identified by [key] is a void block (no text).
+  bool isVoid(Object key) => blocks[key]?.isVoid ?? false;
+
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');
   static final _fallbackInlineStyleDef = InlineStyleDef(
     label: 'Unknown',

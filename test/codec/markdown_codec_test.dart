@@ -161,38 +161,52 @@ void main() {
 
     test('encode italic segments', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('normal '),
-          const StyledSegment('italic', {InlineStyle.italic}),
-          const StyledSegment(' text'),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('normal '),
+            const StyledSegment('italic', {InlineStyle.italic}),
+            const StyledSegment(' text'),
+          ],
+        ),
       ]);
       expect(codec.encode(doc), 'normal *italic* text');
     });
 
     test('decode italic text', () {
       final doc = codec.decode('normal *italic* text');
-      expect(doc.blocks[0].segments.any(
-        (s) => s.text == 'italic' && s.styles.contains(InlineStyle.italic),
-      ), isTrue);
+      expect(
+        doc.blocks[0].segments.any(
+          (s) => s.text == 'italic' && s.styles.contains(InlineStyle.italic),
+        ),
+        isTrue,
+      );
     });
 
     test('encode strikethrough segments', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
-          const StyledSegment('normal '),
-          const StyledSegment('strike', {InlineStyle.strikethrough}),
-          const StyledSegment(' text'),
-        ]),
+        TextBlock(
+          id: 'a',
+          segments: [
+            const StyledSegment('normal '),
+            const StyledSegment('strike', {InlineStyle.strikethrough}),
+            const StyledSegment(' text'),
+          ],
+        ),
       ]);
       expect(codec.encode(doc), 'normal ~~strike~~ text');
     });
 
     test('decode strikethrough text', () {
       final doc = codec.decode('normal ~~strike~~ text');
-      expect(doc.blocks[0].segments.any(
-        (s) => s.text == 'strike' && s.styles.contains(InlineStyle.strikethrough),
-      ), isTrue);
+      expect(
+        doc.blocks[0].segments.any(
+          (s) =>
+              s.text == 'strike' &&
+              s.styles.contains(InlineStyle.strikethrough),
+        ),
+        isTrue,
+      );
     });
 
     test('encode numbered list', () {
@@ -247,6 +261,41 @@ void main() {
       expect(doc.blocks[1].blockType, BlockType.taskItem);
       expect(doc.blocks[1].plainText, 'done');
       expect(doc.blocks[1].metadata['checked'], true);
+    });
+
+    test('encode divider', () {
+      final doc = Document([TextBlock(id: 'a', blockType: BlockType.divider)]);
+      expect(codec.encode(doc), '---');
+    });
+
+    test('decode divider', () {
+      final doc = codec.decode('---');
+      expect(doc.blocks.length, 1);
+      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].plainText, '');
+    });
+
+    test('round-trip divider between paragraphs', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('Above')]),
+        TextBlock(id: 'b', blockType: BlockType.divider),
+        TextBlock(id: 'c', segments: [const StyledSegment('Below')]),
+      ]);
+      final md = codec.encode(doc);
+      expect(md, 'Above\n\n---\n\nBelow');
+      final decoded = codec.decode(md);
+      expect(decoded.blocks.length, 3);
+      expect(decoded.blocks[0].blockType, BlockType.paragraph);
+      expect(decoded.blocks[0].plainText, 'Above');
+      expect(decoded.blocks[1].blockType, BlockType.divider);
+      expect(decoded.blocks[1].plainText, '');
+      expect(decoded.blocks[2].blockType, BlockType.paragraph);
+      expect(decoded.blocks[2].plainText, 'Below');
+    });
+
+    test('--- with extra text is not a divider', () {
+      final doc = codec.decode('--- extra');
+      expect(doc.blocks[0].blockType, BlockType.paragraph);
     });
   });
 }

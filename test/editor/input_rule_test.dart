@@ -330,8 +330,9 @@ void main() {
       final resultDoc = result!.apply(doc);
       expect(resultDoc.allBlocks[0].plainText, 'hello world');
       expect(
-        resultDoc.allBlocks[0].segments
-            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.italic)),
+        resultDoc.allBlocks[0].segments.any(
+          (s) => s.text == 'world' && s.styles.contains(InlineStyle.italic),
+        ),
         isTrue,
       );
     });
@@ -352,8 +353,10 @@ void main() {
       final resultDoc = result!.apply(doc);
       expect(resultDoc.allBlocks[0].plainText, 'hello world');
       expect(
-        resultDoc.allBlocks[0].segments
-            .any((s) => s.text == 'world' && s.styles.contains(InlineStyle.strikethrough)),
+        resultDoc.allBlocks[0].segments.any(
+          (s) =>
+              s.text == 'world' && s.styles.contains(InlineStyle.strikethrough),
+        ),
         isTrue,
       );
     });
@@ -470,6 +473,115 @@ void main() {
       final rule = EmptyListItemRule();
       final result = rule.tryTransform(pending, doc);
       expect(result, isNotNull);
+    });
+  });
+
+  group('DividerRule', () {
+    test(
+      'typing --- converts paragraph to divider with trailing paragraph',
+      () {
+        // Doc has "--" typed; user types the third "-".
+        final doc = Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('--')]),
+        ]);
+        final pending = Transaction(
+          operations: [InsertText(0, 2, '-')],
+          selectionAfter: const TextSelection.collapsed(offset: 3),
+        );
+        final rule = DividerRule();
+        final result = rule.tryTransform(pending, doc);
+        expect(result, isNotNull);
+        final resultDoc = result!.apply(doc);
+        expect(resultDoc.allBlocks.length, 2);
+        expect(resultDoc.allBlocks[0].blockType, BlockType.divider);
+        expect(resultDoc.allBlocks[0].plainText, '');
+        expect(resultDoc.allBlocks[1].blockType, BlockType.paragraph);
+        expect(resultDoc.allBlocks[1].plainText, '');
+      },
+    );
+
+    test('does not fire on non-paragraph blocks', () {
+      // Doc has "--" in an H1; user types "-".
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('--')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 2, '-')],
+        selectionAfter: const TextSelection.collapsed(offset: 3),
+      );
+      final rule = DividerRule();
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+
+    test('does not fire when text is not exactly ---', () {
+      // Doc has "a-" typed; user types "-".
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('a-')]),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 2, '-')],
+        selectionAfter: const TextSelection.collapsed(offset: 3),
+      );
+      final rule = DividerRule();
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
+  group('DividerBackspaceRule', () {
+    test('backspace at start of block after divider removes divider', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.divider),
+        TextBlock(id: 'b', segments: [const StyledSegment('Hello')]),
+      ]);
+      final pending = Transaction(
+        operations: [MergeBlocks(1)],
+        selectionAfter: const TextSelection.collapsed(offset: 0),
+      );
+      final rule = DividerBackspaceRule();
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      // Divider removed, only the paragraph remains.
+      expect(resultDoc.allBlocks.length, 1);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.paragraph);
+      expect(resultDoc.allBlocks[0].plainText, 'Hello');
+    });
+
+    test('does not fire when preceding block is not a divider', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('second')]),
+      ]);
+      final pending = Transaction(
+        operations: [MergeBlocks(1)],
+        selectionAfter: const TextSelection.collapsed(offset: 5),
+      );
+      final rule = DividerBackspaceRule();
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
+  group('RemoveBlock', () {
+    test('removes a block from document', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
+        TextBlock(id: 'b', blockType: BlockType.divider),
+        TextBlock(id: 'c', segments: [const StyledSegment('third')]),
+      ]);
+      final result = RemoveBlock(1).apply(doc);
+      expect(result.allBlocks.length, 2);
+      expect(result.allBlocks[0].plainText, 'first');
+      expect(result.allBlocks[1].plainText, 'third');
+    });
+
+    test('does not remove the last block', () {
+      final doc = Document([TextBlock(id: 'a', blockType: BlockType.divider)]);
+      final result = RemoveBlock(0).apply(doc);
+      expect(result.allBlocks.length, 1);
     });
   });
 }

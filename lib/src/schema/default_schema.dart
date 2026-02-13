@@ -134,6 +134,24 @@ EditorSchema buildStandardSchema() {
           ),
         },
       ),
+      BlockType.divider: BlockDef(
+        label: 'Divider',
+        isVoid: true,
+        policies: const BlockPolicies(
+          canBeChild: false,
+          canHaveChildren: false,
+        ),
+        prefixBuilder: _dividerPrefix,
+        codecs: {
+          Format.markdown: BlockCodec(
+            encode: (block, ctx) => '${ctx.indent}---',
+            decode: (line) {
+              if (line != '---') return null;
+              return const DecodeMatch('');
+            },
+          ),
+        },
+      ),
       BlockType.taskItem: BlockDef(
         label: 'Task',
         policies: const BlockPolicies(
@@ -202,6 +220,15 @@ Widget? _numberedPrefix(Document doc, int flatIndex, TextBlock block) {
     '$ordinal.  ',
     textAlign: TextAlign.right,
     style: _prefixStyle,
+  );
+}
+
+Widget? _dividerPrefix(Document doc, int flatIndex, TextBlock block) {
+  return Container(
+    width: double.infinity,
+    height: 1,
+    margin: const EdgeInsets.symmetric(vertical: 8),
+    color: const Color(0xFFCCCCCC),
   );
 }
 

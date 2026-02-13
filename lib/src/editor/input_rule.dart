@@ -302,6 +302,65 @@ class NestedBackspaceRule extends InputRule {
   }
 }
 
+/// Detects `---` typed on an empty paragraph and converts it to a divider block.
+///
+/// Fires when the third `-` is inserted, making the block text exactly `---`.
+/// The text is cleared, the block type is changed to divider, and a new empty
+/// paragraph is inserted after for the cursor to land on.
+class DividerRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final insertOp = _findInsertOp(pending);
+    if (insertOp == null || insertOp.text != '-') return null;
+
+    final resultDoc = pending.apply(doc);
+    final i = insertOp.blockIndex;
+    if (i >= resultDoc.allBlocks.length) return null;
+
+    final block = resultDoc.allBlocks[i];
+    if (block.blockType != BlockType.paragraph || block.plainText != '---') {
+      return null;
+    }
+
+    final blockStart = resultDoc.globalOffset(i, 0);
+    return Transaction(
+      operations: [
+        ...pending.operations,
+        DeleteText(i, 0, 3),
+        ChangeBlockType(i, BlockType.divider),
+        // Create a new paragraph after the divider for the cursor.
+        SplitBlock(i, 0),
+      ],
+      selectionAfter: TextSelection.collapsed(offset: blockStart + 1),
+    );
+  }
+}
+
+/// Backspace at the start of a block that follows a divider deletes the divider.
+///
+/// Intercepts MergeBlocks where the preceding block is a void block (divider).
+/// Instead of merging (which would corrupt the current block's type), we remove
+/// the divider entirely and keep the current block as-is.
+class DividerBackspaceRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
+    if (mergeOp == null) return null;
+
+    final flat = doc.allBlocks;
+    final prevIdx = mergeOp.secondBlockIndex - 1;
+    if (prevIdx < 0 || prevIdx >= flat.length) return null;
+    if (flat[prevIdx].blockType != BlockType.divider) return null;
+
+    // Remove the divider. The current block slides into its position.
+    final cursorOffset = doc.globalOffset(prevIdx, 0);
+    return Transaction(
+      operations: [RemoveBlock(prevIdx)],
+      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    );
+  }
+}
+
 /// Find the first InsertText operation in a transaction, if any.
 InsertText? _findInsertOp(Transaction tx) {
   for (final op in tx.operations) {

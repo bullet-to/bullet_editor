@@ -227,7 +227,13 @@ class ChangeBlockType extends EditOperation {
     }
 
     final block = doc.allBlocks[blockIndex];
-    return doc.replaceBlock(blockIndex, block.copyWith(blockType: newType));
+    if (block.blockType == newType) return doc;
+    // Clear metadata when changing type — stale metadata from the old type
+    // (e.g. task 'checked' state) shouldn't carry over.
+    return doc.replaceBlock(
+      blockIndex,
+      block.copyWith(blockType: newType, metadata: const {}),
+    );
   }
 
   @override
@@ -295,6 +301,27 @@ class DeleteRange extends EditOperation {
   @override
   String toString() =>
       'DeleteRange(start: $startBlockIndex:$startOffset, end: $endBlockIndex:$endOffset)';
+}
+
+/// Remove a block entirely from the document.
+///
+/// Used for deleting void blocks (e.g. divider) where merging makes no sense.
+class RemoveBlock extends EditOperation {
+  RemoveBlock(this.flatIndex);
+
+  final int flatIndex;
+
+  @override
+  Document apply(Document doc) {
+    final flat = doc.allBlocks;
+    if (flatIndex < 0 || flatIndex >= flat.length) return doc;
+    // Don't remove the last block — always keep at least one.
+    if (flat.length <= 1) return doc;
+    return doc.removeBlock(flatIndex);
+  }
+
+  @override
+  String toString() => 'RemoveBlock(flat: $flatIndex)';
 }
 
 /// Set a metadata field on a block.

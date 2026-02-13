@@ -32,7 +32,7 @@ class StyledSegment {
 }
 
 /// The type of a block. Determines rendering and behavior.
-enum BlockType { paragraph, h1, h2, h3, listItem, numberedList, taskItem }
+enum BlockType { paragraph, h1, h2, h3, listItem, numberedList, taskItem, divider }
 
 /// Whether a block type behaves like a list item (nestable, gets a prefix,
 /// shares enter/backspace/indent behavior).

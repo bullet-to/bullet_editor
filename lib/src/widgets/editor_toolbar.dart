@@ -33,8 +33,9 @@ class StyleToggleButton extends StatelessWidget {
       tooltip: tooltip ?? style.name,
       isSelected: isActive,
       style: IconButton.styleFrom(
-        backgroundColor:
-            isActive ? Theme.of(context).colorScheme.primaryContainer : null,
+        backgroundColor: isActive
+            ? Theme.of(context).colorScheme.primaryContainer
+            : null,
         splashFactory: NoSplash.splashFactory,
       ),
       onPressed: () {
@@ -60,19 +61,25 @@ class BlockTypeSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final schema = controller.schema;
-    final entries = schema.blocks.entries.toList();
+    // Exclude void blocks (e.g. divider) — they aren't selectable from the dropdown.
+    final entries = schema.blocks.entries
+        .where((e) => !e.value.isVoid)
+        .toList();
+
+    // If cursor is on a void block, the value won't match any item.
+    // Fall back to null to avoid assertion errors.
+    final currentType = controller.currentBlockType;
+    final hasValue = entries.any((e) => e.key == currentType);
 
     return DropdownButton<Object>(
-      value: controller.currentBlockType,
+      value: hasValue ? currentType : null,
+      hint: const Text('—', style: TextStyle(fontSize: 13)),
       underline: const SizedBox.shrink(),
       isDense: true,
       items: entries.map((entry) {
         return DropdownMenuItem<Object>(
           value: entry.key,
-          child: Text(
-            entry.value.label,
-            style: const TextStyle(fontSize: 13),
-          ),
+          child: Text(entry.value.label, style: const TextStyle(fontSize: 13)),
         );
       }).toList(),
       onChanged: (key) {
@@ -114,81 +121,81 @@ class EditorToolbar extends StatelessWidget {
         return FocusScope(
           canRequestFocus: false,
           child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Theme.of(context).colorScheme.outlineVariant,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Row(
+              children: [
+                // Block type selector.
+                BlockTypeSelector(controller: controller),
+                const VerticalDivider(width: 16, indent: 8, endIndent: 8),
+
+                // Inline style toggles.
+                StyleToggleButton(
+                  controller: controller,
+                  style: InlineStyle.bold,
+                  icon: Icons.format_bold,
+                  tooltip: 'Bold (Cmd+B)',
+                  editorFocusNode: editorFocusNode,
+                ),
+                StyleToggleButton(
+                  controller: controller,
+                  style: InlineStyle.italic,
+                  icon: Icons.format_italic,
+                  tooltip: 'Italic (Cmd+I)',
+                  editorFocusNode: editorFocusNode,
+                ),
+                StyleToggleButton(
+                  controller: controller,
+                  style: InlineStyle.strikethrough,
+                  icon: Icons.format_strikethrough,
+                  tooltip: 'Strikethrough',
+                  editorFocusNode: editorFocusNode,
+                ),
+                const VerticalDivider(width: 16, indent: 8, endIndent: 8),
+
+                // Task toggle.
+                if (controller.currentBlockType == BlockType.taskItem)
+                  IconButton(
+                    icon: Icon(
+                      controller.isTaskChecked
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank,
+                    ),
+                    tooltip: 'Toggle checked',
+                    style: IconButton.styleFrom(
+                      splashFactory: NoSplash.splashFactory,
+                    ),
+                    onPressed: () =>
+                        _action(() => controller.toggleTaskChecked()),
+                  ),
+                const VerticalDivider(width: 16, indent: 8, endIndent: 8),
+
+                // Undo / redo.
+                IconButton(
+                  icon: const Icon(Icons.undo),
+                  tooltip: 'Undo (Cmd+Z)',
+                  splashRadius: 1,
+                  onPressed: controller.canUndo
+                      ? () => _action(() => controller.undo())
+                      : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.redo),
+                  tooltip: 'Redo (Cmd+Shift+Z)',
+                  splashRadius: 1,
+                  onPressed: controller.canRedo
+                      ? () => _action(() => controller.redo())
+                      : null,
+                ),
+              ],
             ),
           ),
-          child: Row(
-            children: [
-              // Block type selector.
-              BlockTypeSelector(controller: controller),
-              const VerticalDivider(width: 16, indent: 8, endIndent: 8),
-
-              // Inline style toggles.
-              StyleToggleButton(
-                controller: controller,
-                style: InlineStyle.bold,
-                icon: Icons.format_bold,
-                tooltip: 'Bold (Cmd+B)',
-                editorFocusNode: editorFocusNode,
-              ),
-              StyleToggleButton(
-                controller: controller,
-                style: InlineStyle.italic,
-                icon: Icons.format_italic,
-                tooltip: 'Italic (Cmd+I)',
-                editorFocusNode: editorFocusNode,
-              ),
-              StyleToggleButton(
-                controller: controller,
-                style: InlineStyle.strikethrough,
-                icon: Icons.format_strikethrough,
-                tooltip: 'Strikethrough',
-                editorFocusNode: editorFocusNode,
-              ),
-              const VerticalDivider(width: 16, indent: 8, endIndent: 8),
-
-              // Task toggle.
-              if (controller.currentBlockType == BlockType.taskItem)
-                IconButton(
-                  icon: Icon(
-                    controller.isTaskChecked
-                        ? Icons.check_box
-                        : Icons.check_box_outline_blank,
-                  ),
-                  tooltip: 'Toggle checked',
-                  style: IconButton.styleFrom(
-                    splashFactory: NoSplash.splashFactory,
-                  ),
-                  onPressed: () =>
-                      _action(() => controller.toggleTaskChecked()),
-                ),
-              const VerticalDivider(width: 16, indent: 8, endIndent: 8),
-
-              // Undo / redo.
-              IconButton(
-                icon: const Icon(Icons.undo),
-                tooltip: 'Undo (Cmd+Z)',
-                splashRadius: 1,
-                onPressed: controller.canUndo
-                    ? () => _action(() => controller.undo())
-                    : null,
-              ),
-              IconButton(
-                icon: const Icon(Icons.redo),
-                tooltip: 'Redo (Cmd+Shift+Z)',
-                splashRadius: 1,
-                onPressed: controller.canRedo
-                    ? () => _action(() => controller.redo())
-                    : null,
-              ),
-            ],
-          ),
-        ),
         );
       },
     );

@@ -76,6 +76,7 @@ class _EditorScreenState extends State<EditorScreen> {
         blockType: BlockType.listItem,
         segments: [const StyledSegment('Tab to indent, Shift+Tab to outdent')],
       ),
+      TextBlock(id: 'bdiv', blockType: BlockType.divider),
       TextBlock(
         id: 'b5',
         blockType: BlockType.numberedList,
@@ -109,7 +110,9 @@ class _EditorScreenState extends State<EditorScreen> {
         TaskItemRule(), // "- [ ] " before "- " — order matters
         ListItemRule(),
         NumberedListRule(),
+        DividerRule(),
         EmptyListItemRule(),
+        DividerBackspaceRule(),
         ListItemBackspaceRule(),
         NestedBackspaceRule(),
         BoldWrapRule(), // ** before * — order matters
@@ -147,7 +150,8 @@ class _EditorScreenState extends State<EditorScreen> {
     }
 
     // Cmd/Ctrl shortcuts.
-    final isMeta = HardwareKeyboard.instance.isMetaPressed ||
+    final isMeta =
+        HardwareKeyboard.instance.isMetaPressed ||
         HardwareKeyboard.instance.isControlPressed;
     if (!isMeta) return KeyEventResult.ignored;
 
@@ -190,10 +194,7 @@ class _EditorScreenState extends State<EditorScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Toolbar.
-            EditorToolbar(
-              controller: _controller,
-              editorFocusNode: _focusNode,
-            ),
+            EditorToolbar(controller: _controller, editorFocusNode: _focusNode),
             const SizedBox(height: 8),
             // The editor — wrapped in Focus to intercept Tab/Shift+Tab.
             Expanded(
@@ -239,10 +240,9 @@ class _EditorScreenState extends State<EditorScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      ..._controller.document.allBlocks
-                          .asMap()
-                          .entries
-                          .map((entry) {
+                      ..._controller.document.allBlocks.asMap().entries.map((
+                        entry,
+                      ) {
                         final i = entry.key;
                         final block = entry.value;
                         final depth = _controller.document.depthOf(i);

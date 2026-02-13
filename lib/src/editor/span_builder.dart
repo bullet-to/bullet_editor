@@ -35,10 +35,24 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
     final block = flat[i];
     final bStyle = _blockBaseStyle(block.blockType, style, schema);
 
+    final def = schema.blockDef(block.blockType);
+
+    // Void blocks (e.g. divider): the WidgetSpan IS the entire visual content.
+    // No text spans are emitted — the prefix occupies the full line.
+    if (def.isVoid && hasPrefix(doc, i, schema)) {
+      final prefixWidget = def.prefixBuilder?.call(doc, i, block);
+      children.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: prefixWidget ?? const SizedBox.shrink(),
+        ),
+      );
+      continue;
+    }
+
     // Visual prefix: bullet, number, checkbox, or indentation spacer.
     if (hasPrefix(doc, i, schema)) {
       final depth = doc.depthOf(i);
-      final def = schema.blockDef(block.blockType);
       final prefixWidget = def.prefixBuilder?.call(doc, i, block);
       children.add(
         WidgetSpan(
@@ -52,7 +66,10 @@ TextSpan buildDocumentSpan(Document doc, TextStyle? style, EditorSchema schema) 
     }
 
     if (block.segments.isEmpty) {
-      children.add(TextSpan(text: '', style: bStyle));
+      // Use zero-width space for empty blocks so the line has layout metrics
+      // and the cursor renders on the correct line (not stuck on the previous).
+      final placeholder = hasPrefix(doc, i, schema) ? '' : '\u200B';
+      children.add(TextSpan(text: placeholder, style: bStyle));
     } else {
       for (final seg in block.segments) {
         children.add(

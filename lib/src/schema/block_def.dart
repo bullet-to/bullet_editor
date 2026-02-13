@@ -16,11 +16,17 @@ class BlockDef {
     required this.label,
     this.policies = const BlockPolicies(),
     this.isListLike = false,
+    this.isVoid = false,
     this.splitInheritsType = false,
     this.baseStyle,
     this.prefixBuilder,
     this.codecs,
-  });
+  })  : assert(!isVoid || prefixBuilder != null,
+            'Void blocks must have a prefixBuilder (it is their visual content)'),
+        assert(!isVoid || !isListLike,
+            'Void blocks cannot be list-like'),
+        assert(!isVoid || !splitInheritsType,
+            'Void blocks should not use splitInheritsType');
 
   /// Human-readable label for toolbars and UI (e.g. "Heading 1", "Paragraph").
   final String label;
@@ -32,6 +38,11 @@ class BlockDef {
   /// nesting via indent/outdent, Enter creates a sibling, empty+Enter
   /// converts to paragraph.
   final bool isListLike;
+
+  /// Whether this block has no editable text content (e.g. divider).
+  /// Void blocks render entirely through their [prefixBuilder] and the cursor
+  /// skips over them.
+  final bool isVoid;
 
   /// Whether Enter (SplitBlock) creates a new block of the same type.
   /// True for list-like blocks. False for headings (Enter creates paragraph).

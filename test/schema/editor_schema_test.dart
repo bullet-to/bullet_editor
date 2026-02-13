@@ -1,23 +1,28 @@
+import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:bullet_editor/bullet_editor.dart';
 
 void main() {
   group('EditorSchema', () {
     test('standard() contains all built-in block types', () {
       final schema = EditorSchema.standard();
       for (final type in BlockType.values) {
-        expect(schema.blocks.containsKey(type), isTrue,
-            reason: '$type missing from standard schema');
+        expect(
+          schema.blocks.containsKey(type),
+          isTrue,
+          reason: '$type missing from standard schema',
+        );
       }
     });
 
     test('standard() contains all built-in inline styles', () {
       final schema = EditorSchema.standard();
       for (final style in InlineStyle.values) {
-        expect(schema.inlineStyles.containsKey(style), isTrue,
-            reason: '$style missing from standard schema');
+        expect(
+          schema.inlineStyles.containsKey(style),
+          isTrue,
+          reason: '$style missing from standard schema',
+        );
       }
     });
 
@@ -68,6 +73,7 @@ void main() {
       expect(schema.blockDef(BlockType.listItem).label, 'Bullet List');
       expect(schema.blockDef(BlockType.numberedList).label, 'Numbered List');
       expect(schema.blockDef(BlockType.taskItem).label, 'Task');
+      expect(schema.blockDef(BlockType.divider).label, 'Divider');
     });
 
     test('h1 baseStyle returns larger bold font', () {
@@ -116,8 +122,9 @@ void main() {
     test('strikethrough applyStyle adds lineThrough', () {
       final schema = EditorSchema.standard();
       const base = TextStyle(fontSize: 14);
-      final result =
-          schema.inlineStyleDef(InlineStyle.strikethrough).applyStyle(base);
+      final result = schema
+          .inlineStyleDef(InlineStyle.strikethrough)
+          .applyStyle(base);
       expect(result.decoration, TextDecoration.lineThrough);
     });
 
@@ -199,10 +206,7 @@ void main() {
       final rule = PrefixBlockRule('##', BlockType.h2);
       // Doc has "##" typed so far; user types space.
       final doc = Document([
-        TextBlock(
-          id: 'a',
-          segments: [const StyledSegment('##')],
-        ),
+        TextBlock(id: 'a', segments: [const StyledSegment('##')]),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 2, ' ')],
@@ -218,10 +222,7 @@ void main() {
     test('### space converts to H3', () {
       final rule = PrefixBlockRule('###', BlockType.h3);
       final doc = Document([
-        TextBlock(
-          id: 'a',
-          segments: [const StyledSegment('###')],
-        ),
+        TextBlock(id: 'a', segments: [const StyledSegment('###')]),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 3, ' ')],
@@ -238,10 +239,7 @@ void main() {
       final rule = PrefixBlockRule('##', BlockType.h2);
       // Doc has "##hello" typed; user inserts space at offset 2.
       final doc = Document([
-        TextBlock(
-          id: 'a',
-          segments: [const StyledSegment('##hello')],
-        ),
+        TextBlock(id: 'a', segments: [const StyledSegment('##hello')]),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 2, ' ')],

@@ -7,11 +7,20 @@ import '../schema/editor_schema.dart';
 /// Occupies exactly 1 offset position in the display text.
 const prefixChar = '\uFFFC';
 
-/// Whether a block gets a visual prefix WidgetSpan (bullet, number, checkbox, indent).
-/// All list-like blocks get a prefix. Nested non-list blocks get indentation.
+/// Zero-width space used as a placeholder for empty blocks so they occupy
+/// a visual line and the cursor has somewhere to render. Display-only — does
+/// not exist in the model.
+const emptyBlockChar = '\u200B';
+
+/// Whether a block gets a visual prefix WidgetSpan (bullet, number, checkbox,
+/// indent, or void block visual).
+/// List-like blocks get a prefix. Nested non-list blocks get indentation.
+/// Void blocks (e.g. divider) always get a prefix — it IS their visual content.
 bool hasPrefix(Document doc, int flatIndex, EditorSchema schema) {
   final block = doc.allBlocks[flatIndex];
-  return schema.isListLike(block.blockType) || doc.depthOf(flatIndex) > 0;
+  return schema.isListLike(block.blockType) ||
+      schema.isVoid(block.blockType) ||
+      doc.depthOf(flatIndex) > 0;
 }
 
 /// Convert a display offset (TextField) to a model offset (Document).
@@ -41,6 +50,12 @@ int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
 
     displayPos += blockLen;
     modelPos += blockLen;
+
+    // Empty block placeholder — display only, after the (empty) content.
+    if (_needsEmptyPlaceholder(doc, i, schema)) {
+      if (displayOffset <= displayPos) return modelPos;
+      displayPos++;
+    }
   }
 
   return modelPos;
@@ -70,6 +85,11 @@ int modelToDisplay(Document doc, int modelOffset, EditorSchema schema) {
 
     displayPos += blockLen;
     modelPos += blockLen;
+
+    // Empty block placeholder — display only.
+    if (_needsEmptyPlaceholder(doc, i, schema)) {
+      displayPos++;
+    }
   }
 
   return displayPos;
@@ -121,8 +141,17 @@ TextSelection? skipPrefixChars(
   );
 }
 
+/// Whether an empty block needs a zero-width placeholder to give it a visual
+/// line for cursor rendering. Only needed when the block has no prefix
+/// (prefixed blocks already have a WidgetSpan providing layout content).
+bool _needsEmptyPlaceholder(Document doc, int flatIndex, EditorSchema schema) {
+  return doc.allBlocks[flatIndex].length == 0 &&
+      !hasPrefix(doc, flatIndex, schema);
+}
+
 /// Build the display text: model text with prefix placeholder chars inserted
-/// before each block that has a visual prefix.
+/// before each block that has a visual prefix, and zero-width spaces for
+/// empty non-prefixed blocks.
 String buildDisplayText(Document doc, EditorSchema schema) {
   final flat = doc.allBlocks;
   final buf = StringBuffer();
@@ -130,6 +159,7 @@ String buildDisplayText(Document doc, EditorSchema schema) {
     if (i > 0) buf.write('\n');
     if (hasPrefix(doc, i, schema)) buf.write(prefixChar);
     buf.write(flat[i].plainText);
+    if (_needsEmptyPlaceholder(doc, i, schema)) buf.write(emptyBlockChar);
   }
   return buf.toString();
 }
