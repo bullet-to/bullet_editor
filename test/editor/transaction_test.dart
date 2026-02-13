@@ -488,4 +488,38 @@ void main() {
       );
     });
   });
+
+  group('DeleteText preserves attributes', () {
+    test('deleting part of a link segment keeps URL', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment(
+              'link', {InlineStyle.link}, {'url': 'https://flutter.dev'}),
+        ]),
+      ]);
+      final result = DeleteText(0, 3, 1).apply(doc);
+      final seg = result.allBlocks[0].segments[0];
+      expect(seg.text, 'lin');
+      expect(seg.styles, {InlineStyle.link});
+      expect(seg.attributes['url'], 'https://flutter.dev');
+    });
+  });
+
+  group('SplitBlock preserves attributes', () {
+    test('splitting inside a link segment keeps URL on both halves', () {
+      final doc = Document([
+        TextBlock(id: 'a', segments: [
+          const StyledSegment(
+              'click here', {InlineStyle.link}, {'url': 'https://x.com'}),
+        ]),
+      ]);
+      final result = SplitBlock(0, 5).apply(doc);
+      final seg0 = result.allBlocks[0].segments[0];
+      final seg1 = result.allBlocks[1].segments[0];
+      expect(seg0.text, 'click');
+      expect(seg0.attributes['url'], 'https://x.com');
+      expect(seg1.text, ' here');
+      expect(seg1.attributes['url'], 'https://x.com');
+    });
+  });
 }

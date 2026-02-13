@@ -555,10 +555,10 @@ List<StyledSegment> _spliceDelete(
         (deleteEnd - segStart).clamp(0, seg.text.length),
       );
       if (keepBefore.isNotEmpty) {
-        result.add(StyledSegment(keepBefore, seg.styles));
+        result.add(StyledSegment(keepBefore, seg.styles, seg.attributes));
       }
       if (keepAfter.isNotEmpty) {
-        result.add(StyledSegment(keepAfter, seg.styles));
+        result.add(StyledSegment(keepAfter, seg.styles, seg.attributes));
       }
     }
 
@@ -585,17 +585,21 @@ List<StyledSegment> _splitSegmentsAt(
       if (segEnd <= offset) {
         result.add(seg);
       } else if (segStart < offset) {
-        result.add(
-          StyledSegment(seg.text.substring(0, offset - segStart), seg.styles),
-        );
+        result.add(StyledSegment(
+          seg.text.substring(0, offset - segStart),
+          seg.styles,
+          seg.attributes,
+        ));
       }
     } else {
       if (segStart >= offset) {
         result.add(seg);
       } else if (segEnd > offset) {
-        result.add(
-          StyledSegment(seg.text.substring(offset - segStart), seg.styles),
-        );
+        result.add(StyledSegment(
+          seg.text.substring(offset - segStart),
+          seg.styles,
+          seg.attributes,
+        ));
       }
     }
 
