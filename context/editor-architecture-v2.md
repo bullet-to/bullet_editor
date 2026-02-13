@@ -259,7 +259,16 @@ class ImageBlock extends Block {
 - `buildTextSpan()` emits a `WidgetSpan` at that position, rendering the block's widget.
 - Cursor treats the widget as 1 character — arrow keys skip past it, selection includes it, delete removes it. All native TextField behavior.
 - Offset mapping stays 1:1 (the widget is 1 char in the string).
-- **Editing inside widget blocks** (e.g. typing in a table cell) requires nested focus management — the WidgetSpan's widget gets its own TextField. This is the main complexity and should be prototyped early.
+- **Editing inside widget blocks** (e.g. typing in a table cell) requires nested focus management — the WidgetSpan's widget gets its own TextField. This is the main complexity.
+
+#### WidgetSpan Probe Results (Phase 3)
+
+Tested embedding a nested TextField inside a WidgetSpan within the outer TextField. Findings:
+
+- **Non-interactive WidgetSpan works:** rendering, offset mapping (1 char = 1 widget), cursor stepping over the placeholder, delete removing it — all work correctly.
+- **Interactive WidgetSpan does NOT work:** the outer TextField intercepts touch events before they reach the nested TextField. Both TextFields show carets simultaneously. Focus coordination via FocusNode.unfocus/requestFocus does not help because the gesture never reaches the inner widget.
+- **Conclusion:** The single-TextField approach supports non-interactive embeds (images, dividers, read-only widgets). For interactive embeds (table cells, editable widgets), a per-block rendering approach is needed — each interactive block gets its own TextField widget, rendered in a Column/ListView, with focus management between them. This is the same approach super_editor uses.
+- **Impact on architecture:** The model, transactions, operations, input rules, and codec are rendering-agnostic — they don't change. Only the controller/rendering layer would need a second implementation for interactive embeds. The current single-TextField renderer remains valid for text-only documents.
 
 ### Tree operations
 
