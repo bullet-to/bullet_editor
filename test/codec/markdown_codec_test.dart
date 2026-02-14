@@ -492,6 +492,27 @@ void main() {
       expect(segs[0].styles, {InlineStyle.bold, InlineStyle.italic});
     });
 
+    test('encode empty paragraph adds one extra blank line', () {
+      // Without empty para: "above\n\n## Heading" (one blank line).
+      // With empty para: "above\n\n\n## Heading" (two blank lines visible).
+      // The empty para contributes one extra \n.
+      final withEmpty = Document([
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+        TextBlock(id: 'c', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+      ]);
+      final without = Document([
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(id: 'c', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+      ]);
+      final resultWith = codec.encode(withEmpty);
+      final resultWithout = codec.encode(without);
+
+      expect(resultWithout, 'above\n\n## Heading');
+      // The empty paragraph should add exactly one extra newline.
+      expect(resultWith, 'above\n\n\n## Heading');
+    });
+
     test('full document round-trip preserves structure', () {
       final md = '# Welcome\n\n'
           'Paragraph\n\n'

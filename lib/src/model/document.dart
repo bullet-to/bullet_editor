@@ -213,6 +213,12 @@ class Document<B> {
     return Document(_insertAfterInTree(blocks, targetId, newBlock));
   }
 
+  /// Insert a block as a sibling before the block at flat index.
+  Document<B> insertBeforeFlatIndex(int flatIndex, TextBlock<B> newBlock) {
+    final targetId = allBlocks[flatIndex].id;
+    return Document(_insertBeforeInTree(blocks, targetId, newBlock));
+  }
+
   /// Add [child] as the last child of the block at [flatIndex].
   Document<B> addChild(int flatIndex, TextBlock<B> child) {
     final flat = allBlocks;
@@ -327,6 +333,11 @@ List<TextBlock<B>> _removePromoteChildren<B>(
 List<TextBlock<B>> _insertAfterInTree<B>(
     List<TextBlock<B>> nodes, String targetId, TextBlock<B> newBlock) {
   return _visitTree(nodes, targetId, (node) => [node, newBlock]).$1;
+}
+
+List<TextBlock<B>> _insertBeforeInTree<B>(
+    List<TextBlock<B>> nodes, String targetId, TextBlock<B> newBlock) {
+  return _visitTree(nodes, targetId, (node) => [newBlock, node]).$1;
 }
 
 int? _depthInTree<B>(List<TextBlock<B>> nodes, String targetId, int currentDepth) {

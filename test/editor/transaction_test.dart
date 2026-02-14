@@ -187,6 +187,51 @@ void main() {
   });
 
   group('SplitBlock with block types', () {
+    test('Enter at start of heading inserts empty paragraph before, heading keeps type', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('Title')],
+        ),
+      ]);
+      final result = SplitBlock(0, 0, defaultBlockType: BlockType.paragraph).apply(doc);
+      expect(result.blocks.length, 2);
+      // First block: empty paragraph (the new line inserted before).
+      expect(result.blocks[0].blockType, BlockType.paragraph);
+      expect(result.blocks[0].plainText, '');
+      // Second block: H1 keeps its type and content.
+      expect(result.blocks[1].blockType, BlockType.h1);
+      expect(result.blocks[1].plainText, 'Title');
+    });
+
+    test('Enter at start of parent list item preserves children', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent')],
+          children: [
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('Child')]),
+          ],
+        ),
+      ]);
+      final result = SplitBlock(0, 0,
+              defaultBlockType: BlockType.paragraph,
+              isListLikeFn: (t) => t == BlockType.listItem)
+          .apply(doc);
+      // New empty list item before, original keeps type + children.
+      final flat = result.allBlocks;
+      expect(flat.length, 3); // empty + Parent + Child
+      expect(flat[0].plainText, '');
+      expect(flat[1].plainText, 'Parent');
+      expect(flat[1].blockType, BlockType.listItem);
+      // Children still attached to Parent.
+      final parent = result.blocks.firstWhere((b) => b.plainText == 'Parent');
+      expect(parent.children.length, 1);
+      expect(parent.children[0].plainText, 'Child');
+    });
+
     test('Enter on heading creates paragraph', () {
       final doc = Document([
         TextBlock(

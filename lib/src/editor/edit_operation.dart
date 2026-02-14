@@ -180,14 +180,27 @@ class SplitBlock extends EditOperation {
   @override
   Document<B> apply<B>(Document<B> doc) {
     final block = doc.allBlocks[blockIndex];
-    final (beforeSegments, afterSegments) = splitSegmentsAt(
-      block.segments,
-      offset,
-    );
 
     final listLike = isListLikeFn?.call(block.blockType as Object) ?? false;
     final B newBlockType =
         listLike ? block.blockType : (defaultBlockType as B? ?? block.blockType);
+
+    // Split at start of a non-empty block: insert an empty line BEFORE the
+    // current block. The current block keeps its type, content, and children.
+    // For empty blocks (e.g. divider rule creating a trailing paragraph),
+    // fall through to the normal split which inserts after.
+    if (offset == 0 && block.plainText.isNotEmpty) {
+      final emptyBlock = TextBlock<B>(
+        id: generateBlockId(),
+        blockType: newBlockType,
+      );
+      return doc.insertBeforeFlatIndex(blockIndex, emptyBlock);
+    }
+
+    final (beforeSegments, afterSegments) = splitSegmentsAt(
+      block.segments,
+      offset,
+    );
 
     // For tasks, new block starts unchecked.
     final newMetadata = block.blockType == BlockType.taskItem
@@ -466,6 +479,9 @@ class PasteBlocks extends EditOperation {
       id: generateBlockId(),
       blockType: lastPasted.blockType as B,
       segments: mergeSegments([...lastPasted.segments, ...tailSegs]),
+      children: lastPasted.children.isNotEmpty
+          ? lastPasted.children.map((c) => _recastBlock<B>(c)).toList()
+          : const [],
     );
 
     // 4. Middle blocks (if any) go between head and tail.

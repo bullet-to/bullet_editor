@@ -38,7 +38,11 @@ class MarkdownCodec {
         final curr = entries[i];
         final tightPair = _schema.isListLike(prev.blockType) &&
             _schema.isListLike(curr.blockType);
-        buf.write(tightPair ? '\n' : '\n\n');
+        // An empty block already contributes "" as its line, so the \n\n
+        // separator before it produces one blank line. Use \n after
+        // an empty line so the next block isn't double-spaced.
+        final afterEmpty = prev.line.isEmpty;
+        buf.write(tightPair || afterEmpty ? '\n' : '\n\n');
       }
       buf.write(entries[i].line);
     }

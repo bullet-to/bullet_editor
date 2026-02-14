@@ -1917,6 +1917,60 @@ void main() {
         ), isTrue);
       });
 
+      test('pasting markdown with nested list preserves nesting and cursor', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Welcome')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('Body')]),
+            TextBlock(id: 'c', blockType: BlockType.paragraph, segments: const []),
+            TextBlock(id: 'd', blockType: BlockType.h2, segments: [const StyledSegment('Heading 2')]),
+          ]),
+        );
+
+        // Place cursor on empty paragraph [2].
+        final emptyPos = controller.text.indexOf('\u200B');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: emptyPos),
+        );
+
+        // Paste "### Heading 3 example\n\n- Parent item\n  - Nested child"
+        const md = '### Heading 3 example\n\n- Parent item\n  - Nested child';
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, emptyPos) + md + before.substring(emptyPos),
+          selection: TextSelection.collapsed(offset: emptyPos + md.length),
+        );
+
+        final blocks = controller.document.allBlocks;
+        // Should have: Welcome, Body, H3, Parent (with Nested child), H2
+        expect(blocks.any((b) => b.blockType == BlockType.h3), isTrue,
+            reason: 'should have H3 block');
+        expect(blocks.any((b) => b.plainText == 'Parent item'), isTrue,
+            reason: 'should have Parent item');
+        expect(blocks.any((b) => b.plainText == 'Nested child'), isTrue,
+            reason: 'Nested child must not be lost');
+
+        // Nested child should be a child of Parent item.
+        final parent = blocks.firstWhere((b) => b.plainText == 'Parent item');
+        expect(parent.children.length, 1,
+            reason: 'Parent should have Nested child as child');
+        expect(parent.children[0].plainText, 'Nested child');
+
+        // H2 should still exist.
+        expect(blocks.any((b) => b.blockType == BlockType.h2), isTrue,
+            reason: 'H2 should survive');
+
+        // Cursor should be after the pasted content, not in the H2.
+        final modelCursor = controller.displayToModel(
+          controller.value.selection.baseOffset,
+        );
+        final cursorBlock = controller.document.blockAt(modelCursor);
+        expect(cursorBlock.blockIndex, lessThan(blocks.indexOf(
+          blocks.firstWhere((b) => b.blockType == BlockType.h2),
+        )), reason: 'cursor should be before the H2, not inside it');
+      });
+
       test('paste on heading does not make everything a heading', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
