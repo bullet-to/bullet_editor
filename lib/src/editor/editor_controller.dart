@@ -31,10 +31,11 @@ class EditorController<B extends Object, S extends Object>
     LinkTapCallback? onLinkTap,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
-  }) : assert(B != Object && S != Object,
-            'EditorController requires explicit type parameters.\n'
-            'Use EditorController<BlockType, InlineStyle>(...) '
-            'instead of EditorController(...).',
+  }) : assert(
+         B != Object && S != Object,
+         'EditorController requires explicit type parameters.\n'
+         'Use EditorController<BlockType, InlineStyle>(...) '
+         'instead of EditorController(...).',
        ),
        _document = document ?? Document.empty(schema.defaultBlockType),
        _schema = schema,
@@ -119,7 +120,12 @@ class EditorController<B extends Object, S extends Object>
   void _forEachBlockInRange(
     int start,
     int end,
-    void Function(int flatIndex, TextBlock<B> block, int localStart, int localEnd)
+    void Function(
+      int flatIndex,
+      TextBlock<B> block,
+      int localStart,
+      int localEnd,
+    )
     visitor,
   ) {
     final startPos = _document.blockAt(start);
@@ -335,9 +341,12 @@ class EditorController<B extends Object, S extends Object>
     );
 
     // Split current block at cursor position.
-    _document = SplitBlock(pos.blockIndex, pos.localOffset,
-        defaultBlockType: _schema.defaultBlockType,
-        isListLikeFn: _schema.isListLike).apply(_document);
+    _document = SplitBlock(
+      pos.blockIndex,
+      pos.localOffset,
+      defaultBlockType: _schema.defaultBlockType,
+      isListLikeFn: _schema.isListLike,
+    ).apply(_document);
     // Insert divider between the two halves.
     _document = _document.insertAfterFlatIndex(pos.blockIndex, dividerBlock);
     // Cursor goes to the block after the divider (pos.blockIndex + 2).
@@ -396,9 +405,6 @@ class EditorController<B extends Object, S extends Object>
       TextSelection(baseOffset: start, extentOffset: end),
     );
     _syncToTextField(modelSelection: modelSel);
-    // Inline style changes don't alter display text, so _syncToTextField may
-    // not trigger notifyListeners. Explicit notify for toolbar rebuild.
-    notifyListeners();
   }
 
   /// Apply a link to the current selection.
@@ -465,7 +471,6 @@ class EditorController<B extends Object, S extends Object>
       TextSelection(baseOffset: start, extentOffset: end),
     );
     _syncToTextField(modelSelection: modelSel);
-    notifyListeners();
   }
 
   /// Change the block type of the block at the cursor position.
@@ -532,7 +537,6 @@ class EditorController<B extends Object, S extends Object>
         ? _selectionToModel(value.selection)
         : null;
     _syncToTextField(modelSelection: modelSel);
-    notifyListeners();
   }
 
   // -- Edit pipeline --
@@ -684,8 +688,7 @@ class EditorController<B extends Object, S extends Object>
     final modelDiff = TextDiff(modelStart, modelDeletedLength, cleanInserted);
     final modelSelection = _selectionToModel(value.selection);
 
-    final (tx, pasteCursor) =
-        _transactionFromDiff(modelDiff, modelSelection);
+    final (tx, pasteCursor) = _transactionFromDiff(modelDiff, modelSelection);
     if (tx == null) {
       _previousValue = value;
       if (!isComposing && _preComposingValue != null) {
@@ -708,23 +711,19 @@ class EditorController<B extends Object, S extends Object>
   /// Returns (transaction, optional model-space cursor override).
   /// The cursor override is used by paste to position the cursor correctly.
   (Transaction?, TextSelection?) _transactionFromDiff(
-      TextDiff diff, TextSelection selection) {
+    TextDiff diff,
+    TextSelection selection,
+  ) {
     if (diff.deletedLength == 0 && diff.insertedText.isEmpty) {
       return (null, null);
     }
 
-    // Tab → indent (any indentable block, not just list-like).
+    // Tab character — strip it. Indent is handled by BulletEditor's
+    // onKeyEvent (which must intercept Tab to prevent focus traversal).
+    // If \t somehow reaches here (e.g. external paste), just discard it.
     if (diff.insertedText == '\t' && diff.deletedLength == 0) {
-      final pos = _document.blockAt(diff.start);
-      return (
-        Transaction(
-          operations: [
-            IndentBlock(pos.blockIndex, policies: _schema.policies),
-          ],
-          selectionAfter: selection,
-        ),
-        null,
-      );
+      _syncToTextField(modelSelection: selection);
+      return (null, null);
     }
 
     // Multi-character insert (paste heuristic): try markdown decode.
@@ -740,9 +739,14 @@ class EditorController<B extends Object, S extends Object>
       final pos = _document.blockAt(diff.start);
       return (
         Transaction(
-          operations: [SplitBlock(pos.blockIndex, pos.localOffset,
+          operations: [
+            SplitBlock(
+              pos.blockIndex,
+              pos.localOffset,
               defaultBlockType: _schema.defaultBlockType,
-              isListLikeFn: _schema.isListLike)],
+              isListLikeFn: _schema.isListLike,
+            ),
+          ],
           selectionAfter: selection,
         ),
         null,
@@ -801,7 +805,9 @@ class EditorController<B extends Object, S extends Object>
       if (startPos.localOffset == 0 && diff.insertedText.isEmpty) {
         final blockType = _document.allBlocks[startPos.blockIndex].blockType;
         if (blockType != _schema.defaultBlockType) {
-          ops.add(ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType));
+          ops.add(
+            ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType),
+          );
         }
       }
 
@@ -810,17 +816,20 @@ class EditorController<B extends Object, S extends Object>
 
     // Pure insert (no delete).
     if (diff.insertedText.isNotEmpty) {
-      return (Transaction(
-        operations: [
-          InsertText(
-            startPos.blockIndex,
-            startPos.localOffset,
-            diff.insertedText,
-            styles: _activeStyles,
-          ),
-        ],
-        selectionAfter: selection,
-      ), null);
+      return (
+        Transaction(
+          operations: [
+            InsertText(
+              startPos.blockIndex,
+              startPos.localOffset,
+              diff.insertedText,
+              styles: _activeStyles,
+            ),
+          ],
+          selectionAfter: selection,
+        ),
+        null,
+      );
     }
 
     return (null, null);
@@ -831,7 +840,9 @@ class EditorController<B extends Object, S extends Object>
   /// Try to decode pasted text as markdown. Returns (transaction, modelCursor)
   /// if the decoded result has formatting, or null to fall through.
   (Transaction, TextSelection)? _tryMarkdownPaste(
-      TextDiff diff, TextSelection selection) {
+    TextDiff diff,
+    TextSelection selection,
+  ) {
     final codec = MarkdownCodec(schema: _schema);
     final decoded = codec.decode(diff.insertedText);
     final blocks = decoded.allBlocks;
@@ -922,6 +933,10 @@ class EditorController<B extends Object, S extends Object>
       ),
       composing: composing,
     );
+    // Always notify even if the TextEditingValue is identical — the document
+    // structure may have changed (e.g. indent/outdent) which affects
+    // buildTextSpan output without changing the raw display text.
+    notifyListeners();
     _previousValue = value;
     _isSyncing = false;
   }

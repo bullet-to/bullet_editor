@@ -283,8 +283,8 @@ class _EditorScreenState extends State<EditorScreen> {
     return buf.toString();
   }
 
-  /// App-level keyboard shortcuts (copy/cut with markdown encoding).
-  /// Tab, Shift+Tab, Cmd+Z, Cmd+Shift+Z are handled by BulletEditor.
+  /// App-level keyboard shortcuts. Copy/cut/paste, Tab, undo/redo are
+  /// handled by BulletEditor.
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -296,35 +296,6 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!isMeta) return KeyEventResult.ignored;
 
     switch (event.logicalKey) {
-      case LogicalKeyboardKey.keyC:
-        // Rich copy: encode selection as markdown.
-        final md = _controller.encodeSelection();
-        if (md != null) {
-          Clipboard.setData(ClipboardData(text: md));
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored; // no selection, let Flutter handle
-      case LogicalKeyboardKey.keyX:
-        // Rich cut: encode selection as markdown + delete selection.
-        // Must handle both ourselves — returning ignored would let Flutter
-        // overwrite our markdown clipboard with plain text.
-        final md = _controller.encodeSelection();
-        if (md != null) {
-          Clipboard.setData(ClipboardData(text: md));
-          // Delete the selection by simulating an empty replacement.
-          final sel = _controller.value.selection;
-          if (!sel.isCollapsed) {
-            final start = sel.start;
-            _controller.value = _controller.value.copyWith(
-              text:
-                  _controller.text.substring(0, sel.start) +
-                  _controller.text.substring(sel.end),
-              selection: TextSelection.collapsed(offset: start),
-            );
-          }
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
       case LogicalKeyboardKey.keyB:
         _controller.toggleStyle(InlineStyle.bold);
         setState(() {});

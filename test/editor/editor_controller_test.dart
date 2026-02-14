@@ -1977,7 +1977,7 @@ void main() {
     });
 
     group('Tab indent', () {
-      test('Tab indents a list item under its previous sibling', () {
+      test('indent() nests a list item under its previous sibling', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -1986,27 +1986,19 @@ void main() {
           ]),
         );
 
-        // Place cursor in the second list item "second".
-        // Display: "• first\n• second" — find the offset of 'second'.
         final secondStart = controller.text.indexOf('second');
         controller.value = controller.value.copyWith(
           selection: TextSelection.collapsed(offset: secondStart),
         );
 
-        // Simulate Tab key: insert \t at cursor position.
-        final before = controller.text;
-        controller.value = controller.value.copyWith(
-          text: before.substring(0, secondStart) + '\t' + before.substring(secondStart),
-          selection: TextSelection.collapsed(offset: secondStart + 1),
-        );
+        controller.indent();
 
-        // "second" should now be nested under "first".
         expect(controller.document.blocks.length, 1);
         expect(controller.document.blocks[0].children.length, 1);
         expect(controller.document.blocks[0].children[0].plainText, 'second');
       });
 
-      test('Tab does nothing for first block (no previous sibling)', () {
+      test('indent() is no-op for first block (no previous sibling)', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2019,15 +2011,94 @@ void main() {
           selection: TextSelection.collapsed(offset: cursorPos),
         );
 
-        final before = controller.text;
-        controller.value = controller.value.copyWith(
-          text: before.substring(0, cursorPos) + '\t' + before.substring(cursorPos),
-          selection: TextSelection.collapsed(offset: cursorPos + 1),
-        );
+        controller.indent();
 
-        // Still one root block, no nesting.
         expect(controller.document.blocks.length, 1);
         expect(controller.document.blocks[0].children, isEmpty);
+      });
+
+      test('indent() notifies listeners even when display text is unchanged', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+          ]),
+        );
+
+        final secondStart = controller.text.indexOf('second');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: secondStart),
+        );
+
+        final textBefore = controller.text;
+        var notified = false;
+        controller.addListener(() => notified = true);
+
+        controller.indent();
+
+        // Display text is the same (prefix/spacer chars unchanged by nesting).
+        expect(controller.text, textBefore);
+        // But listeners MUST fire so the TextField rebuilds buildTextSpan.
+        expect(notified, isTrue);
+        // Document structure did change.
+        expect(controller.document.blocks[0].children.length, 1);
+      });
+
+      test('outdent() notifies listeners even when display text is unchanged', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+              ],
+            ),
+          ]),
+        );
+
+        final childStart = controller.text.indexOf('child');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: childStart),
+        );
+
+        final textBefore = controller.text;
+        var notified = false;
+        controller.addListener(() => notified = true);
+
+        controller.outdent();
+
+        expect(controller.text, textBefore);
+        expect(notified, isTrue);
+        expect(controller.document.blocks.length, 2);
+      });
+
+      test('\\t in text diff is stripped (indent is via onKeyEvent only)', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+          ]),
+        );
+
+        final secondStart = controller.text.indexOf('second');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: secondStart),
+        );
+
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, secondStart) + '\t' + before.substring(secondStart),
+          selection: TextSelection.collapsed(offset: secondStart + 1),
+        );
+
+        // \t should be stripped, NOT cause indent.
+        expect(controller.document.blocks.length, 2);
+        expect(controller.text.contains('\t'), isFalse);
       });
     });
 
@@ -2064,7 +2135,11 @@ void main() {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Title')],
+            ),
           ]),
         );
 
@@ -2079,12 +2154,17 @@ void main() {
 
         // Simulate cut: replace selection with empty.
         controller.value = controller.value.copyWith(
-          text: controller.text.substring(0, tStart) + controller.text.substring(lEnd),
+          text:
+              controller.text.substring(0, tStart) +
+              controller.text.substring(lEnd),
           selection: TextSelection.collapsed(offset: tStart),
         );
 
         // Block should be converted to paragraph with remaining text "e".
-        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(
+          controller.document.allBlocks.first.blockType,
+          BlockType.paragraph,
+        );
         expect(controller.document.allBlocks.first.plainText, 'e');
       });
 
@@ -2092,7 +2172,11 @@ void main() {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Title')],
+            ),
           ]),
         );
 
@@ -2105,7 +2189,9 @@ void main() {
 
         // Simulate cut: replace selection with empty.
         controller.value = controller.value.copyWith(
-          text: controller.text.substring(0, iStart) + controller.text.substring(lEnd),
+          text:
+              controller.text.substring(0, iStart) +
+              controller.text.substring(lEnd),
           selection: TextSelection.collapsed(offset: iStart),
         );
 
@@ -2118,7 +2204,11 @@ void main() {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('item')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('item')],
+            ),
           ]),
         );
 
@@ -2130,11 +2220,16 @@ void main() {
         );
 
         controller.value = controller.value.copyWith(
-          text: controller.text.substring(0, iStart) + controller.text.substring(eEnd),
+          text:
+              controller.text.substring(0, iStart) +
+              controller.text.substring(eEnd),
           selection: TextSelection.collapsed(offset: iStart),
         );
 
-        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(
+          controller.document.allBlocks.first.blockType,
+          BlockType.paragraph,
+        );
         expect(controller.document.allBlocks.first.plainText, 'm');
       });
     });

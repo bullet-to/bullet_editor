@@ -1,5 +1,6 @@
 import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -170,6 +171,148 @@ void main() {
       );
       expect(segment, isNotNull);
       expect(segment!.styles, isNot(contains(InlineStyle.link)));
+    });
+  });
+
+  group('BulletEditor Tab indent/outdent', () {
+    testWidgets('Tab key indents via onKeyEvent', (tester) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Focus and place cursor in "second".
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      final secondStart = controller.text.indexOf('second');
+      controller.value = controller.value.copyWith(
+        selection: TextSelection.collapsed(offset: secondStart),
+      );
+      await tester.pump();
+
+      // Send Tab key event — handled by onKeyEvent → indent().
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+
+      expect(controller.document.blocks.length, 1,
+          reason: 'second should be nested under first');
+      expect(controller.document.blocks[0].children.length, 1);
+      expect(controller.document.blocks[0].children[0].plainText, 'second');
+      expect(controller.text.contains('\t'), isFalse);
+    });
+
+    testWidgets('Shift+Tab key outdents via onKeyEvent', (tester) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('parent')],
+            children: [
+              TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+            ],
+          ),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Focus and place cursor in "child".
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      final childStart = controller.text.indexOf('child');
+      controller.value = controller.value.copyWith(
+        selection: TextSelection.collapsed(offset: childStart),
+      );
+      await tester.pump();
+
+      // Send Shift+Tab.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      // "child" should now be a root sibling.
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[1].plainText, 'child');
+    });
+
+    testWidgets('consecutive Tab then Shift+Tab round-trips', (tester) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      final secondStart = controller.text.indexOf('second');
+      controller.value = controller.value.copyWith(
+        selection: TextSelection.collapsed(offset: secondStart),
+      );
+      await tester.pump();
+
+      // Tab → indent.
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+
+      expect(controller.document.blocks.length, 1,
+          reason: 'second nested under first');
+
+      // Shift+Tab → outdent.
+      final childStart = controller.text.indexOf('second');
+      controller.value = controller.value.copyWith(
+        selection: TextSelection.collapsed(offset: childStart),
+      );
+      await tester.pump();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(controller.document.blocks.length, 2,
+          reason: 'second back at root level');
     });
   });
 

@@ -46,25 +46,111 @@ class BulletEditor<B extends Object, S extends Object> extends StatefulWidget {
 class _BulletEditorState<B extends Object, S extends Object>
     extends State<BulletEditor<B, S>> {
   late final UndoHistoryController _undoHistoryController;
+  late final FocusNode _focusNode;
+  bool _ownsNode = false;
+  FocusOnKeyEventCallback? _originalOnKeyEvent;
 
   @override
   void initState() {
     super.initState();
     _undoHistoryController = UndoHistoryController(value: null);
+    _initFocusNode();
+  }
+
+  @override
+  void didUpdateWidget(covariant BulletEditor<B, S> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusNode != oldWidget.focusNode) {
+      _disposeFocusNode();
+      _initFocusNode();
+    }
+  }
+
+  void _initFocusNode() {
+    if (widget.focusNode != null) {
+      _focusNode = widget.focusNode!;
+      _ownsNode = false;
+    } else {
+      _focusNode = FocusNode();
+      _ownsNode = true;
+    }
+    // Preserve any existing onKeyEvent (e.g. app-level shortcuts) and chain.
+    _originalOnKeyEvent = _focusNode.onKeyEvent;
+    _focusNode.onKeyEvent = _handleKeyEvent;
+  }
+
+  void _disposeFocusNode() {
+    _focusNode.onKeyEvent = _originalOnKeyEvent;
+    _originalOnKeyEvent = null;
+    if (_ownsNode) _focusNode.dispose();
   }
 
   @override
   void dispose() {
     _undoHistoryController.dispose();
+    _disposeFocusNode();
     super.dispose();
+  }
+
+  /// Handle editor key events:
+  /// - Tab / Shift+Tab → indent/outdent (must intercept to prevent focus
+  ///   traversal)
+  /// - Cmd+C / Cmd+X → rich copy/cut (encodes selection as markdown)
+  ///
+  /// Chains to any pre-existing onKeyEvent (e.g. app-level shortcuts).
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      // Tab / Shift+Tab → indent / outdent.
+      if (event.logicalKey == LogicalKeyboardKey.tab) {
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          widget.controller.outdent();
+        } else {
+          widget.controller.indent();
+        }
+        return KeyEventResult.handled;
+      }
+
+      // Cmd/Ctrl + C/X → rich copy/cut with markdown encoding.
+      final isMeta = HardwareKeyboard.instance.isMetaPressed ||
+          HardwareKeyboard.instance.isControlPressed;
+      if (isMeta) {
+        switch (event.logicalKey) {
+          case LogicalKeyboardKey.keyC:
+            final md = widget.controller.encodeSelection();
+            if (md != null) {
+              Clipboard.setData(ClipboardData(text: md));
+              return KeyEventResult.handled;
+            }
+          case LogicalKeyboardKey.keyX:
+            final md = widget.controller.encodeSelection();
+            if (md != null) {
+              Clipboard.setData(ClipboardData(text: md));
+              final sel = widget.controller.value.selection;
+              if (!sel.isCollapsed) {
+                final start = sel.start;
+                widget.controller.value =
+                    widget.controller.value.copyWith(
+                  text: widget.controller.text.substring(0, sel.start) +
+                      widget.controller.text.substring(sel.end),
+                  selection: TextSelection.collapsed(offset: start),
+                );
+              }
+              return KeyEventResult.handled;
+            }
+          default:
+            break;
+        }
+      }
+    }
+    // Fall through to the app's handler if one was set.
+    return _originalOnKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Derive base style from the host app's TextTheme.bodyLarge with a sane
-    // fallback if none is set.
-    final base = widget.style ??
+    final base =
+        widget.style ??
         theme.textTheme.bodyLarge ??
         TextStyle(
           fontSize: 16,
@@ -91,23 +177,9 @@ class _BulletEditorState<B extends Object, S extends Object>
           },
         ),
       },
-      child: Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.tab, shift: true):
-              _OutdentIntent(),
-        },
-        child: Actions(
-          actions: {
-            _OutdentIntent: CallbackAction<_OutdentIntent>(
-              onInvoke: (_) {
-                widget.controller.outdent();
-                return null;
-              },
-            ),
-          },
-          child: TextField(
+      child: TextField(
         controller: widget.controller,
-        focusNode: widget.focusNode,
+        focusNode: _focusNode,
         // Disable Flutter's built-in undo/redo history.
         undoController: _undoHistoryController,
         style: base,
@@ -118,22 +190,27 @@ class _BulletEditorState<B extends Object, S extends Object>
         expands: widget.expands,
         keyboardType: TextInputType.multiline,
         textInputAction: TextInputAction.newline,
-        decoration: widget.decoration ??
+        decoration:
+            widget.decoration ??
             InputDecoration(
               border: InputBorder.none,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
               hintText: 'Start writing...',
               hintStyle: base.copyWith(
-                color: (base.color ?? theme.colorScheme.onSurface)
-                    .withValues(alpha: 0.35),
+                color: (base.color ?? theme.colorScheme.onSurface).withValues(
+                  alpha: 0.35,
+                ),
               ),
             ),
         onTap: () {
           final ctrl = widget.controller;
           if (ctrl.onLinkTap != null && ctrl.value.selection.isValid) {
-            final url =
-                ctrl.linkAtDisplayOffset(ctrl.value.selection.baseOffset);
+            final url = ctrl.linkAtDisplayOffset(
+              ctrl.value.selection.baseOffset,
+            );
             if (url != null) {
               ctrl.onLinkTap!(url);
             }
@@ -141,14 +218,8 @@ class _BulletEditorState<B extends Object, S extends Object>
         },
         scrollController: ScrollController(),
       ),
-      ),
-      ),
     );
   }
-}
-
-class _OutdentIntent extends Intent {
-  const _OutdentIntent();
 }
 
 /// Extension on EditorController for markdown import/export convenience.
