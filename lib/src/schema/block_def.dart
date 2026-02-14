@@ -19,6 +19,7 @@ class BlockDef {
     this.isListLike = false,
     this.isVoid = false,
     this.splitInheritsType = false,
+    this.spacingAfter = 0.0,
     this.baseStyle,
     this.prefixBuilder,
     this.codecs,
@@ -49,6 +50,11 @@ class BlockDef {
   /// Whether Enter (SplitBlock) creates a new block of the same type.
   /// True for list-like blocks. False for headings (Enter creates paragraph).
   final bool splitInheritsType;
+
+  /// Vertical spacing after this block, in em units (multiples of the base
+  /// font size). Rendered as an extra blank line between blocks.
+  /// 0.0 means no extra spacing. Typical values: headings 0.4, paragraphs 0.15.
+  final double spacingAfter;
 
   /// Returns the base [TextStyle] for this block type, given the editor's
   /// base style. Return null to use the base style unchanged.

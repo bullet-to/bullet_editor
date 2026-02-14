@@ -6,7 +6,7 @@ import '../model/inline_style.dart';
 import '../schema/default_schema.dart'
     show indentPerDepth, kFallbackFontSize, prefixWidth;
 import '../schema/editor_schema.dart';
-import 'offset_mapper.dart';
+import 'offset_mapper.dart' show hasPrefix, hasSpacerBefore;
 
 /// Callback when a prefix widget (bullet, checkbox, etc.) is tapped.
 typedef PrefixTapCallback = void Function(int flatIndex, TextBlock block);
@@ -52,6 +52,17 @@ TextSpan buildDocumentSpan(
         );
       }
       children.add(TextSpan(text: '\n', style: prevStyle));
+    }
+
+    // Spacer WidgetSpan: creates vertical gap between blocks.
+    if (hasSpacerBefore(doc, i, schema)) {
+      final prevBlock = flat[i - 1];
+      final spacingEm = schema.blockDef(prevBlock.blockType).spacingAfter;
+      final baseFontSize = style?.fontSize ?? kFallbackFontSize;
+      final spacerHeight = baseFontSize * spacingEm;
+      children.add(WidgetSpan(
+        child: SizedBox(height: spacerHeight, width: 0),
+      ));
     }
 
     final block = flat[i];

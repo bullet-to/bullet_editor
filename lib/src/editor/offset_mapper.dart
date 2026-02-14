@@ -23,6 +23,14 @@ bool hasPrefix(Document doc, int flatIndex, EditorSchema schema) {
       doc.depthOf(flatIndex) > 0;
 }
 
+/// Whether a block has a vertical spacer WidgetSpan before it (display-only).
+/// True when the previous block has `spacingAfter > 0`.
+bool hasSpacerBefore(Document doc, int flatIndex, EditorSchema schema) {
+  if (flatIndex <= 0) return false;
+  final prevBlock = doc.allBlocks[flatIndex - 1];
+  return schema.blockDef(prevBlock.blockType).spacingAfter > 0;
+}
+
 /// Convert a display offset (TextField) to a model offset (Document).
 /// Subtracts the prefix placeholder chars that precede this position.
 int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
@@ -35,6 +43,12 @@ int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
       // \n separator — same in display and model.
       displayPos++;
       modelPos++;
+    }
+
+    // Spacer WidgetSpan (\uFFFC) — display only, before the block content.
+    if (hasSpacerBefore(doc, i, schema)) {
+      if (displayOffset <= displayPos) return modelPos;
+      displayPos++;
     }
 
     if (hasPrefix(doc, i, schema)) {
@@ -72,6 +86,11 @@ int modelToDisplay(Document doc, int modelOffset, EditorSchema schema) {
     if (i > 0) {
       displayPos++;
       modelPos++;
+    }
+
+    // Spacer WidgetSpan — display only.
+    if (hasSpacerBefore(doc, i, schema)) {
+      displayPos++;
     }
 
     if (hasPrefix(doc, i, schema)) {
@@ -113,7 +132,8 @@ TextSelection selectionToDisplay(
   );
 }
 
-/// If the cursor is sitting on a prefix char, nudge it past.
+/// If the cursor is sitting on a prefix/spacer char (\uFFFC), nudge it past
+/// all consecutive \uFFFC chars in the direction of movement.
 /// Returns null if no adjustment needed.
 TextSelection? skipPrefixChars(
   String displayText,
@@ -128,16 +148,28 @@ TextSelection? skipPrefixChars(
   // Determine direction from previous cursor position.
   final prevOffset = previousSel.baseOffset;
   if (offset > prevOffset) {
-    // Moving right — skip past the prefix char.
-    return TextSelection.collapsed(offset: offset + 1);
+    // Moving right — skip past all consecutive prefix chars.
+    var target = offset;
+    while (target < displayText.length && displayText[target] == prefixChar) {
+      target++;
+    }
+    return TextSelection.collapsed(offset: target);
   } else if (offset < prevOffset) {
-    // Moving left — skip before the prefix char (to end of previous block).
-    return TextSelection.collapsed(offset: offset > 0 ? offset - 1 : 0);
+    // Moving left — skip before all consecutive prefix chars.
+    var target = offset;
+    while (target > 0 && displayText[target - 1] == prefixChar) {
+      target--;
+    }
+    return TextSelection.collapsed(offset: target > 0 ? target - 1 : 0);
   }
 
-  // Same position (e.g. click) — skip forward.
+  // Same position (e.g. click) — skip forward past all consecutive.
+  var target = offset;
+  while (target < displayText.length && displayText[target] == prefixChar) {
+    target++;
+  }
   return TextSelection.collapsed(
-    offset: (offset + 1).clamp(0, displayText.length),
+    offset: target.clamp(0, displayText.length),
   );
 }
 
@@ -150,13 +182,15 @@ bool _needsEmptyPlaceholder(Document doc, int flatIndex, EditorSchema schema) {
 }
 
 /// Build the display text: model text with prefix placeholder chars inserted
-/// before each block that has a visual prefix, and zero-width spaces for
-/// empty non-prefixed blocks.
+/// before each block that has a visual prefix, zero-width spaces for empty
+/// non-prefixed blocks, and spacer WidgetSpan placeholders between blocks
+/// with spacingAfter.
 String buildDisplayText(Document doc, EditorSchema schema) {
   final flat = doc.allBlocks;
   final buf = StringBuffer();
   for (var i = 0; i < flat.length; i++) {
     if (i > 0) buf.write('\n');
+    if (hasSpacerBefore(doc, i, schema)) buf.write(prefixChar);
     if (hasPrefix(doc, i, schema)) buf.write(prefixChar);
     buf.write(flat[i].plainText);
     if (_needsEmptyPlaceholder(doc, i, schema)) buf.write(emptyBlockChar);

@@ -25,6 +25,7 @@ EditorSchema buildStandardSchema() {
       // --- Order: specific prefix rules before general ones ---
       BlockType.h3: BlockDef(
         label: 'Heading 3',
+        spacingAfter: 0.3,
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
@@ -50,6 +51,7 @@ EditorSchema buildStandardSchema() {
       ),
       BlockType.h2: BlockDef(
         label: 'Heading 2',
+        spacingAfter: 0.35,
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
@@ -75,6 +77,7 @@ EditorSchema buildStandardSchema() {
       ),
       BlockType.h1: BlockDef(
         label: 'Heading 1',
+        spacingAfter: 0.4,
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
@@ -184,6 +187,7 @@ EditorSchema buildStandardSchema() {
       BlockType.divider: BlockDef(
         label: 'Divider',
         isVoid: true,
+        spacingAfter: 0.15,
         policies: const BlockPolicies(
           canBeChild: false,
           canHaveChildren: false,
@@ -202,6 +206,7 @@ EditorSchema buildStandardSchema() {
       ),
       BlockType.paragraph: BlockDef(
         label: 'Paragraph',
+        spacingAfter: 0.15,
         policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
         codecs: {
           Format.markdown: BlockCodec(
