@@ -1583,6 +1583,68 @@ void main() {
         expect(seg.attributes['url'], 'https://new.com');
       });
 
+      test('setLink with collapsed cursor inside link updates URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('see '),
+                const StyledSegment(
+                  'here',
+                  {InlineStyle.link},
+                  {'url': 'https://old.com'},
+                ),
+                const StyledSegment(' end'),
+              ],
+            ),
+          ]),
+        );
+
+        // Place collapsed cursor inside "here" (the link).
+        final hereStart = controller.text.indexOf('here');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: hereStart + 2),
+        );
+
+        controller.setLink('https://updated.com');
+
+        // The link segment should have the new URL.
+        final linkSeg = controller.document.allBlocks[0].segments
+            .firstWhere((s) => s.styles.contains(InlineStyle.link));
+        expect(linkSeg.text, 'here');
+        expect(linkSeg.attributes['url'], 'https://updated.com');
+      });
+
+      test('setLink with collapsed cursor on plain text is no-op', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('plain')],
+            ),
+          ]),
+        );
+
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: controller.text.indexOf('plain') + 2),
+        );
+
+        controller.setLink('https://example.com');
+
+        // No link should be applied — collapsed on plain text.
+        expect(
+          controller.document.allBlocks[0].segments.any(
+            (s) => s.styles.contains(InlineStyle.link),
+          ),
+          isFalse,
+        );
+      });
+
       test('setLink on plain text applies link', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),

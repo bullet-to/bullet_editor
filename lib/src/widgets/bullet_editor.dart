@@ -141,6 +141,16 @@ class _BulletEditorState<B extends Object, S extends Object>
             break;
         }
       }
+
+      // Schema-driven inline style shortcuts (e.g. Cmd+B → bold).
+      final schema = widget.controller.schema;
+      for (final entry in schema.inlineStyles.entries) {
+        final shortcut = entry.value.shortcut;
+        if (shortcut != null && shortcut.accepts(event, HardwareKeyboard.instance)) {
+          widget.controller.toggleStyle(entry.key);
+          return KeyEventResult.handled;
+        }
+      }
     }
     // Fall through to the app's handler if one was set.
     return _originalOnKeyEvent?.call(node, event) ?? KeyEventResult.ignored;

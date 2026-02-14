@@ -1,6 +1,3 @@
-import 'package:bullet_editor/bullet_editor.dart'
-    as offsetMapper
-    show displayToModel, modelToDisplay;
 import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -151,19 +148,15 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!_controller.value.selection.isValid) return;
 
     // If cursor is inside an existing link, pre-fill its URL.
+    // setLink handles collapsed-cursor-inside-link natively.
     final existingUrl = _controller.currentAttributes['url'] as String?;
     final isEditing =
         existingUrl != null &&
         _controller.activeStyles.contains(InlineStyle.link);
 
-    // For new links, require a selection. For editing, collapsed is fine.
+    // For new links, require a selection. For editing, collapsed is fine
+    // (setLink updates the link segment at the cursor).
     if (!isEditing && _controller.value.selection.isCollapsed) return;
-
-    // If editing with collapsed cursor, select the entire link segment
-    // so setLink replaces its URL.
-    if (isEditing && _controller.value.selection.isCollapsed) {
-      _selectCurrentLinkSegment();
-    }
 
     final urlController = TextEditingController(text: existingUrl ?? '');
     showDialog<String?>(
@@ -212,53 +205,6 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
-  /// Select the full link segment at the cursor so setLink can update its URL.
-  void _selectCurrentLinkSegment() {
-    final sel = _controller.value.selection;
-    if (!sel.isValid || !sel.isCollapsed) return;
-
-    final offset = sel.baseOffset;
-
-    // Walk the document model to find the link segment boundaries.
-    // Link segments share the same style, so look for where the link style
-    // boundary is by checking the document model.
-    final doc = _controller.document;
-    final schema = _controller.schema;
-    final modelOffset = offsetMapper.displayToModel(doc, offset, schema);
-    final pos = doc.blockAt(modelOffset);
-    final block = doc.allBlocks[pos.blockIndex];
-
-    var segStart = 0;
-    for (final seg in block.segments) {
-      final segEnd = segStart + seg.text.length;
-      if (pos.localOffset >= segStart && pos.localOffset <= segEnd) {
-        if (seg.styles.contains(InlineStyle.link)) {
-          // Convert local offsets to display offsets.
-          final globalStart = doc.globalOffset(pos.blockIndex, segStart);
-          final globalEnd = doc.globalOffset(pos.blockIndex, segEnd);
-          final displayStart = offsetMapper.modelToDisplay(
-            doc,
-            globalStart,
-            schema,
-          );
-          final displayEnd = offsetMapper.modelToDisplay(
-            doc,
-            globalEnd,
-            schema,
-          );
-          _controller.value = _controller.value.copyWith(
-            selection: TextSelection(
-              baseOffset: displayStart,
-              extentOffset: displayEnd,
-            ),
-          );
-        }
-        break;
-      }
-      segStart = segEnd;
-    }
-  }
-
   String _buildDebugText() {
     final buf = StringBuffer();
     buf.writeln(
@@ -283,8 +229,8 @@ class _EditorScreenState extends State<EditorScreen> {
     return buf.toString();
   }
 
-  /// App-level keyboard shortcuts. Copy/cut/paste, Tab, undo/redo are
-  /// handled by BulletEditor.
+  /// App-level keyboard shortcuts. Bold/italic/strikethrough, copy/cut,
+  /// Tab, undo/redo are all handled by BulletEditor via the schema.
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -295,28 +241,13 @@ class _EditorScreenState extends State<EditorScreen> {
         HardwareKeyboard.instance.isControlPressed;
     if (!isMeta) return KeyEventResult.ignored;
 
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.keyB:
-        _controller.toggleStyle(InlineStyle.bold);
-        setState(() {});
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.keyI:
-        _controller.toggleStyle(InlineStyle.italic);
-        setState(() {});
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.keyK:
-        _showLinkDialog();
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.keyS:
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          _controller.toggleStyle(InlineStyle.strikethrough);
-          setState(() {});
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      default:
-        return KeyEventResult.ignored;
+    // Cmd+K → link dialog (app-specific, needs UI).
+    if (event.logicalKey == LogicalKeyboardKey.keyK) {
+      _showLinkDialog();
+      return KeyEventResult.handled;
     }
+
+    return KeyEventResult.ignored;
   }
 
   @override

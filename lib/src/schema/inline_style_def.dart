@@ -18,6 +18,7 @@ class InlineStyleDef {
     required this.label,
     required this.applyStyle,
     this.isDataCarrying = false,
+    this.shortcut,
     this.codecs,
     this.inputRules = const [],
   });
@@ -36,6 +37,11 @@ class InlineStyleDef {
   /// Data-carrying styles are not simple toggles — they need attributes
   /// to be set when applied.
   final bool isDataCarrying;
+
+  /// Optional keyboard shortcut that toggles this style (e.g. Cmd+B for bold).
+  /// When set, [BulletEditor] registers it automatically. Data-carrying styles
+  /// (links, mentions) typically leave this null since they need app-specific UI.
+  final SingleActivator? shortcut;
 
   /// Serialization codecs keyed by [Format]. Each codec defines how this
   /// inline style encodes/decodes in that format.

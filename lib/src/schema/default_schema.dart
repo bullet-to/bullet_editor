@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../codec/block_codec.dart';
@@ -345,6 +346,7 @@ abstract final class Inlines {
   static InlineStyleDef bold() {
     return InlineStyleDef(
       label: 'Bold',
+      shortcut: const SingleActivator(LogicalKeyboardKey.keyB, meta: true),
       applyStyle: (base, {attributes = const {}}) =>
           base.copyWith(fontWeight: FontWeight.bold),
       codecs: {Format.markdown: const InlineCodec(wrap: '**')},
@@ -356,6 +358,7 @@ abstract final class Inlines {
   static InlineStyleDef italic() {
     return InlineStyleDef(
       label: 'Italic',
+      shortcut: const SingleActivator(LogicalKeyboardKey.keyI, meta: true),
       applyStyle: (base, {attributes = const {}}) =>
           base.copyWith(fontStyle: FontStyle.italic),
       codecs: {Format.markdown: const InlineCodec(wrap: '*')},
@@ -367,6 +370,7 @@ abstract final class Inlines {
   static InlineStyleDef strikethrough() {
     return InlineStyleDef(
       label: 'Strikethrough',
+      shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true),
       applyStyle: (base, {attributes = const {}}) =>
           base.copyWith(decoration: TextDecoration.lineThrough),
       codecs: {Format.markdown: const InlineCodec(wrap: '~~')},

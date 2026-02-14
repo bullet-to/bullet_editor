@@ -407,13 +407,45 @@ class EditorController<B extends Object, S extends Object>
     _syncToTextField(modelSelection: modelSel);
   }
 
-  /// Apply a link to the current selection.
+  /// Apply a link to the current selection, or update the link at the cursor.
   ///
-  /// Requires a non-collapsed selection. Applies [InlineStyle.link] with
-  /// the given [url] as an attribute. To remove a link, use
-  /// `toggleStyle(InlineStyle.link)` on a fully-linked selection.
+  /// With a selection: applies [InlineStyle.link] with the given [url].
+  /// With a collapsed cursor inside an existing link: updates that link's URL.
+  /// To remove a link, use `toggleStyle(InlineStyle.link)` on a linked selection.
   void setLink(String url) {
-    if (!value.selection.isValid || value.selection.isCollapsed) return;
+    if (!value.selection.isValid) return;
+
+    // Collapsed cursor inside an existing link → update that segment's URL.
+    if (value.selection.isCollapsed) {
+      final modelOffset = displayToModel(value.selection.baseOffset);
+      final pos = _document.blockAt(modelOffset);
+      final block = _document.allBlocks[pos.blockIndex];
+      var segStart = 0;
+      for (final seg in block.segments) {
+        final segEnd = segStart + seg.text.length;
+        if (pos.localOffset >= segStart && pos.localOffset <= segEnd &&
+            seg.styles.contains(InlineStyle.link)) {
+          // Found the link segment — apply remove + add over its range.
+          final globalStart = _document.globalOffset(pos.blockIndex, segStart);
+          _pushUndo();
+          final attrs = {'url': url};
+          final tx = Transaction(operations: [
+            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
+                attributes: seg.attributes),
+            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
+                attributes: attrs),
+          ], selectionAfter: _selectionToModel(value.selection));
+          _document = tx.apply(_document);
+          _syncToTextField(
+            modelSelection: TextSelection.collapsed(offset: globalStart + (pos.localOffset - segStart)),
+          );
+          return;
+        }
+        segStart = segEnd;
+      }
+      // Collapsed but not inside a link — nothing to do.
+      return;
+    }
 
     final modelSel = _selectionToModel(value.selection);
     final (start, end) = _orderedRange(modelSel);
