@@ -600,7 +600,7 @@ class EditorController<B extends Object, S extends Object>
       // Caller supplied an explicit post-apply cursor (model space).
       afterSel = cursorOverride;
     } else {
-      // Fallback: map the display cursor through the NEW document.
+      // Map the display cursor through the NEW document.
       final newModelOffset = displayToModel(value.selection.baseOffset);
       afterSel = TextSelection.collapsed(offset: newModelOffset);
     }
@@ -758,7 +758,13 @@ class EditorController<B extends Object, S extends Object>
       return;
     }
 
-    _commitTransaction(tx, cursorOverride: pasteCursor);
+    // Compute the model cursor from the diff: right after the inserted text
+    // (or at the deletion point). This is more reliable than mapping the
+    // stale display cursor through the new document, which breaks when
+    // display-only chars (e.g. \u200B placeholder) appear or disappear.
+    final modelCursor = pasteCursor ??
+        TextSelection.collapsed(offset: modelStart + cleanInserted.length);
+    _commitTransaction(tx, cursorOverride: modelCursor);
 
     // Clear composing state AFTER processing the resolve frame so that
     // _commitTransaction sees it and skips undo + input rules.

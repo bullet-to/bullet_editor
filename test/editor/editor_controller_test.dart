@@ -2582,6 +2582,46 @@ void main() {
             reason: 'cursor should stay on the paragraph where we typed');
       });
 
+      test('type on empty paragraph from after \\u200B stays on paragraph', () {
+        // Simulates real click behavior: \u200B is zero-width so the cursor
+        // lands AFTER it. Typing should still go to the empty paragraph and
+        // the cursor should stay there after _syncToTextField.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h2, segments: [const StyledSegment('Above')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+            TextBlock(id: 'c', blockType: BlockType.h3, segments: [const StyledSegment('Heading')]),
+          ]),
+        );
+
+        // Cursor after \u200B (where a real click would land).
+        final emptyPos = controller.text.indexOf('\u200B');
+        final afterEmpty = emptyPos + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: afterEmpty),
+        );
+
+        // Type 'a' at the cursor position (after \u200B).
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, afterEmpty) + 'a' + before.substring(afterEmpty),
+          selection: TextSelection.collapsed(offset: afterEmpty + 1),
+        );
+
+        // 'a' should be in block [1].
+        expect(controller.document.allBlocks[1].plainText, 'a');
+        expect(controller.document.allBlocks[2].plainText, 'Heading');
+
+        // Cursor must stay on block [1], not jump to H3.
+        final modelCursor = controller.displayToModel(
+          controller.value.selection.baseOffset,
+        );
+        final cursorBlock = controller.document.blockAt(modelCursor);
+        expect(cursorBlock.blockIndex, 1,
+            reason: 'cursor must not jump to H3 after typing');
+      });
+
       test('MergeBlocks on empty paragraph preserves H2 type below', () {
         // Test the operation directly: merging an H2 into an empty paragraph
         // should adopt the H2 type since the paragraph was empty.
