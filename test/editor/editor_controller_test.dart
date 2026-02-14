@@ -1895,6 +1895,28 @@ void main() {
         expect(blocks.any((b) => b.blockType == BlockType.listItem), isTrue);
       });
 
+      test('pasting single list item markdown creates list item', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document.empty(BlockType.paragraph),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+        const md = '- Tab to indent, Shift+Tab to outdent';
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, 0) + md + before.substring(0),
+          selection: TextSelection.collapsed(offset: md.length),
+        );
+        expect(controller.document.allBlocks.any(
+          (b) => b.blockType == BlockType.listItem,
+        ), isTrue, reason: 'should decode as list item');
+        expect(controller.document.allBlocks.any(
+          (b) => b.plainText.contains('Tab to indent'),
+        ), isTrue);
+      });
+
       test('paste on heading does not make everything a heading', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
@@ -2431,6 +2453,82 @@ void main() {
         // Cursor must advance after each Enter.
         expect(afterSecond, greaterThan(afterFirst),
             reason: 'cursor should advance after second Enter');
+      });
+
+      test('MergeBlocks on empty paragraph preserves H2 type below', () {
+        // Test the operation directly: merging an H2 into an empty paragraph
+        // should adopt the H2 type since the paragraph was empty.
+        final doc = Document([
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
+          TextBlock(id: 'b', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+        ]);
+
+        final result = MergeBlocks(1).apply(doc);
+
+        expect(result.allBlocks.length, 1);
+        expect(result.allBlocks[0].blockType, BlockType.h2);
+        expect(result.allBlocks[0].plainText, 'Heading');
+      });
+
+      test('backspace on empty paragraph between blocks merges it away', () {
+        // [0] paragraph "text", [1] empty paragraph, [2] H2 "Heading"
+        // Click on the empty paragraph, press backspace → it should be removed.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('text')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+            TextBlock(id: 'c', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+          ]),
+        );
+
+        // Find where \u200B (the empty block placeholder) is in display text.
+        final displayText = controller.text;
+        final emptyBlockPos = displayText.indexOf('\u200B');
+        expect(emptyBlockPos, greaterThanOrEqualTo(0),
+            reason: 'empty paragraph should have \\u200B placeholder');
+
+        // Simulate clicking on the empty paragraph: cursor after \u200B.
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: emptyBlockPos + 1),
+        );
+
+        // Simulate backspace: delete the \u200B.
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, emptyBlockPos) + before.substring(emptyBlockPos + 1),
+          selection: TextSelection.collapsed(offset: emptyBlockPos),
+        );
+
+        // Empty paragraph should be gone. H2 should survive.
+        expect(controller.document.allBlocks.length, 2);
+        expect(controller.document.allBlocks[0].plainText, 'text');
+        expect(controller.document.allBlocks[1].blockType, BlockType.h2);
+        expect(controller.document.allBlocks[1].plainText, 'Heading');
+      });
+
+      test('cross-block cut from start of heading resets to paragraph', () {
+        // Select from start of heading through to another block → heading
+        // should reset to paragraph since we're cutting from position 0.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('body')]),
+          ]),
+        );
+
+        // Select from start of "Title" to start of "body" and delete.
+        final titleStart = controller.text.indexOf('T');
+        final bodyStart = controller.text.indexOf('body');
+        controller.value = controller.value.copyWith(
+          text: controller.text.substring(0, titleStart) + controller.text.substring(bodyStart),
+          selection: TextSelection.collapsed(offset: titleStart),
+        );
+
+        // H1 block started at offset 0 → should reset to paragraph.
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks.first.plainText, 'body');
       });
     });
 

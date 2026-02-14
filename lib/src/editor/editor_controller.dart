@@ -639,15 +639,29 @@ class EditorController<B extends Object, S extends Object>
   /// intercept, e.g. list item → paragraph).
   void _handlePrefixDelete(int modelStart) {
     final pos = _document.blockAt(modelStart);
+    final flat = _document.allBlocks;
+
     if (pos.blockIndex > 0 && pos.localOffset == 0) {
-      // Cursor should land at the merge point: end of the previous block.
+      // Backspace at block start → merge with previous block.
       final mergePoint = _document.globalOffset(
         pos.blockIndex - 1,
-        _document.allBlocks[pos.blockIndex - 1].length,
+        flat[pos.blockIndex - 1].length,
       );
       final cursorAfter = TextSelection.collapsed(offset: mergePoint);
       final tx = Transaction(
         operations: [MergeBlocks(pos.blockIndex)],
+        selectionAfter: cursorAfter,
+      );
+      _commitTransaction(tx, cursorOverride: cursorAfter);
+      return;
+    } else if (pos.localOffset == flat[pos.blockIndex].length &&
+        pos.blockIndex + 1 < flat.length) {
+      // Cursor at end of a block (e.g. after deleting an empty block's
+      // placeholder) → forward-merge with the next block.
+      final nextIndex = pos.blockIndex + 1;
+      final cursorAfter = TextSelection.collapsed(offset: modelStart);
+      final tx = Transaction(
+        operations: [MergeBlocks(nextIndex)],
         selectionAfter: cursorAfter,
       );
       _commitTransaction(tx, cursorOverride: cursorAfter);
@@ -859,14 +873,12 @@ class EditorController<B extends Object, S extends Object>
         );
       }
 
-      // Cut/delete from position 0 within a single block → reset to default.
-      // Only fires for within-block deletes (e.g. selecting text from the
-      // start of a heading and cutting). Does NOT fire on cross-block merges
-      // (forward-delete across a boundary), which should preserve the
-      // surviving block's type.
-      if (startPos.localOffset == 0 &&
-          diff.insertedText.isEmpty &&
-          startPos.blockIndex == endPos.blockIndex) {
+      // Cut/delete from position 0 of a non-default block → reset to default.
+      // The cursor was at the very start of the block's content, so the
+      // block formatting (heading, list item, etc.) should be stripped.
+      // This applies to both within-block cuts and cross-block selections
+      // that start at the beginning of a block.
+      if (startPos.localOffset == 0 && diff.insertedText.isEmpty) {
         final blockType = _document.allBlocks[startPos.blockIndex].blockType;
         if (blockType != _schema.defaultBlockType) {
           ops.add(

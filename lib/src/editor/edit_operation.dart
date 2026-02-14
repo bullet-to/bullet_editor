@@ -234,7 +234,15 @@ class MergeBlocks extends EditOperation {
       ...first.segments,
       ...second.segments,
     ]);
-    final mergedBlock = first.copyWith(segments: mergedSegments);
+    // If the first block is empty, adopt the second block's type so that
+    // forward-delete on an empty paragraph doesn't strip the heading/list
+    // type of the block below.
+    final mergedType =
+        first.plainText.isEmpty ? second.blockType : first.blockType;
+    final mergedBlock = first.copyWith(
+      blockType: mergedType,
+      segments: mergedSegments,
+    );
 
     var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
     // Promote the second block's children before removing it, so they
@@ -421,7 +429,16 @@ class PasteBlocks extends EditOperation {
     final pasted = pastedBlocks[0];
     final (before, after) = splitSegmentsAt(target.segments, offset);
     final merged = mergeSegments([...before, ...pasted.segments, ...after]);
-    return doc.replaceBlock(blockIndex, target.copyWith(segments: merged));
+    // If pasting at offset 0 and the target is empty (or all content comes
+    // from the pasted block), adopt the pasted block's type so that pasting
+    // "- item" creates a list item, not a paragraph with "item" text.
+    final useType = offset == 0 && target.plainText.isEmpty
+        ? pasted.blockType as B
+        : target.blockType;
+    return doc.replaceBlock(
+      blockIndex,
+      target.copyWith(blockType: useType, segments: merged),
+    );
   }
 
   Document<B> _applyMultiBlock<B>(Document<B> doc, TextBlock<B> target) {

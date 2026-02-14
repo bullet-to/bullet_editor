@@ -74,8 +74,8 @@ int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
 
     // Empty block placeholder — display only, after the (empty) content.
     if (_needsEmptyPlaceholder(doc, i, schema)) {
-      if (displayOffset <= displayPos) return modelPos;
       displayPos++;
+      if (displayOffset <= displayPos) return modelPos;
     }
   }
 
@@ -183,7 +183,14 @@ TextSelection? skipPrefixChars(
     return TextSelection.collapsed(offset: target > 0 ? target - 1 : 0);
   }
 
-  // Same position (e.g. click) — skip forward past all consecutive.
+  // Same position (e.g. click) — check if there's an empty block placeholder
+  // (\u200B) immediately before the skip chars. If so, snap to it so the
+  // cursor lands on the empty block (whose \u200B is zero-width and otherwise
+  // unclickable).
+  if (offset > 0 && displayText[offset - 1] == emptyBlockChar) {
+    return TextSelection.collapsed(offset: offset - 1);
+  }
+  // Otherwise skip forward past all consecutive skip-chars.
   var target = offset;
   while (target < displayText.length && _isSkipChar(displayText, target)) {
     target++;
