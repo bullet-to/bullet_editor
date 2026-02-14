@@ -3,19 +3,45 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Document', () {
+    test('empty creates single block with given type', () {
+      final doc = Document.empty(BlockType.paragraph);
+      expect(doc.allBlocks.length, 1);
+      expect(doc.allBlocks.first.blockType, BlockType.paragraph);
+      expect(doc.allBlocks.first.plainText, '');
+    });
+
+    test('empty works with custom block type key', () {
+      final doc = Document.empty('myCustomBlock');
+      expect(doc.allBlocks.length, 1);
+      expect(doc.allBlocks.first.blockType, 'myCustomBlock');
+    });
+
     test('plainText joins blocks with newline', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('world')],
+        ),
       ]);
       expect(doc.plainText, 'hello\nworld');
     });
 
     test('blockAt maps global offset to correct block', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('abc')]), // 0-2
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('abc')],
+        ), // 0-2
         TextBlock(
           id: 'b',
+          blockType: BlockType.paragraph,
           segments: [const StyledSegment('de')],
         ), // 4-5 (3 is \n)
       ]);
@@ -37,8 +63,16 @@ void main() {
 
     test('globalOffset reverses blockAt', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('abc')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('de')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('abc')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('de')],
+        ),
       ]);
 
       expect(doc.globalOffset(0, 0), 0);
@@ -59,16 +93,33 @@ void main() {
   group('Document tree / allBlocks', () {
     test('allBlocks flattens tree depth-first', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('A')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('A')],
+        ),
         TextBlock(
           id: 'b',
+          blockType: BlockType.paragraph,
           segments: [const StyledSegment('B')],
           children: [
-            TextBlock(id: 'b1', segments: [const StyledSegment('B1')]),
-            TextBlock(id: 'b2', segments: [const StyledSegment('B2')]),
+            TextBlock(
+              id: 'b1',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('B1')],
+            ),
+            TextBlock(
+              id: 'b2',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('B2')],
+            ),
           ],
         ),
-        TextBlock(id: 'c', segments: [const StyledSegment('C')]),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('C')],
+        ),
       ]);
       final ids = doc.allBlocks.map((b) => b.id).toList();
       expect(ids, ['a', 'b', 'b1', 'b2', 'c']);
@@ -78,12 +129,21 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [const StyledSegment('A')],
           children: [
-            TextBlock(id: 'a1', segments: [const StyledSegment('A1')]),
+            TextBlock(
+              id: 'a1',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('A1')],
+            ),
           ],
         ),
-        TextBlock(id: 'b', segments: [const StyledSegment('B')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('B')],
+        ),
       ]);
       expect(doc.plainText, 'A\nA1\nB');
     });
@@ -92,12 +152,21 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [const StyledSegment('AB')],
           children: [
-            TextBlock(id: 'a1', segments: [const StyledSegment('CD')]),
+            TextBlock(
+              id: 'a1',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('CD')],
+            ),
           ],
         ),
-        TextBlock(id: 'b', segments: [const StyledSegment('EF')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('EF')],
+        ),
       ]);
       // "AB\nCD\nEF" — offsets: A=0, B=1, \n=2, C=3, D=4, \n=5, E=6, F=7
       expect(doc.blockAt(0).blockIndex, 0); // 'a'
@@ -109,12 +178,20 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: const [],
           children: [
             TextBlock(
               id: 'a1',
+              blockType: BlockType.paragraph,
               segments: const [],
-              children: [TextBlock(id: 'a1a', segments: const [])],
+              children: [
+                TextBlock(
+                  id: 'a1a',
+                  blockType: BlockType.paragraph,
+                  segments: const [],
+                ),
+              ],
             ),
           ],
         ),
@@ -130,6 +207,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('abc '),
             const StyledSegment('bold', {InlineStyle.bold}),
@@ -150,7 +228,9 @@ void main() {
     });
 
     test('returns empty for empty block', () {
-      final doc = Document([TextBlock(id: 'a', segments: const [])]);
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
+      ]);
       expect(doc.stylesAt(0), <InlineStyle>{});
     });
   });
@@ -234,6 +314,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('Hello '),
             const StyledSegment('world', {InlineStyle.bold}),
@@ -256,7 +337,11 @@ void main() {
           blockType: BlockType.h1,
           segments: [const StyledSegment('Title')],
         ),
-        TextBlock(id: 'b', segments: [const StyledSegment('Body text')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Body text')],
+        ),
       ]);
       // Extract "tle\nBody " (offset 2..11) — crosses block boundary
       // Title(5) + \n(1) + "Body "(5) = 11
@@ -270,13 +355,21 @@ void main() {
 
     test('full block extraction', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('first')],
+        ),
         TextBlock(
           id: 'b',
           blockType: BlockType.listItem,
           segments: [const StyledSegment('second')],
         ),
-        TextBlock(id: 'c', segments: [const StyledSegment('third')]),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('third')],
+        ),
       ]);
       // Extract entire second block: "first\n" = 6 chars, second = 6..12
       final blocks = doc.extractRange(6, 12);
@@ -289,6 +382,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment(
               'click',

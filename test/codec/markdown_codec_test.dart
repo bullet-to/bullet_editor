@@ -7,8 +7,8 @@ void main() {
 
     test('encode plain paragraphs', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('Hello')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('World')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Hello')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('World')]),
       ]);
       expect(codec.encode(doc), 'Hello\n\nWorld');
     });
@@ -17,6 +17,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('Hello '),
             const StyledSegment('bold', {InlineStyle.bold}),
@@ -136,13 +137,14 @@ void main() {
       final original = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('Some '),
             const StyledSegment('bold', {InlineStyle.bold}),
             const StyledSegment(' and normal'),
           ],
         ),
-        TextBlock(id: 'b', segments: [const StyledSegment('Second paragraph')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('Second paragraph')]),
       ]);
 
       final markdown = codec.encode(original);
@@ -163,6 +165,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('normal '),
             const StyledSegment('italic', {InlineStyle.italic}),
@@ -187,6 +190,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('normal '),
             const StyledSegment('strike', {InlineStyle.strikethrough}),
@@ -277,9 +281,9 @@ void main() {
 
     test('round-trip divider between paragraphs', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('Above')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Above')]),
         TextBlock(id: 'b', blockType: BlockType.divider),
-        TextBlock(id: 'c', segments: [const StyledSegment('Below')]),
+        TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('Below')]),
       ]);
       final md = codec.encode(doc);
       expect(md, 'Above\n\n---\n\nBelow');
@@ -302,6 +306,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('Visit '),
             const StyledSegment(
@@ -332,6 +337,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('Click ', {InlineStyle.bold}),
             const StyledSegment(
@@ -381,6 +387,7 @@ void main() {
         ),
         TextBlock(
           id: 'c',
+          blockType: BlockType.paragraph,
           segments: [const StyledSegment('paragraph after')],
         ),
       ]);
@@ -412,6 +419,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('1 ', {InlineStyle.bold}),
             const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
@@ -439,6 +447,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('1 ', {InlineStyle.bold}),
             const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
@@ -460,6 +469,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('plain '),
             const StyledSegment(

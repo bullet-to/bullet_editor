@@ -1,11 +1,11 @@
-import 'inline_style.dart';
-
 /// A run of text with uniform formatting.
 ///
 /// The document's text content is stored as a list of these segments.
 /// Adjacent segments with identical styles AND attributes should be merged.
 ///
 /// [styles] holds on/off style flags (bold, italic, link, etc.).
+/// Style keys are opaque [Object]s — use the built-in [InlineStyle] enum
+/// or your own enum/class.
 /// [attributes] holds data for styles that carry it (e.g. `{'url': '...'}`
 /// for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
@@ -13,7 +13,7 @@ class StyledSegment {
       [this.styles = const {}, this.attributes = const {}]);
 
   final String text;
-  final Set<InlineStyle> styles;
+  final Set<Object> styles;
 
   /// Per-segment data for data-carrying styles (links, mentions, tags).
   /// Empty for simple styles like bold/italic.
@@ -21,7 +21,7 @@ class StyledSegment {
 
   StyledSegment copyWith({
     String? text,
-    Set<InlineStyle>? styles,
+    Set<Object>? styles,
     Map<String, dynamic>? attributes,
   }) {
     return StyledSegment(
@@ -46,41 +46,41 @@ class StyledSegment {
   @override
   String toString() {
     if (styles.isEmpty) return 'Segment("$text")';
-    final styleStr = styles.map((s) => s.name).join(', ');
+    final styleStr = styles.join(', ');
     if (attributes.isEmpty) return 'Segment("$text", $styleStr)';
     return 'Segment("$text", $styleStr, $attributes)';
   }
 }
 
-/// The type of a block. Determines rendering and behavior.
+/// Built-in block type keys. Use these with the standard schema, or define
+/// your own enum/class for custom block types.
 enum BlockType { paragraph, h1, h2, h3, listItem, numberedList, taskItem, divider }
+
+/// Built-in inline style keys. Use these with the standard schema, or define
+/// your own enum/class for custom inline styles.
+enum InlineStyle { bold, italic, strikethrough, link }
 
 /// Standard metadata key for task item checked state.
 const kCheckedKey = 'checked';
 
-/// Whether a block type behaves like a list item (nestable, gets a prefix,
-/// shares enter/backspace/indent behavior).
-bool isListLike(BlockType type) =>
-    type == BlockType.listItem ||
-    type == BlockType.numberedList ||
-    type == BlockType.taskItem;
-
 /// A single block in the document.
 ///
 /// Immutable. Use [copyWith] to produce modified versions.
-class TextBlock {
+///
+/// [B] is the block type key — typically an enum like [BlockType].
+class TextBlock<B> {
   TextBlock({
     required this.id,
-    this.blockType = BlockType.paragraph,
+    required this.blockType,
     this.segments = const [],
     this.children = const [],
     this.metadata = const {},
   });
 
   final String id;
-  final BlockType blockType;
+  final B blockType;
   final List<StyledSegment> segments;
-  final List<TextBlock> children;
+  final List<TextBlock<B>> children;
 
   /// Arbitrary key-value metadata for the block.
   /// Used for task checked state (`'checked': true/false`), etc.
@@ -92,11 +92,11 @@ class TextBlock {
   /// Total character length of this block's text.
   int get length => plainText.length;
 
-  TextBlock copyWith({
+  TextBlock<B> copyWith({
     String? id,
-    BlockType? blockType,
+    B? blockType,
     List<StyledSegment>? segments,
-    List<TextBlock>? children,
+    List<TextBlock<B>>? children,
     Map<String, dynamic>? metadata,
   }) {
     return TextBlock(

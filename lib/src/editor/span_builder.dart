@@ -2,7 +2,6 @@ import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
 import '../schema/default_schema.dart'
     show indentPerDepth, kFallbackFontSize, prefixWidth;
 import '../schema/editor_schema.dart';
@@ -63,10 +62,12 @@ TextSpan buildDocumentSpan(
       final spacingEm = schema.blockDef(block.blockType).spacingBefore;
       final baseFontSize = style?.fontSize ?? kFallbackFontSize;
       final gapPx = baseFontSize * spacingEm;
-      children.add(TextSpan(
-        text: '$spacerChar\n',
-        style: TextStyle(fontSize: gapPx, height: 1.0),
-      ));
+      children.add(
+        TextSpan(
+          text: '$spacerChar\n',
+          style: TextStyle(fontSize: gapPx, height: 1.0),
+        ),
+      );
     }
 
     final block = flat[i];
@@ -176,11 +177,7 @@ TextSpan buildDocumentSpan(
 }
 
 /// Get the base TextStyle for a block type via schema lookup.
-TextStyle? _blockBaseStyle(
-  BlockType type,
-  TextStyle? base,
-  EditorSchema schema,
-) {
+TextStyle? _blockBaseStyle(Object type, TextStyle? base, EditorSchema schema) {
   final def = schema.blockDef(type);
   return def.baseStyle?.call(base) ?? base;
 }
@@ -203,7 +200,7 @@ Widget _wrapPrefixTap(
 /// Resolve inline styles into a TextStyle via schema lookup.
 /// Passes segment [attributes] through for data-carrying styles.
 TextStyle? _resolveStyle(
-  Set<InlineStyle> styles,
+  Set<Object> styles,
   TextStyle? base,
   EditorSchema schema, {
   Map<String, dynamic> attributes = const {},

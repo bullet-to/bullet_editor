@@ -19,7 +19,8 @@ class Transaction {
   final TextSelection? selectionAfter;
 
   /// Apply all operations sequentially to [doc], returning the new document.
-  Document apply(Document doc) {
+  /// Generic on [B] so the document's block type parameter is preserved.
+  Document<B> apply<B>(Document<B> doc) {
     var result = doc;
     for (final op in operations) {
       result = op.apply(result);

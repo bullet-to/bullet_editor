@@ -3,7 +3,6 @@ import 'package:flutter/widgets.dart';
 import '../codec/markdown_codec.dart';
 import '../model/block.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
 import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
 import 'input_rule.dart';
@@ -18,19 +17,27 @@ typedef LinkTapCallback = void Function(String url);
 
 /// The bridge between Flutter's TextField and our document model.
 ///
+/// [B] is the block type key, [S] is the inline style key.
+///
 /// Offset translation is handled by [offset_mapper.dart].
 /// Rendering is handled by [span_builder.dart].
 /// This class owns the edit pipeline, undo/redo, and public actions.
-class EditorController extends TextEditingController {
+class EditorController<B extends Object, S extends Object>
+    extends TextEditingController {
   EditorController({
-    Document? document,
-    EditorSchema? schema,
+    Document<B>? document,
+    required EditorSchema<B, S> schema,
     List<InputRule>? additionalInputRules,
     LinkTapCallback? onLinkTap,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
-  }) : _document = document ?? Document.empty(),
-       _schema = schema ?? EditorSchema.standard(),
+  }) : assert(B != Object && S != Object,
+            'EditorController requires explicit type parameters.\n'
+            'Use EditorController<BlockType, InlineStyle>(...) '
+            'instead of EditorController(...).',
+       ),
+       _document = document ?? Document.empty(schema.defaultBlockType),
+       _schema = schema,
        _onLinkTap = onLinkTap,
        _undoManager = UndoManager(
          grouping: undoGrouping,
@@ -47,9 +54,9 @@ class EditorController extends TextEditingController {
     addListener(_onValueChanged);
   }
 
-  Document _document;
+  Document<B> _document;
   late final List<InputRule> _inputRules;
-  final EditorSchema _schema;
+  final EditorSchema<B, S> _schema;
   final UndoManager _undoManager;
   LinkTapCallback? _onLinkTap;
   bool _isSyncing = false;
@@ -63,11 +70,16 @@ class EditorController extends TextEditingController {
   /// Snapshot of the value BEFORE composing started.
   /// Set on the first composing frame; used to diff when composing resolves.
   TextEditingValue? _preComposingValue;
-  Set<InlineStyle> _activeStyles = {};
+  Set<Object> _activeStyles = {};
 
-  Document get document => _document;
-  EditorSchema get schema => _schema;
-  Set<InlineStyle> get activeStyles => _activeStyles;
+  Document<B> get document => _document;
+  EditorSchema<B, S> get schema => _schema;
+
+  /// Active inline styles at the cursor. Typed as `Set<S>` for exhaustive
+  /// switch. The internal set uses `Set<Object>` — the cast is safe because
+  /// only S values are ever added.
+  Set<S> get activeStyles => _activeStyles.cast<S>();
+
   LinkTapCallback? get onLinkTap => _onLinkTap;
   set onLinkTap(LinkTapCallback? value) => _onLinkTap = value;
   bool get canUndo => _undoManager.canUndo;
@@ -107,7 +119,7 @@ class EditorController extends TextEditingController {
   void _forEachBlockInRange(
     int start,
     int end,
-    void Function(int flatIndex, TextBlock block, int localStart, int localEnd)
+    void Function(int flatIndex, TextBlock<B> block, int localStart, int localEnd)
     visitor,
   ) {
     final startPos = _document.blockAt(start);
@@ -139,7 +151,7 @@ class EditorController extends TextEditingController {
   /// - Collapsed: styles at the cursor position.
   /// - Non-collapsed: intersection of styles across ALL characters in the
   ///   selection. Bold is active only if every selected character is bold.
-  Set<InlineStyle> _stylesForSelection(TextSelection sel) {
+  Set<Object> _stylesForSelection(TextSelection sel) {
     final modelSel = _selectionToModel(sel);
 
     if (sel.isCollapsed) {
@@ -150,7 +162,7 @@ class EditorController extends TextEditingController {
     if (start == end) return _document.stylesAt(start);
 
     // Walk segments in the range, intersect their styles.
-    Set<InlineStyle>? result;
+    Set<Object>? result;
     _forEachBlockInRange(start, end, (_, block, localStart, localEnd) {
       var offset = 0;
       for (final seg in block.segments) {
@@ -213,7 +225,7 @@ class EditorController extends TextEditingController {
       ),
     );
 
-    _document = entry.document;
+    _document = entry.document as Document<B>;
     _syncToTextField(modelSelection: entry.selection);
     _activeStyles = _document.stylesAt(
       entry.selection.baseOffset.clamp(0, _document.plainText.length),
@@ -248,7 +260,7 @@ class EditorController extends TextEditingController {
 
   /// Whether the block at the cursor can be changed to [type].
   /// Returns false for void types, same-type no-ops, and policy violations.
-  bool canSetBlockType(BlockType type) {
+  bool canSetBlockType(B type) {
     if (!value.selection.isValid) return false;
     if (_schema.isVoid(type)) return false;
     final modelSel = _selectionToModel(value.selection);
@@ -317,13 +329,15 @@ class EditorController extends TextEditingController {
 
     // Split at cursor, then change the new block to divider, then split
     // again to create a paragraph after the divider.
-    final dividerBlock = TextBlock(
+    final dividerBlock = TextBlock<B>(
       id: generateBlockId(),
-      blockType: BlockType.divider,
+      blockType: BlockType.divider as B,
     );
 
     // Split current block at cursor position.
-    _document = SplitBlock(pos.blockIndex, pos.localOffset).apply(_document);
+    _document = SplitBlock(pos.blockIndex, pos.localOffset,
+        defaultBlockType: _schema.defaultBlockType,
+        isListLikeFn: _schema.isListLike).apply(_document);
     // Insert divider between the two halves.
     _document = _document.insertAfterFlatIndex(pos.blockIndex, dividerBlock);
     // Cursor goes to the block after the divider (pos.blockIndex + 2).
@@ -350,7 +364,7 @@ class EditorController extends TextEditingController {
   /// - Collapsed cursor: toggles the style in [_activeStyles] so the next
   ///   typed text gets (or loses) the style.
   /// - Non-collapsed selection: applies [ToggleStyle] to the selected range.
-  void toggleStyle(InlineStyle style) {
+  void toggleStyle(S style) {
     if (!value.selection.isValid) return;
 
     if (value.selection.isCollapsed) {
@@ -455,7 +469,7 @@ class EditorController extends TextEditingController {
   }
 
   /// Change the block type of the block at the cursor position.
-  void setBlockType(BlockType type) {
+  void setBlockType(B type) {
     if (!value.selection.isValid) return;
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
@@ -470,8 +484,8 @@ class EditorController extends TextEditingController {
   }
 
   /// Get the block type at the current cursor position.
-  BlockType get currentBlockType {
-    if (!value.selection.isValid) return BlockType.paragraph;
+  B get currentBlockType {
+    if (!value.selection.isValid) return _schema.defaultBlockType;
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
     return _document.allBlocks[pos.blockIndex].blockType;
@@ -535,7 +549,7 @@ class EditorController extends TextEditingController {
     var finalTx = tx;
     if (!isProvisional) {
       for (final rule in _inputRules) {
-        final transformed = rule.tryTransform(finalTx, _document);
+        final transformed = rule.tryTransform(finalTx, _document, _schema);
         if (transformed != null) {
           finalTx = transformed;
           break;
@@ -670,7 +684,8 @@ class EditorController extends TextEditingController {
     final modelDiff = TextDiff(modelStart, modelDeletedLength, cleanInserted);
     final modelSelection = _selectionToModel(value.selection);
 
-    final tx = _transactionFromDiff(modelDiff, modelSelection);
+    final (tx, pasteCursor) =
+        _transactionFromDiff(modelDiff, modelSelection);
     if (tx == null) {
       _previousValue = value;
       if (!isComposing && _preComposingValue != null) {
@@ -679,7 +694,7 @@ class EditorController extends TextEditingController {
       return;
     }
 
-    _commitTransaction(tx);
+    _commitTransaction(tx, cursorOverride: pasteCursor);
 
     // Clear composing state AFTER processing the resolve frame so that
     // _commitTransaction sees it and skips undo + input rules.
@@ -690,20 +705,26 @@ class EditorController extends TextEditingController {
 
   // -- Transaction building (all in model space) --
 
-  Transaction? _transactionFromDiff(TextDiff diff, TextSelection selection) {
-    if (diff.deletedLength == 0 && diff.insertedText.isEmpty) return null;
+  /// Returns (transaction, optional model-space cursor override).
+  /// The cursor override is used by paste to position the cursor correctly.
+  (Transaction?, TextSelection?) _transactionFromDiff(
+      TextDiff diff, TextSelection selection) {
+    if (diff.deletedLength == 0 && diff.insertedText.isEmpty) {
+      return (null, null);
+    }
 
-    // Tab → indent.
+    // Tab → indent (any indentable block, not just list-like).
     if (diff.insertedText == '\t' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
-      final block = _document.allBlocks[pos.blockIndex];
-      if (_schema.isListLike(block.blockType)) {
-        return Transaction(
-          operations: [IndentBlock(pos.blockIndex)],
+      return (
+        Transaction(
+          operations: [
+            IndentBlock(pos.blockIndex, policies: _schema.policies),
+          ],
           selectionAfter: selection,
-        );
-      }
-      return null;
+        ),
+        null,
+      );
     }
 
     // Multi-character insert (paste heuristic): try markdown decode.
@@ -717,9 +738,14 @@ class EditorController extends TextEditingController {
     // Pure newline insert → split (no delete involved).
     if (diff.insertedText == '\n' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
-      return Transaction(
-        operations: [SplitBlock(pos.blockIndex, pos.localOffset)],
-        selectionAfter: selection,
+      return (
+        Transaction(
+          operations: [SplitBlock(pos.blockIndex, pos.localOffset,
+              defaultBlockType: _schema.defaultBlockType,
+              isListLikeFn: _schema.isListLike)],
+          selectionAfter: selection,
+        ),
+        null,
       );
     }
 
@@ -769,12 +795,22 @@ class EditorController extends TextEditingController {
         );
       }
 
-      return Transaction(operations: ops, selectionAfter: selection);
+      // Cut/delete from position 0 of a non-default block → reset to default.
+      // Mirrors backspace behavior: removing content starting at the prefix
+      // should strip the block formatting (headings, list items, etc.).
+      if (startPos.localOffset == 0 && diff.insertedText.isEmpty) {
+        final blockType = _document.allBlocks[startPos.blockIndex].blockType;
+        if (blockType != _schema.defaultBlockType) {
+          ops.add(ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType));
+        }
+      }
+
+      return (Transaction(operations: ops, selectionAfter: selection), null);
     }
 
     // Pure insert (no delete).
     if (diff.insertedText.isNotEmpty) {
-      return Transaction(
+      return (Transaction(
         operations: [
           InsertText(
             startPos.blockIndex,
@@ -784,18 +820,18 @@ class EditorController extends TextEditingController {
           ),
         ],
         selectionAfter: selection,
-      );
+      ), null);
     }
 
-    return null;
+    return (null, null);
   }
 
   // -- Paste helpers --
 
-  /// Try to decode pasted text as markdown. Returns a transaction with
-  /// PasteBlocks if the decoded result has formatting, or null to fall
-  /// through to plain text handling.
-  Transaction? _tryMarkdownPaste(TextDiff diff, TextSelection selection) {
+  /// Try to decode pasted text as markdown. Returns (transaction, modelCursor)
+  /// if the decoded result has formatting, or null to fall through.
+  (Transaction, TextSelection)? _tryMarkdownPaste(
+      TextDiff diff, TextSelection selection) {
     final codec = MarkdownCodec(schema: _schema);
     final decoded = codec.decode(diff.insertedText);
     final blocks = decoded.allBlocks;
@@ -805,7 +841,7 @@ class EditorController extends TextEditingController {
     // the normal plain-text pipeline handle it.
     final hasFormatting =
         blocks.length > 1 ||
-        blocks.any((b) => b.blockType != BlockType.paragraph) ||
+        blocks.any((b) => b.blockType != _schema.defaultBlockType) ||
         blocks.any(
           (b) => b.segments.any(
             (s) => s.styles.isNotEmpty || s.attributes.isNotEmpty,
@@ -853,9 +889,10 @@ class EditorController extends TextEditingController {
     // Add separators between blocks.
     cursorOffset += blocks.length - 1;
 
-    return Transaction(
-      operations: ops,
-      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    final modelCursor = TextSelection.collapsed(offset: cursorOffset);
+    return (
+      Transaction(operations: ops, selectionAfter: selection),
+      modelCursor,
     );
   }
 

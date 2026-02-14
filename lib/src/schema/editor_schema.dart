@@ -1,4 +1,5 @@
 import '../editor/input_rule.dart';
+import '../model/block.dart';
 import '../model/block_policies.dart';
 import 'block_def.dart';
 import 'default_schema.dart';
@@ -7,12 +8,13 @@ import 'inline_style_def.dart';
 /// Central configuration for the editor.
 ///
 /// Maps block type keys and inline style keys to their definitions.
-/// Keys can be any type (typically an enum like [BlockType] or [InlineStyle]),
-/// allowing third parties to add custom types alongside the built-in set.
+/// [B] is the block type key (typically an enum like [BlockType]).
+/// [S] is the inline style key (typically an enum like [InlineStyle]).
 ///
 /// Use [EditorSchema.standard()] for the built-in block types and styles.
-class EditorSchema {
+class EditorSchema<B extends Object, S extends Object> {
   EditorSchema({
+    required this.defaultBlockType,
     required this.blocks,
     required this.inlineStyles,
     this.prefixWidthFactor = 1.5,
@@ -20,13 +22,18 @@ class EditorSchema {
   });
 
   /// Creates the standard schema with all built-in block types and inline styles.
-  factory EditorSchema.standard() => buildStandardSchema();
+  static EditorSchema<BlockType, InlineStyle> standard() =>
+      buildStandardSchema();
+
+  /// The block type used for new blocks (Enter on non-list blocks, empty
+  /// list item → paragraph, heading backspace → paragraph, etc.).
+  final B defaultBlockType;
 
   /// Block type definitions keyed by block type identifier.
-  final Map<Object, BlockDef> blocks;
+  final Map<B, BlockDef> blocks;
 
   /// Inline style definitions keyed by style identifier.
-  final Map<Object, InlineStyleDef> inlineStyles;
+  final Map<S, InlineStyleDef> inlineStyles;
 
   /// Width of the prefix area (bullet/number/checkbox) as a multiplier of
   /// the block's resolved font size.
@@ -45,7 +52,7 @@ class EditorSchema {
 
   /// Aggregate policies map from all registered block defs.
   /// Used by edit operations that need to check structural rules.
-  Map<Object, BlockPolicies> get policies =>
+  Map<B, BlockPolicies> get policies =>
       blocks.map((k, v) => MapEntry(k, v.policies));
 
   /// Whether the block type identified by [key] is list-like.
@@ -53,6 +60,9 @@ class EditorSchema {
 
   /// Whether the block type identified by [key] is a void block (no text).
   bool isVoid(Object key) => blocks[key]?.isVoid ?? false;
+
+  /// Whether the block type identified by [key] is a heading.
+  bool isHeading(Object key) => blocks[key]?.isHeading ?? false;
 
   /// Collect all input rules from block defs then inline style defs,
   /// in map insertion order. This determines rule priority — specific

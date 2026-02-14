@@ -1,14 +1,17 @@
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
 
 /// A single atomic edit to the document.
 ///
 /// Each operation knows how to [apply] itself to a Document, returning
 /// a new Document. The controller composes these into Transactions.
+///
+/// Operations are non-generic classes — they store block type values as
+/// [Object]. The [apply] method is generic so it preserves the caller's
+/// `Document<B>` type through the operation chain.
 sealed class EditOperation {
-  Document apply(Document doc);
+  Document<B> apply<B>(Document<B> doc);
 }
 
 /// Insert [text] into the block at [blockIndex] at [offset].
@@ -28,13 +31,13 @@ class InsertText extends EditOperation {
   final int blockIndex;
   final int offset;
   final String text;
-  final Set<InlineStyle>? styles;
+  final Set<Object>? styles;
 
   /// Attributes for data-carrying styles (e.g. `{'url': '...'}` for links).
   final Map<String, dynamic>? attributes;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final block = doc.allBlocks[blockIndex];
     final newSegments = _spliceInsert(
       block.segments,
@@ -61,7 +64,7 @@ class DeleteText extends EditOperation {
   final int length;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final block = doc.allBlocks[blockIndex];
     final newSegments = _spliceDelete(block.segments, offset, length);
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
@@ -89,19 +92,19 @@ class ToggleStyle extends EditOperation {
   final int blockIndex;
   final int start;
   final int end;
-  final InlineStyle style;
+  final Object style;
 
   /// Attributes to set when applying a data-carrying style (e.g. link URL).
   /// Ignored when removing a style.
   final Map<String, dynamic>? attributes;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final block = doc.allBlocks[blockIndex];
     final segments = block.segments;
 
     // Expand segments into per-character style sets and attribute maps.
-    final charStyles = <Set<InlineStyle>>[];
+    final charStyles = <Set<Object>>[];
     final charAttrs = <Map<String, dynamic>>[];
     for (final seg in segments) {
       for (var i = 0; i < seg.text.length; i++) {
@@ -148,32 +151,43 @@ class ToggleStyle extends EditOperation {
 
   @override
   String toString() =>
-      'ToggleStyle(block: $blockIndex, $start..$end, ${style.name})';
+      'ToggleStyle(block: $blockIndex, $start..$end, $style)';
 }
 
 /// Split block at [blockIndex] at [offset], creating a new block after it.
 ///
 /// This is what happens when the user presses Enter.
-/// - Headings: new block is always a paragraph (Notion-style).
-/// - List items: new block is another list item (continue the list).
-/// - Paragraphs: new block is a paragraph.
+/// - List items (isListLike): new block is another list item (continue the list).
+/// - Everything else: new block uses [defaultBlockType] (Notion-style).
+///
+/// [defaultBlockType] and [isListLikeFn] are provided by the controller from
+/// the schema, keeping the operation itself decoupled from specific enums.
 class SplitBlock extends EditOperation {
-  SplitBlock(this.blockIndex, this.offset);
+  SplitBlock(this.blockIndex, this.offset,
+      {this.defaultBlockType, this.isListLikeFn});
 
   final int blockIndex;
   final int offset;
 
+  /// The default block type for new blocks. Provided by the controller from
+  /// `schema.defaultBlockType`. Stored as Object, cast to B in [apply].
+  final Object? defaultBlockType;
+
+  /// When provided, determines whether the current block type continues on
+  /// Enter. When null, defaults to using the default block type.
+  final bool Function(Object blockType)? isListLikeFn;
+
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final block = doc.allBlocks[blockIndex];
     final (beforeSegments, afterSegments) = splitSegmentsAt(
       block.segments,
       offset,
     );
 
-    final newBlockType = isListLike(block.blockType)
-        ? block.blockType
-        : BlockType.paragraph;
+    final listLike = isListLikeFn?.call(block.blockType as Object) ?? false;
+    final B newBlockType =
+        listLike ? block.blockType : (defaultBlockType as B? ?? block.blockType);
 
     // For tasks, new block starts unchecked.
     final newMetadata = block.blockType == BlockType.taskItem
@@ -183,7 +197,7 @@ class SplitBlock extends EditOperation {
     final updatedBlock = block.copyWith(
       segments: mergeSegments(beforeSegments),
     );
-    final newBlock = TextBlock(
+    final newBlock = TextBlock<B>(
       id: generateBlockId(),
       blockType: newBlockType,
       segments: mergeSegments(afterSegments),
@@ -209,7 +223,7 @@ class MergeBlocks extends EditOperation {
   final int secondBlockIndex;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final flat = doc.allBlocks;
     if (secondBlockIndex <= 0 || secondBlockIndex >= flat.length) return doc;
 
@@ -236,7 +250,7 @@ class ChangeBlockType extends EditOperation {
   ChangeBlockType(this.blockIndex, this.newType, {this.policies});
 
   final int blockIndex;
-  final BlockType newType;
+  final Object newType;
 
   /// Policies map from the schema. When provided, structural rules are
   /// enforced (e.g. headings can't be children). When null, the type change
@@ -245,7 +259,7 @@ class ChangeBlockType extends EditOperation {
   final Map<Object, BlockPolicies>? policies;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final policyMap = policies;
     // Policy: if the new type can't be a child and the block is nested, reject.
     final newPolicy = policyMap?[newType];
@@ -261,12 +275,12 @@ class ChangeBlockType extends EditOperation {
     // (e.g. task 'checked' state) shouldn't carry over.
     return doc.replaceBlock(
       blockIndex,
-      block.copyWith(blockType: newType, metadata: const {}),
+      block.copyWith(blockType: newType as B, metadata: const {}),
     );
   }
 
   @override
-  String toString() => 'ChangeBlockType(block: $blockIndex, ${newType.name})';
+  String toString() => 'ChangeBlockType(block: $blockIndex, $newType)';
 }
 
 /// Delete a range of text that may span multiple blocks.
@@ -288,7 +302,7 @@ class DeleteRange extends EditOperation {
   final int endOffset;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final flat = doc.allBlocks;
     if (startBlockIndex >= flat.length || endBlockIndex >= flat.length) {
       return doc;
@@ -341,7 +355,7 @@ class RemoveBlock extends EditOperation {
   final int flatIndex;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final flat = doc.allBlocks;
     if (flatIndex < 0 || flatIndex >= flat.length) return doc;
     // Don't remove the last block — always keep at least one.
@@ -369,7 +383,7 @@ class PasteBlocks extends EditOperation {
   final List<TextBlock> pastedBlocks;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     if (pastedBlocks.isEmpty) return doc;
     final flat = doc.allBlocks;
     if (blockIndex >= flat.length) return doc;
@@ -383,14 +397,14 @@ class PasteBlocks extends EditOperation {
     return _applyMultiBlock(doc, target);
   }
 
-  Document _applySingleBlock(Document doc, TextBlock target) {
+  Document<B> _applySingleBlock<B>(Document<B> doc, TextBlock<B> target) {
     final pasted = pastedBlocks[0];
     final (before, after) = splitSegmentsAt(target.segments, offset);
     final merged = mergeSegments([...before, ...pasted.segments, ...after]);
     return doc.replaceBlock(blockIndex, target.copyWith(segments: merged));
   }
 
-  Document _applyMultiBlock(Document doc, TextBlock target) {
+  Document<B> _applyMultiBlock<B>(Document<B> doc, TextBlock<B> target) {
     // 1. Split target into head (before offset) and tail (after offset).
     final (headSegs, tailSegs) = splitSegmentsAt(target.segments, offset);
 
@@ -399,20 +413,21 @@ class PasteBlocks extends EditOperation {
     // pasted block's type — don't force the target's type on pasted content.
     // Preserve children from the first pasted block.
     final firstPasted = pastedBlocks.first;
-    final headType = offset == 0 ? firstPasted.blockType : target.blockType;
+    final headType =
+        offset == 0 ? firstPasted.blockType as B : target.blockType;
     final headBlock = target.copyWith(
       blockType: headType,
       segments: mergeSegments([...headSegs, ...firstPasted.segments]),
       children: firstPasted.children.isNotEmpty
-          ? firstPasted.children
+          ? firstPasted.children.map((c) => _recastBlock<B>(c)).toList()
           : target.children,
     );
 
     // 3. Merge last pasted block's segments with the tail.
     final lastPasted = pastedBlocks.last;
-    final tailBlock = TextBlock(
+    final tailBlock = TextBlock<B>(
       id: generateBlockId(),
-      blockType: lastPasted.blockType,
+      blockType: lastPasted.blockType as B,
       segments: mergeSegments([...lastPasted.segments, ...tailSegs]),
     );
 
@@ -430,10 +445,10 @@ class PasteBlocks extends EditOperation {
     final rootIdx =
         result.blocks.indexWhere((b) => b.id == headBlock.id);
     if (rootIdx >= 0) {
-      final newRoots = List<TextBlock>.of(result.blocks);
+      final newRoots = List<TextBlock<B>>.of(result.blocks);
       var insertAt = rootIdx + 1;
       for (final mid in middleBlocks) {
-        newRoots.insert(insertAt, mid);
+        newRoots.insert(insertAt, _recastBlock<B>(mid));
         insertAt++;
       }
       newRoots.insert(insertAt, tailBlock);
@@ -442,7 +457,8 @@ class PasteBlocks extends EditOperation {
       // Fallback: head is nested. Use insertAfterFlatIndex.
       var insertAfter = blockIndex;
       for (final mid in middleBlocks) {
-        result = result.insertAfterFlatIndex(insertAfter, mid);
+        final typedMid = _recastBlock<B>(mid);
+        result = result.insertAfterFlatIndex(insertAfter, typedMid);
         insertAfter++;
       }
       result = result.insertAfterFlatIndex(insertAfter, tailBlock);
@@ -467,7 +483,7 @@ class SetBlockMetadata extends EditOperation {
   final dynamic value;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final flat = doc.allBlocks;
     if (blockIndex < 0 || blockIndex >= flat.length) return doc;
 
@@ -496,7 +512,7 @@ class IndentBlock extends EditOperation {
   final Map<Object, BlockPolicies>? policies;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final policyMap = policies;
     final prevSibling = doc.previousSibling(flatIndex);
     if (prevSibling == null) return doc; // No previous sibling — can't indent.
@@ -539,7 +555,7 @@ class OutdentBlock extends EditOperation {
   final int flatIndex;
 
   @override
-  Document apply(Document doc) {
+  Document<B> apply<B>(Document<B> doc) {
     final parent = doc.parentOf(flatIndex);
     if (parent == null) return doc; // Already at root — can't outdent.
 
@@ -562,6 +578,21 @@ class OutdentBlock extends EditOperation {
 
 // --- Helpers ---
 
+/// Recursively rebuild a [TextBlock] with the correct generic type [B].
+///
+/// This is needed when pasting blocks from codecs or external sources that
+/// produce `TextBlock<dynamic>` — Dart's reified generics mean that
+/// `.cast<TextBlock<B>>()` fails at runtime for children.
+TextBlock<B> _recastBlock<B>(TextBlock block) {
+  return TextBlock<B>(
+    id: block.id,
+    blockType: block.blockType as B,
+    segments: block.segments,
+    children: block.children.map((c) => _recastBlock<B>(c)).toList(),
+    metadata: block.metadata,
+  );
+}
+
 /// Insert [text] at [offset] in [segments].
 ///
 /// If [styles] is provided, the new text gets those styles explicitly.
@@ -571,7 +602,7 @@ List<StyledSegment> _spliceInsert(
   List<StyledSegment> segments,
   int offset,
   String text, {
-  Set<InlineStyle>? styles,
+  Set<Object>? styles,
   Map<String, dynamic>? attributes,
 }) {
   if (segments.isEmpty) {

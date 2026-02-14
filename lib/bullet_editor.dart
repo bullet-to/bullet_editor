@@ -18,7 +18,7 @@ export 'src/editor/undo_manager.dart';
 export 'src/model/block.dart';
 export 'src/model/block_policies.dart';
 export 'src/model/document.dart';
-export 'src/model/inline_style.dart';
+// InlineStyle is now exported from block.dart alongside BlockType.
 // Schema
 export 'src/schema/block_def.dart';
 export 'src/schema/default_schema.dart';

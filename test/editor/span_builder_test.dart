@@ -8,6 +8,7 @@ void main() {
       TextStyle? capturedStyle;
 
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.listItem: BlockDef(
             label: 'List',
@@ -20,7 +21,7 @@ void main() {
           ),
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
 
       final doc = Document([
@@ -43,6 +44,7 @@ void main() {
       TextStyle? capturedStyle;
 
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.h1: BlockDef(
             label: 'H1',
@@ -59,7 +61,7 @@ void main() {
           ),
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
 
       final doc = Document([
@@ -83,6 +85,7 @@ void main() {
       TextStyle? capturedStyle;
 
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.listItem: BlockDef(
             label: 'List',
@@ -95,7 +98,7 @@ void main() {
           ),
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
 
       final doc = Document([
@@ -126,6 +129,7 @@ void main() {
       );
 
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.taskItem: BlockDef(
             label: 'Task',
@@ -139,7 +143,7 @@ void main() {
           ),
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
 
       final doc = Document([
@@ -166,6 +170,7 @@ void main() {
       final calls = <(int, double?)>[];
 
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.listItem: BlockDef(
             label: 'Bullet',
@@ -178,7 +183,7 @@ void main() {
           ),
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
 
       final doc = Document([

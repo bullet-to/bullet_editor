@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
+import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
 import 'transaction.dart';
 
@@ -11,8 +11,13 @@ import 'transaction.dart';
 ///
 /// Return a modified [Transaction] to transform the edit, or null to
 /// let it pass through unchanged.
+///
+/// [schema] provides access to block/style metadata (e.g. isListLike,
+/// isHeading, defaultBlockType) so rules don't need to compare against
+/// specific enum values.
 abstract class InputRule {
-  Transaction? tryTransform(Transaction pending, Document doc);
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema);
 }
 
 /// Detects a wrap-delimiter pattern (e.g. `**text**`, `*text*`, `~~text~~`)
@@ -29,11 +34,12 @@ class InlineWrapRule extends InputRule {
       );
 
   final String delimiter;
-  final InlineStyle style;
+  final Object style;
   final RegExp _pattern;
 
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null) return null;
 
@@ -111,7 +117,8 @@ class LinkWrapRule extends InputRule {
   static final _pattern = RegExp(r'\[([^\]]+)\]\(([^)]+)\)');
 
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ')') return null;
 
@@ -162,10 +169,11 @@ class PrefixBlockRule extends InputRule {
 
   /// The prefix character before the space (e.g. "#", "-").
   final String prefix;
-  final BlockType targetType;
+  final Object targetType;
 
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ' ') return null;
     if (insertOp.offset != prefix.length) return null;
@@ -177,7 +185,7 @@ class PrefixBlockRule extends InputRule {
     final block = resultDoc.allBlocks[i];
     final fullPrefix = '$prefix ';
     if (!block.plainText.startsWith(fullPrefix) ||
-        block.blockType != BlockType.paragraph) {
+        block.blockType != schema.defaultBlockType) {
       return null;
     }
 
@@ -201,10 +209,11 @@ class HeadingRule extends PrefixBlockRule {
   HeadingRule() : super('#', BlockType.h1);
 }
 
-/// Backspace at the start of a heading converts it to a paragraph.
+/// Backspace at the start of a heading converts it to the default block type.
 class HeadingBackspaceRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -212,16 +221,12 @@ class HeadingBackspaceRule extends InputRule {
     if (mergeOp.secondBlockIndex >= flat.length) return null;
 
     final block = flat[mergeOp.secondBlockIndex];
-    if (block.blockType != BlockType.h1 &&
-        block.blockType != BlockType.h2 &&
-        block.blockType != BlockType.h3) {
-      return null;
-    }
+    if (!schema.isHeading(block.blockType)) return null;
 
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph),
+        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -239,12 +244,13 @@ class NumberedListRule extends PrefixBlockRule {
 /// Detects task shortcut patterns and converts to a taskItem with metadata.
 ///
 /// Two trigger paths:
-/// 1. `- [ ] ` or `- [x] ` typed on a paragraph (full shortcut)
+/// 1. `- [ ] ` or `- [x] ` typed on a default block type (full shortcut)
 /// 2. `[ ] ` or `[x] ` typed at the start of a list item (since "- " already
 ///    converted it to a list item via ListItemRule)
 class TaskItemRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ' ') return null;
 
@@ -258,8 +264,8 @@ class TaskItemRule extends InputRule {
     bool? checked;
     int prefixLen;
 
-    if (block.blockType == BlockType.paragraph) {
-      // Path 1: full "- [ ] " on a paragraph.
+    if (block.blockType == schema.defaultBlockType) {
+      // Path 1: full "- [ ] " on a default block type.
       if (text.startsWith('- [ ] ')) {
         checked = false;
         prefixLen = 6;
@@ -301,36 +307,41 @@ class TaskItemRule extends InputRule {
   }
 }
 
-/// Enter on an empty list item converts it to a paragraph instead of splitting.
+/// Enter on an empty list item converts it to the default block type.
 ///
 /// This rule checks for SplitBlock on an empty list item and replaces it
-/// with a ChangeBlockType to paragraph.
+/// with a ChangeBlockType to the default block type.
 class EmptyListItemRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
     if (splitOp == null) return null;
 
     final block = doc.allBlocks[splitOp.blockIndex];
-    if (!isListLike(block.blockType)) return null;
+    if (!schema.isListLike(block.blockType)) return null;
     if (block.plainText.isNotEmpty) return null;
 
-    // Replace the split with a type change to paragraph.
+    // Replace the split with a type change to the default block type.
     return Transaction(
-      operations: [ChangeBlockType(splitOp.blockIndex, BlockType.paragraph)],
+      operations: [
+        ChangeBlockType(splitOp.blockIndex, schema.defaultBlockType),
+      ],
       selectionAfter: pending.selectionAfter,
     );
   }
 }
 
-/// Backspace at start of a list item converts it to a paragraph (keeps nesting).
+/// Backspace at start of a list item converts it to the default block type
+/// (keeps nesting).
 ///
 /// Detects a MergeBlocks where the second block is a list item, and replaces
-/// it with a ChangeBlockType to paragraph. The block stays in its current
-/// position in the tree — only the type changes.
+/// it with a ChangeBlockType. The block stays in its current position in the
+/// tree — only the type changes.
 class ListItemBackspaceRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -338,14 +349,14 @@ class ListItemBackspaceRule extends InputRule {
     if (mergeOp.secondBlockIndex >= flat.length) return null;
 
     final block = flat[mergeOp.secondBlockIndex];
-    if (!isListLike(block.blockType)) return null;
+    if (!schema.isListLike(block.blockType)) return null;
 
-    // Convert to paragraph instead of merging.
+    // Convert to default block type instead of merging.
     // Cursor should stay at the start of this block, not jump to the previous one.
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph),
+        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -358,7 +369,8 @@ class ListItemBackspaceRule extends InputRule {
 /// step by step until root level, then merges.
 class NestedBackspaceRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -367,7 +379,7 @@ class NestedBackspaceRule extends InputRule {
 
     final block = flat[mergeOp.secondBlockIndex];
     // Only for non-list-like blocks (list-like are handled by ListItemBackspaceRule).
-    if (isListLike(block.blockType)) return null;
+    if (schema.isListLike(block.blockType)) return null;
     // Only if nested (depth > 0). Root blocks merge normally.
     if (doc.depthOf(mergeOp.secondBlockIndex) == 0) return null;
 
@@ -380,14 +392,16 @@ class NestedBackspaceRule extends InputRule {
   }
 }
 
-/// Detects `---` typed on an empty paragraph and converts it to a divider block.
+/// Detects `---` typed on an empty default block type and converts it to a
+/// divider block.
 ///
 /// Fires when the third `-` is inserted, making the block text exactly `---`.
 /// The text is cleared, the block type is changed to divider, and a new empty
-/// paragraph is inserted after for the cursor to land on.
+/// block is inserted after for the cursor to land on.
 class DividerRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != '-') return null;
 
@@ -396,7 +410,8 @@ class DividerRule extends InputRule {
     if (i >= resultDoc.allBlocks.length) return null;
 
     final block = resultDoc.allBlocks[i];
-    if (block.blockType != BlockType.paragraph || block.plainText != '---') {
+    if (block.blockType != schema.defaultBlockType ||
+        block.plainText != '---') {
       return null;
     }
 
@@ -406,8 +421,8 @@ class DividerRule extends InputRule {
         ...pending.operations,
         DeleteText(i, 0, 3),
         ChangeBlockType(i, BlockType.divider),
-        // Create a new paragraph after the divider for the cursor.
-        SplitBlock(i, 0),
+        // Create a new block after the divider for the cursor.
+        SplitBlock(i, 0, defaultBlockType: schema.defaultBlockType),
       ],
       selectionAfter: TextSelection.collapsed(offset: blockStart + 1),
     );
@@ -421,14 +436,15 @@ class DividerRule extends InputRule {
 /// the divider entirely and keep the current block as-is.
 class DividerBackspaceRule extends InputRule {
   @override
-  Transaction? tryTransform(Transaction pending, Document doc) {
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
     final flat = doc.allBlocks;
     final prevIdx = mergeOp.secondBlockIndex - 1;
     if (prevIdx < 0 || prevIdx >= flat.length) return null;
-    if (flat[prevIdx].blockType != BlockType.divider) return null;
+    if (!schema.isVoid(flat[prevIdx].blockType)) return null;
 
     // Remove the divider. The current block slides into its position.
     final cursorOffset = doc.globalOffset(prevIdx, 0);

@@ -1,11 +1,16 @@
 import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+bool _isListLike(Object type) =>
+    type == BlockType.listItem ||
+    type == BlockType.numberedList ||
+    type == BlockType.taskItem;
+
 void main() {
   group('InsertText', () {
     test('inserts text at offset', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final result = InsertText(0, 5, ' world').apply(doc);
       expect(result.blocks[0].plainText, 'hello world');
@@ -13,7 +18,7 @@ void main() {
 
     test('inserts at beginning', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('world')]),
       ]);
       final result = InsertText(0, 0, 'hello ').apply(doc);
       expect(result.blocks[0].plainText, 'hello world');
@@ -23,6 +28,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('hello', {InlineStyle.bold}),
           ],
@@ -39,6 +45,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('onetwothree', {InlineStyle.bold}),
           ],
@@ -56,6 +63,7 @@ void main() {
       var doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('hello', {InlineStyle.bold}),
           ],
@@ -88,7 +96,7 @@ void main() {
   group('DeleteText', () {
     test('deletes text at offset', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final result = DeleteText(0, 5, 6).apply(doc);
       expect(result.blocks[0].plainText, 'hello');
@@ -98,7 +106,7 @@ void main() {
   group('ToggleStyle', () {
     test('applies bold to unstyled range', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final result = ToggleStyle(0, 0, 5, InlineStyle.bold).apply(doc);
       expect(result.blocks[0].segments.length, 2);
@@ -112,6 +120,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment('hello world', {InlineStyle.bold}),
           ],
@@ -126,7 +135,7 @@ void main() {
   group('SplitBlock', () {
     test('splits block at offset', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final result = SplitBlock(0, 5).apply(doc);
       expect(result.blocks.length, 2);
@@ -136,7 +145,7 @@ void main() {
 
     test('split at start creates empty first block', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final result = SplitBlock(0, 0).apply(doc);
       expect(result.blocks.length, 2);
@@ -148,8 +157,8 @@ void main() {
   group('MergeBlocks', () {
     test('merges second block into first', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-        TextBlock(id: 'b', segments: [const StyledSegment(' world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment(' world')]),
       ]);
       final result = MergeBlocks(1).apply(doc);
       expect(result.blocks.length, 1);
@@ -158,7 +167,7 @@ void main() {
 
     test('merging first block is no-op', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final result = MergeBlocks(0).apply(doc);
       expect(result.blocks.length, 1);
@@ -168,7 +177,7 @@ void main() {
   group('ChangeBlockType', () {
     test('changes block type', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final result = ChangeBlockType(0, BlockType.h1).apply(doc);
       expect(result.blocks[0].blockType, BlockType.h1);
@@ -185,7 +194,7 @@ void main() {
           segments: [const StyledSegment('heading')],
         ),
       ]);
-      final result = SplitBlock(0, 7).apply(doc);
+      final result = SplitBlock(0, 7, defaultBlockType: BlockType.paragraph).apply(doc);
       expect(result.blocks[0].blockType, BlockType.h1);
       expect(result.blocks[1].blockType, BlockType.paragraph);
     });
@@ -198,7 +207,7 @@ void main() {
           segments: [const StyledSegment('item')],
         ),
       ]);
-      final result = SplitBlock(0, 4).apply(doc);
+      final result = SplitBlock(0, 4, isListLikeFn: _isListLike).apply(doc);
       expect(result.blocks[0].blockType, BlockType.listItem);
       expect(result.blocks[1].blockType, BlockType.listItem);
     });
@@ -282,7 +291,7 @@ void main() {
   group('DeleteRange', () {
     test('same block behaves like DeleteText', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final result = DeleteRange(0, 2, 0, 7).apply(doc);
       expect(result.allBlocks[0].plainText, 'heorld');
@@ -290,8 +299,8 @@ void main() {
 
     test('across 2 blocks merges remaining halves', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('world')]),
       ]);
       // Delete from offset 3 in block 0 to offset 2 in block 1.
       // Keeps 'hel' + 'rld' = 'helrld'
@@ -304,10 +313,10 @@ void main() {
       'across 3+ blocks removes middle blocks and merges first and last',
       () {
         final doc = Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('aaa')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('bbb')]),
-          TextBlock(id: 'c', segments: [const StyledSegment('ccc')]),
-          TextBlock(id: 'd', segments: [const StyledSegment('ddd')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('aaa')]),
+          TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('bbb')]),
+          TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('ccc')]),
+          TextBlock(id: 'd', blockType: BlockType.paragraph, segments: [const StyledSegment('ddd')]),
         ]);
         // Delete from offset 1 in block 0 to offset 2 in block 3.
         // Keeps 'a' + 'd' = 'ad', blocks b and c removed.
@@ -319,8 +328,8 @@ void main() {
 
     test('delete entire blocks leaves empty first block', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('world')]),
       ]);
       // Delete from offset 0 in block 0 to offset 5 in block 1 (everything).
       final result = DeleteRange(0, 0, 1, 5).apply(doc);
@@ -332,7 +341,7 @@ void main() {
   group('Transaction', () {
     test('applies multiple operations in sequence', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final tx = Transaction(
         operations: [
@@ -355,7 +364,7 @@ void main() {
           segments: [const StyledSegment('first')],
         ),
       ]);
-      final result = SplitBlock(0, 5).apply(doc);
+      final result = SplitBlock(0, 5, isListLikeFn: _isListLike).apply(doc);
       expect(result.allBlocks.length, 2);
       expect(result.allBlocks[0].blockType, BlockType.numberedList);
       expect(result.allBlocks[1].blockType, BlockType.numberedList);
@@ -370,7 +379,7 @@ void main() {
           metadata: {'checked': true},
         ),
       ]);
-      final result = SplitBlock(0, 4).apply(doc);
+      final result = SplitBlock(0, 4, isListLikeFn: _isListLike).apply(doc);
       expect(result.allBlocks.length, 2);
       expect(result.allBlocks[1].blockType, BlockType.taskItem);
       expect(result.allBlocks[1].metadata['checked'], false);
@@ -393,7 +402,7 @@ void main() {
 
     test('out of range is no-op', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final result = SetBlockMetadata(5, 'key', 'value').apply(doc);
       expect(result.allBlocks.length, 1);
@@ -403,7 +412,7 @@ void main() {
   group('ToggleStyle with attributes', () {
     test('applies link style with URL attribute', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('click here')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('click here')]),
       ]);
       final result = ToggleStyle(
         0,
@@ -421,6 +430,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
+          blockType: BlockType.paragraph,
           segments: [
             const StyledSegment(
               'linked',
@@ -444,7 +454,7 @@ void main() {
 
     test('link on partial range splits segments correctly', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final result = ToggleStyle(
         0,
@@ -466,7 +476,7 @@ void main() {
   group('InsertText with attributes', () {
     test('inserts text with link attributes', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('before after')]),
       ]);
       final result = InsertText(
         0,
@@ -492,7 +502,7 @@ void main() {
   group('DeleteText preserves attributes', () {
     test('deleting part of a link segment keeps URL', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
           const StyledSegment(
               'link', {InlineStyle.link}, {'url': 'https://flutter.dev'}),
         ]),
@@ -508,7 +518,7 @@ void main() {
   group('SplitBlock preserves attributes', () {
     test('splitting inside a link segment keeps URL on both halves', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
           const StyledSegment(
               'click here', {InlineStyle.link}, {'url': 'https://x.com'}),
         ]),
@@ -526,10 +536,10 @@ void main() {
   group('PasteBlocks', () {
     test('single block paste inserts styled segments', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
       ]);
       final pasted = [
-        TextBlock(id: 'p1', segments: [
+        TextBlock(id: 'p1', blockType: BlockType.paragraph, segments: [
           const StyledSegment('bold', {InlineStyle.bold}),
         ]),
       ];
@@ -545,16 +555,16 @@ void main() {
 
     test('multi-block paste splits and inserts', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('before after')]),
       ]);
       final pasted = [
-        TextBlock(id: 'p1', segments: [const StyledSegment('first')]),
+        TextBlock(id: 'p1', blockType: BlockType.paragraph, segments: [const StyledSegment('first')]),
         TextBlock(
           id: 'p2',
           blockType: BlockType.h1,
           segments: [const StyledSegment('heading')],
         ),
-        TextBlock(id: 'p3', segments: [const StyledSegment('last')]),
+        TextBlock(id: 'p3', blockType: BlockType.paragraph, segments: [const StyledSegment('last')]),
       ];
       final result = PasteBlocks(0, 7, pasted).apply(doc);
       expect(result.allBlocks.length, 3);
@@ -566,10 +576,10 @@ void main() {
 
     test('paste at start of block', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('existing')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('existing')]),
       ]);
       final pasted = [
-        TextBlock(id: 'p1', segments: [
+        TextBlock(id: 'p1', blockType: BlockType.paragraph, segments: [
           const StyledSegment('new ', {InlineStyle.italic}),
         ]),
       ];
@@ -591,7 +601,7 @@ void main() {
       ]);
       // Paste paragraph + list item after "Title"
       final pasted = [
-        TextBlock(id: 'p1', segments: [const StyledSegment(' extra')]),
+        TextBlock(id: 'p1', blockType: BlockType.paragraph, segments: [const StyledSegment(' extra')]),
         TextBlock(
           id: 'p2',
           blockType: BlockType.listItem,
@@ -618,7 +628,7 @@ void main() {
 
       // Paste into an empty document
       final doc = Document([
-        TextBlock(id: 'a', segments: const []),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
       ]);
       final result = PasteBlocks(0, 0, decoded.blocks).apply(doc);
       final flat = result.allBlocks;
@@ -631,7 +641,7 @@ void main() {
     test('blocks after a nested parent are siblings, not children', () {
       // Simulate pasting: listItem(with child), divider, numberedList
       final doc = Document([
-        TextBlock(id: 'a', segments: const []),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
       ]);
       final pasted = [
         TextBlock(
@@ -668,9 +678,9 @@ void main() {
   group('DeleteRange edge cases', () {
     test('delete all content in multi-block document does not crash', () {
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('first')]),
-        TextBlock(id: 'b', segments: [const StyledSegment('second')]),
-        TextBlock(id: 'c', segments: [const StyledSegment('third')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('second')]),
+        TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('third')]),
       ]);
       // Delete everything: offset 0 to end (5 + 1 + 6 + 1 + 5 = 18)
       final result = DeleteRange(0, 0, 2, 5).apply(doc);

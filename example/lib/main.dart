@@ -21,8 +21,9 @@ class _BulletEditorExampleState extends State<BulletEditorExample> {
 
   void _toggleTheme() {
     setState(() {
-      _themeMode =
-          _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+      _themeMode = _themeMode == ThemeMode.light
+          ? ThemeMode.dark
+          : ThemeMode.light;
     });
   }
 
@@ -48,7 +49,7 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  late final EditorController _controller;
+  late final EditorController<BlockType, InlineStyle> _controller;
   late final FocusNode _focusNode;
 
   @override
@@ -63,6 +64,7 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
       TextBlock(
         id: 'b2',
+        blockType: BlockType.paragraph,
         segments: [
           const StyledSegment('This is a '),
           const StyledSegment('bold', {InlineStyle.bold}),
@@ -128,12 +130,14 @@ class _EditorScreenState extends State<EditorScreen> {
     ]);
 
     _controller = EditorController(
+      schema: EditorSchema.standard(),
       document: doc,
+      onLinkTap: (url) => debugPrint('Link tapped: $url'),
       // Input rules come from the schema — no manual list needed.
     );
     _controller.addListener(() => setState(() {}));
 
-    _focusNode = FocusNode();
+    _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
   }
 
   @override
@@ -273,7 +277,7 @@ class _EditorScreenState extends State<EditorScreen> {
           .toList();
       final attrStr = attrs.isNotEmpty ? ' $attrs' : '';
       buf.writeln(
-        '$indent[$i] ${block.blockType.name}$meta: "${block.plainText}"$attrStr',
+        '$indent[$i] ${block.blockType}$meta: "${block.plainText}"$attrStr',
       );
     }
     return buf.toString();
@@ -394,8 +398,6 @@ class _EditorScreenState extends State<EditorScreen> {
               child: BulletEditor(
                 controller: _controller,
                 focusNode: _focusNode,
-                onKeyEvent: _handleKeyEvent,
-                onLinkTap: (url) => debugPrint('Link tapped: $url'),
               ),
             ),
             const SizedBox(height: 16),

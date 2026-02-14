@@ -6,8 +6,9 @@ void main() {
   group('Offset translation', () {
     test('display text includes prefix chars for list items', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
           TextBlock(
             id: 'b',
             blockType: BlockType.listItem,
@@ -25,6 +26,7 @@ void main() {
 
     test('display text includes prefix for nested list items', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -48,6 +50,7 @@ void main() {
 
     test('typing in list item works correctly with prefix', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -68,8 +71,9 @@ void main() {
 
     test('paragraphs have no prefix', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('para')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('para')]),
         ]),
       );
 
@@ -80,8 +84,9 @@ void main() {
 
     test('cursor skips over spacer and prefix char when arrowing right', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('abc')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('abc')]),
           TextBlock(
             id: 'b',
             blockType: BlockType.listItem,
@@ -113,8 +118,9 @@ void main() {
 
     test('cursor skips over prefix and spacer char when arrowing left', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('abc')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('abc')]),
           TextBlock(
             id: 'b',
             blockType: BlockType.listItem,
@@ -144,14 +150,15 @@ void main() {
 
     test('mixed blocks: paragraph then list item', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('abc')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('abc')]),
           TextBlock(
             id: 'b',
             blockType: BlockType.listItem,
             segments: [const StyledSegment('def')],
           ),
-          TextBlock(id: 'c', segments: [const StyledSegment('ghi')]),
+          TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('ghi')]),
         ]),
       );
 
@@ -173,9 +180,10 @@ void main() {
   group('Empty block placeholder', () {
     test('display text includes \\u200B for empty paragraphs', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b'), // empty paragraph
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
         ]),
       );
 
@@ -187,6 +195,7 @@ void main() {
 
     test('empty list items do NOT get \\u200B (they have a prefix)', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -202,6 +211,7 @@ void main() {
 
     test('empty divider does NOT get \\u200B (it has a prefix)', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(id: 'a', blockType: BlockType.divider),
         ]),
@@ -214,8 +224,8 @@ void main() {
     test('displayToModel maps \\u200B position to block start', () {
       final schema = EditorSchema.standard();
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hi')]),
-        TextBlock(id: 'b'), // empty paragraph
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hi')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
       ]);
 
       // Display: "hi\n\u200B"
@@ -229,8 +239,8 @@ void main() {
     test('modelToDisplay maps block start to after spacer', () {
       final schema = EditorSchema.standard();
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hi')]),
-        TextBlock(id: 'b'), // empty paragraph
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hi')]),
+        TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
       ]);
 
       // Model offset 3 = start of empty block → display position 3 (\u200B)
@@ -241,7 +251,7 @@ void main() {
       final schema = EditorSchema.standard();
       final doc = Document([
         TextBlock(id: 'a', blockType: BlockType.divider),
-        TextBlock(id: 'b'), // empty paragraph
+        TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
       ]);
 
       final display = buildDisplayText(doc, schema);
@@ -253,7 +263,7 @@ void main() {
       final schema = EditorSchema.standard();
       final doc = Document([
         TextBlock(id: 'a', blockType: BlockType.divider),
-        TextBlock(id: 'b'), // empty paragraph
+        TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
       ]);
 
       // Model offset 1 = start of empty paragraph (divider=0 chars + \n=1)
@@ -263,9 +273,10 @@ void main() {
 
     test('typing on empty paragraph after divider inserts correctly', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(id: 'a', blockType: BlockType.divider),
-          TextBlock(id: 'b'), // empty paragraph
+          TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
         ]),
       );
 
@@ -283,10 +294,11 @@ void main() {
 
     test('multiple empty paragraphs each get \\u200B', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a'),
-          TextBlock(id: 'b'),
-          TextBlock(id: 'c'),
+          TextBlock(id: 'a', blockType: BlockType.paragraph),
+          TextBlock(id: 'b', blockType: BlockType.paragraph),
+          TextBlock(id: 'c', blockType: BlockType.paragraph),
         ]),
       );
 

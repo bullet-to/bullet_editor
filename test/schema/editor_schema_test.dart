@@ -56,6 +56,21 @@ void main() {
       expect(schema.isListLike(BlockType.h3), isFalse);
     });
 
+    test('defaultBlockType is paragraph', () {
+      final schema = EditorSchema.standard();
+      expect(schema.defaultBlockType, BlockType.paragraph);
+    });
+
+    test('isHeading returns true for headings, false for others', () {
+      final schema = EditorSchema.standard();
+      expect(schema.isHeading(BlockType.h1), isTrue);
+      expect(schema.isHeading(BlockType.h2), isTrue);
+      expect(schema.isHeading(BlockType.h3), isTrue);
+      expect(schema.isHeading(BlockType.paragraph), isFalse);
+      expect(schema.isHeading(BlockType.listItem), isFalse);
+      expect(schema.isHeading(BlockType.divider), isFalse);
+    });
+
     test('policies aggregates from block defs', () {
       final schema = EditorSchema.standard();
       final policies = schema.policies;
@@ -130,6 +145,7 @@ void main() {
 
     test('custom schema with third-party block type', () {
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           ...EditorSchema.standard().blocks,
           'callout': const BlockDef(label: 'Callout'),
@@ -202,17 +218,23 @@ void main() {
   });
 
   group('H2/H3 input rules', () {
+    final schema = EditorSchema.standard();
+
     test('## space converts to H2', () {
       final rule = PrefixBlockRule('##', BlockType.h2);
       // Doc has "##" typed so far; user types space.
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('##')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('##')],
+        ),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 2, ' ')],
         selectionAfter: const TextSelection.collapsed(offset: 3),
       );
-      final result = rule.tryTransform(tx, doc);
+      final result = rule.tryTransform(tx, doc, schema);
       expect(result, isNotNull);
       final applied = result!.apply(doc);
       expect(applied.allBlocks[0].blockType, BlockType.h2);
@@ -222,13 +244,17 @@ void main() {
     test('### space converts to H3', () {
       final rule = PrefixBlockRule('###', BlockType.h3);
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('###')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('###')],
+        ),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 3, ' ')],
         selectionAfter: const TextSelection.collapsed(offset: 4),
       );
-      final result = rule.tryTransform(tx, doc);
+      final result = rule.tryTransform(tx, doc, schema);
       expect(result, isNotNull);
       final applied = result!.apply(doc);
       expect(applied.allBlocks[0].blockType, BlockType.h3);
@@ -239,13 +265,17 @@ void main() {
       final rule = PrefixBlockRule('##', BlockType.h2);
       // Doc has "##hello" typed; user inserts space at offset 2.
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('##hello')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('##hello')],
+        ),
       ]);
       final tx = Transaction(
         operations: [InsertText(0, 2, ' ')],
         selectionAfter: const TextSelection.collapsed(offset: 3),
       );
-      final result = rule.tryTransform(tx, doc);
+      final result = rule.tryTransform(tx, doc, schema);
       expect(result, isNotNull);
       final applied = result!.apply(doc);
       expect(applied.allBlocks[0].blockType, BlockType.h2);
@@ -290,8 +320,11 @@ void main() {
           ],
         ),
       ]);
-      final result =
-          ChangeBlockType(1, BlockType.h3, policies: policies).apply(doc);
+      final result = ChangeBlockType(
+        1,
+        BlockType.h3,
+        policies: policies,
+      ).apply(doc);
       // Should be no-op — nested block can't become h3.
       expect(result.allBlocks[1].blockType, BlockType.paragraph);
     });
@@ -306,29 +339,51 @@ void main() {
       expect(rules.isNotEmpty, isTrue);
 
       // PrefixBlockRule for ### (h3) should come before # (h1).
-      final h3Idx = rules.indexWhere((r) =>
-          r is PrefixBlockRule && r.prefix == '###');
+      final h3Idx = rules.indexWhere(
+        (r) => r is PrefixBlockRule && r.prefix == '###',
+      );
       final h1Idx = rules.indexWhere((r) => r is HeadingRule);
-      expect(h3Idx, lessThan(h1Idx),
-          reason: 'h3 prefix rule should come before h1');
+      expect(
+        h3Idx,
+        lessThan(h1Idx),
+        reason: 'h3 prefix rule should come before h1',
+      );
 
       // TaskItemRule should come before ListItemRule.
       final taskIdx = rules.indexWhere((r) => r is TaskItemRule);
       final listIdx = rules.indexWhere((r) => r is ListItemRule);
-      expect(taskIdx, lessThan(listIdx),
-          reason: 'task rule should come before list rule');
+      expect(
+        taskIdx,
+        lessThan(listIdx),
+        reason: 'task rule should come before list rule',
+      );
 
       // Block rules should come before inline rules.
-      final lastBlockRule = rules.lastIndexWhere((r) =>
-          r is PrefixBlockRule || r is HeadingRule || r is ListItemRule ||
-          r is NumberedListRule || r is DividerRule || r is TaskItemRule ||
-          r is EmptyListItemRule || r is ListItemBackspaceRule ||
-          r is DividerBackspaceRule || r is NestedBackspaceRule);
-      final firstInlineRule = rules.indexWhere((r) =>
-          r is LinkWrapRule || r is BoldWrapRule || r is ItalicWrapRule ||
-          r is StrikethroughWrapRule);
-      expect(lastBlockRule, lessThan(firstInlineRule),
-          reason: 'all block rules should precede inline rules');
+      final lastBlockRule = rules.lastIndexWhere(
+        (r) =>
+            r is PrefixBlockRule ||
+            r is HeadingRule ||
+            r is ListItemRule ||
+            r is NumberedListRule ||
+            r is DividerRule ||
+            r is TaskItemRule ||
+            r is EmptyListItemRule ||
+            r is ListItemBackspaceRule ||
+            r is DividerBackspaceRule ||
+            r is NestedBackspaceRule,
+      );
+      final firstInlineRule = rules.indexWhere(
+        (r) =>
+            r is LinkWrapRule ||
+            r is BoldWrapRule ||
+            r is ItalicWrapRule ||
+            r is StrikethroughWrapRule,
+      );
+      expect(
+        lastBlockRule,
+        lessThan(firstInlineRule),
+        reason: 'all block rules should precede inline rules',
+      );
 
       // LinkWrapRule before BoldWrapRule before ItalicWrapRule.
       final linkIdx = rules.indexWhere((r) => r is LinkWrapRule);
@@ -340,8 +395,13 @@ void main() {
 
     test('EditorController uses schema rules with no manual list', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: const []),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: const [],
+          ),
         ]),
       );
 

@@ -18,6 +18,7 @@ class BlockDef {
     this.policies = const BlockPolicies(),
     this.isListLike = false,
     this.isVoid = false,
+    this.isHeading = false,
     this.splitInheritsType = false,
     this.spacingBefore = 0.0,
     this.baseStyle,
@@ -46,6 +47,11 @@ class BlockDef {
   /// Void blocks render entirely through their [prefixBuilder] and the cursor
   /// skips over them.
   final bool isVoid;
+
+  /// Whether this block type is a heading (h1, h2, h3, etc.).
+  /// Used by input rules (e.g. backspace at start of heading → paragraph)
+  /// without needing to compare against specific enum values.
+  final bool isHeading;
 
   /// Whether Enter (SplitBlock) creates a new block of the same type.
   /// True for list-like blocks. False for headings (Enter creates paragraph).

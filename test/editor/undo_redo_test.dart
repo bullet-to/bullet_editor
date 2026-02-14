@@ -7,7 +7,7 @@ void main() {
     test('push and undo returns the snapshot', () {
       final manager = UndoManager(grouping: (_, __) => false);
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
       final entry = UndoEntry(
         document: doc,
@@ -34,12 +34,12 @@ void main() {
       final manager = UndoManager(grouping: (_, __) => false);
       final now = DateTime.now();
       final entry1 = UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now,
       );
       final entry2 = UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now.add(const Duration(seconds: 1)),
       );
@@ -50,7 +50,7 @@ void main() {
       // Undo to get an entry on the redo stack.
       manager.undo();
       manager.pushRedo(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now,
       ));
@@ -58,7 +58,7 @@ void main() {
 
       // New push should clear redo.
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now.add(const Duration(seconds: 2)),
       ));
@@ -70,14 +70,14 @@ void main() {
       final now = DateTime.now();
 
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now,
       ));
 
       // Push within 300ms — should group (not add new entry).
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 1),
         timestamp: now.add(const Duration(milliseconds: 100)),
       ));
@@ -93,14 +93,14 @@ void main() {
       final now = DateTime.now();
 
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now,
       ));
 
       // Push after 500ms — should NOT group.
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 1),
         timestamp: now.add(const Duration(milliseconds: 500)),
       ));
@@ -122,7 +122,7 @@ void main() {
       for (var i = 0; i < 5; i++) {
         manager.push(UndoEntry(
           document: Document([
-            TextBlock(id: 'b$i', segments: [StyledSegment('text $i')]),
+            TextBlock(id: 'b$i', blockType: BlockType.paragraph, segments: [StyledSegment('text $i')]),
           ]),
           selection: const TextSelection.collapsed(offset: 0),
           timestamp: DateTime.now().add(Duration(seconds: i)),
@@ -144,12 +144,12 @@ void main() {
       final now = DateTime.now();
 
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now,
       ));
       manager.push(UndoEntry(
-        document: Document.empty(),
+        document: Document.empty(BlockType.paragraph),
         selection: const TextSelection.collapsed(offset: 0),
         timestamp: now, // Same timestamp but grouping says false.
       ));
@@ -163,8 +163,9 @@ void main() {
   group('EditorController undo/redo', () {
     test('type text then undo restores, redo re-applies', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
         ]),
         // Disable grouping so each edit is a separate undo step.
         undoGrouping: (_, __) => false,
@@ -188,8 +189,9 @@ void main() {
 
     test('undo after block type change restores paragraph', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('#')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('#')]),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -208,6 +210,7 @@ void main() {
 
     test('undo after indent restores flat structure', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -242,8 +245,9 @@ void main() {
 
     test('redo stack clears on new edit after undo', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('abc')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('abc')]),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -268,8 +272,9 @@ void main() {
 
     test('canUndo and canRedo reflect stack state', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hi')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hi')]),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -298,8 +303,9 @@ void main() {
 
     test('undo on empty stack is a no-op', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
         ]),
       );
 
@@ -310,8 +316,9 @@ void main() {
 
     test('undo restores cursor to pre-edit position', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -338,8 +345,9 @@ void main() {
 
     test('undo after Enter restores cursor to pre-split position', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('helloworld')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('helloworld')]),
         ]),
         undoGrouping: (_, __) => false,
       );

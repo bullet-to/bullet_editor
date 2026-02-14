@@ -7,7 +7,6 @@ import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
 import 'block_def.dart';
 import 'editor_schema.dart';
 import 'inline_style_def.dart';
@@ -36,6 +35,9 @@ class HeadingStyle {
   final FontWeight? fontWeight;
 }
 
+// Note: built-in input rules now use schema.isListLike() directly,
+// so no standalone isListLike function is needed here.
+
 // ---------------------------------------------------------------------------
 // Blocks — built-in block definitions for assembling a custom schema.
 // ---------------------------------------------------------------------------
@@ -58,6 +60,7 @@ abstract final class Blocks {
   static BlockDef h3({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
     return BlockDef(
       label: 'Heading 3',
+      isHeading: true,
       spacingBefore: style?.spacingBefore ?? 0.6,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
       baseStyle: (base) {
@@ -86,6 +89,7 @@ abstract final class Blocks {
   static BlockDef h2({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
     return BlockDef(
       label: 'Heading 2',
+      isHeading: true,
       spacingBefore: style?.spacingBefore ?? 0.8,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
       baseStyle: (base) {
@@ -114,6 +118,7 @@ abstract final class Blocks {
   static BlockDef h1({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
     return BlockDef(
       label: 'Heading 1',
+      isHeading: true,
       spacingBefore: style?.spacingBefore ?? 1.0,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
       baseStyle: (base) {
@@ -391,7 +396,7 @@ abstract final class Inlines {
 /// **Block ordering matters for input rules and codec decode.** More-specific
 /// prefixes must come before shorter ones (h3 before h2 before h1, taskItem
 /// before listItem) so they are tried first.
-EditorSchema buildStandardSchema({
+EditorSchema<BlockType, InlineStyle> buildStandardSchema({
   // Per-heading overrides (null fields keep defaults).
   HeadingStyle? h1,
   HeadingStyle? h2,
@@ -405,12 +410,13 @@ EditorSchema buildStandardSchema({
   double? indentPerDepthFactor,
   String? bulletChar,
   // Extensions — merged after built-ins.
-  Map<Object, BlockDef>? additionalBlocks,
-  Map<Object, InlineStyleDef>? additionalInlineStyles,
+  Map<BlockType, BlockDef>? additionalBlocks,
+  Map<InlineStyle, InlineStyleDef>? additionalInlineStyles,
 }) {
   final pwf = prefixWidthFactor ?? 1.5;
 
-  return EditorSchema(
+  return EditorSchema<BlockType, InlineStyle>(
+    defaultBlockType: BlockType.paragraph,
     prefixWidthFactor: pwf,
     indentPerDepthFactor: indentPerDepthFactor ?? 1.5,
     blocks: {

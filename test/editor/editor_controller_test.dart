@@ -1,14 +1,27 @@
 import 'package:bullet_editor/bullet_editor.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('EditorController', () {
+    test('assert fires when type params are Object (untyped declaration)', () {
+      // Simulates: EditorController _ctrl = EditorController(schema: ...);
+      // where the field type forces <Object, Object>.
+      expect(
+        () => EditorController<Object, Object>(schema: EditorSchema.standard()),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
     test('bold rule fires and cursor lands correctly via controller', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('abc **trigger*')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('abc **trigger*')],
+          ),
         ]),
         // Rules come from schema.
       );
@@ -39,9 +52,11 @@ void main() {
     test('typing after bold continues the style', () {
       // Start with a document that already has bold text.
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('hello', {InlineStyle.bold}),
             ],
@@ -82,9 +97,11 @@ void main() {
     test('space typed at bold/unstyled boundary inherits bold', () {
       // "abc trigger bold" where "trigger" is bold.
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('abc '),
               const StyledSegment('trigger', {InlineStyle.bold}),
@@ -113,7 +130,7 @@ void main() {
       // The space should be bold (active styles were bold when typed).
       final segments = controller.document.blocks[0].segments;
       var pos = 0;
-      Set<InlineStyle>? styleAtInsert;
+      Set<Object>? styleAtInsert;
       for (final seg in segments) {
         if (pos + seg.text.length > 11) {
           styleAtInsert = seg.styles;
@@ -129,9 +146,11 @@ void main() {
     });
     test('Enter splits block and preserves styles on both halves', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('hello world', {InlineStyle.bold}),
             ],
@@ -165,9 +184,18 @@ void main() {
 
     test('Backspace at block start merges blocks', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('world')],
+          ),
         ]),
       );
 
@@ -186,37 +214,50 @@ void main() {
       expect(controller.document.blocks[0].plainText, 'helloworld');
     });
 
-    test('Backspace at heading start demotes h1 → paragraph (HeadingBackspaceRule)', () {
-      final controller = EditorController(
-        document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(
-            id: 'b',
-            blockType: BlockType.h1,
-            segments: [const StyledSegment('world')],
-          ),
-        ]),
-      );
+    test(
+      'Backspace at heading start demotes h1 → paragraph (HeadingBackspaceRule)',
+      () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('world')],
+            ),
+          ]),
+        );
 
-      // h1 has spacingBefore, so display text has spacer \u200C\n before it.
-      expect(controller.text, 'hello\n\u200C\nworld');
+        // h1 has spacingBefore, so display text has spacer \u200C\n before it.
+        expect(controller.text, 'hello\n\u200C\nworld');
 
-      // Simulate backspace: Flutter removes the \n at offset 7.
-      controller.value = const TextEditingValue(
-        text: 'hello\n\u200Cworld',
-        selection: TextSelection.collapsed(offset: 7),
-      );
+        // Simulate backspace: Flutter removes the \n at offset 7.
+        controller.value = const TextEditingValue(
+          text: 'hello\n\u200Cworld',
+          selection: TextSelection.collapsed(offset: 7),
+        );
 
-      // HeadingBackspaceRule intercepts: h1 → paragraph, no merge.
-      expect(controller.document.blocks.length, 2);
-      expect(controller.document.blocks[1].blockType, BlockType.paragraph);
-      expect(controller.document.blocks[1].plainText, 'world');
-    });
+        // HeadingBackspaceRule intercepts: h1 → paragraph, no merge.
+        expect(controller.document.blocks.length, 2);
+        expect(controller.document.blocks[1].blockType, BlockType.paragraph);
+        expect(controller.document.blocks[1].plainText, 'world');
+      },
+    );
 
     test('Backspace chain: h1 → paragraph → merge with previous block', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
           TextBlock(
             id: 'b',
             blockType: BlockType.h1,
@@ -244,8 +285,13 @@ void main() {
 
     test('Bold rule at start of block', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('**hello*')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('**hello*')],
+          ),
         ]),
         // Rules come from schema.
       );
@@ -265,9 +311,11 @@ void main() {
 
     test('Multiple bold segments in one block', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [const StyledSegment('**one** and **two*')],
           ),
         ]),
@@ -294,9 +342,11 @@ void main() {
 
     test('Deleting bold text keeps model consistent', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('abc '),
               const StyledSegment('bold', {InlineStyle.bold}),
@@ -326,7 +376,14 @@ void main() {
 
     test('# space converts paragraph to H1 via controller', () {
       final controller = EditorController(
-        document: Document([TextBlock(id: 'a', segments: const [])]),
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: const [],
+          ),
+        ]),
       );
 
       // Type '#'
@@ -347,7 +404,14 @@ void main() {
 
     test('- space converts paragraph to list item via controller', () {
       final controller = EditorController(
-        document: Document([TextBlock(id: 'a', segments: const [])]),
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: const [],
+          ),
+        ]),
       );
 
       controller.value = const TextEditingValue(
@@ -365,13 +429,18 @@ void main() {
 
     test('typing space at end of H1 advances cursor correctly', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
             blockType: BlockType.h1,
             segments: [const StyledSegment('Title')],
           ),
-          TextBlock(id: 'b', segments: [const StyledSegment('paragraph')]),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('paragraph')],
+          ),
         ]),
         // Rules come from schema.
       );
@@ -403,6 +472,7 @@ void main() {
 
     test('Enter on heading creates paragraph block', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -426,6 +496,7 @@ void main() {
 
     test('Enter on list item creates another list item', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -453,6 +524,7 @@ void main() {
 
     test('Enter on empty list item converts to paragraph', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
         ]),
@@ -472,6 +544,7 @@ void main() {
 
     test('outdent works on nested paragraph (not just list items)', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -507,8 +580,13 @@ void main() {
 
     test('backspace on empty list item keeps cursor in place', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('above')],
+          ),
           TextBlock(id: 'b', blockType: BlockType.listItem, segments: const []),
         ]),
       );
@@ -536,6 +614,7 @@ void main() {
       // "hello" (list item) with nested "boss" (paragraph).
       // Backspace on "boss": first outdents to root, second merges into "hello".
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -580,6 +659,7 @@ void main() {
 
     test('backspace on nested paragraph outdents instead of merging', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
@@ -618,9 +698,11 @@ void main() {
     test('bold rule in second block of example doc', () {
       // Matches the example app's initial document.
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'b1',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('Hello '),
               const StyledSegment('bold world', {InlineStyle.bold}),
@@ -629,6 +711,7 @@ void main() {
           ),
           TextBlock(
             id: 'b2',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment(
                 'Type two asterisks, then text, then two more asterisks to **trigger* bold.',
@@ -685,8 +768,13 @@ void main() {
 
     test('select within block and delete', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello world')],
+          ),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -705,9 +793,18 @@ void main() {
 
     test('select across 2 blocks and delete', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('world')],
+          ),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -726,9 +823,18 @@ void main() {
 
     test('select across blocks and type character (replace)', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('world')],
+          ),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -746,9 +852,18 @@ void main() {
 
     test('select all and delete', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('world')],
+          ),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -765,9 +880,18 @@ void main() {
 
     test('undo after cross-block delete restores all blocks', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('world')],
+          ),
         ]),
         undoGrouping: (_, __) => false,
       );
@@ -788,8 +912,13 @@ void main() {
 
     test('toggleStyle at collapsed cursor toggles activeStyles', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
         ]),
       );
 
@@ -825,8 +954,13 @@ void main() {
 
     test('toggleStyle with selection applies style to range', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello world')],
+          ),
         ]),
       );
 
@@ -849,8 +983,13 @@ void main() {
       // Regression: activeStyles must be updated BEFORE _syncToTextField
       // triggers notifyListeners, so the toolbar sees the new state.
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello world')],
+          ),
         ]),
       );
 
@@ -862,7 +1001,7 @@ void main() {
 
       // Record activeStyles at the moment notifyListeners fires from toggleStyle.
       // Register AFTER the setup value-set to avoid capturing that notification.
-      Set<InlineStyle>? stylesAtNotify;
+      Set<Object>? stylesAtNotify;
       controller.addListener(() {
         stylesAtNotify ??= Set.of(controller.activeStyles);
       });
@@ -879,8 +1018,13 @@ void main() {
 
     test('setBlockType changes block type', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
         ]),
       );
 
@@ -897,13 +1041,18 @@ void main() {
 
     test('currentBlockType reflects cursor position', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
             blockType: BlockType.h1,
             segments: [const StyledSegment('title')],
           ),
-          TextBlock(id: 'b', segments: [const StyledSegment('body')]),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('body')],
+          ),
         ]),
       );
 
@@ -924,9 +1073,11 @@ void main() {
 
     test('activeStyles reflects entire selection (all bold)', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('hello ', {}),
               const StyledSegment('bold', {InlineStyle.bold}),
@@ -946,9 +1097,11 @@ void main() {
 
     test('activeStyles empty when selection spans bold and non-bold', () {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('hello ', {}),
               const StyledSegment('bold', {InlineStyle.bold}),
@@ -970,8 +1123,13 @@ void main() {
       test('diacritic at end of paragraph does not corrupt document', () {
         // Two blocks: "hello" paragraph, then "- item" list item.
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
             TextBlock(
               id: 'b',
               blockType: BlockType.listItem,
@@ -1022,8 +1180,13 @@ void main() {
 
       test('diacritic mid-word composes in place', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
 
@@ -1058,6 +1221,7 @@ void main() {
 
       test('diacritic on prefixed block (list item) works correctly', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
             TextBlock(
               id: 'a',
@@ -1096,8 +1260,13 @@ void main() {
 
       test('composing cancelled leaves document unchanged', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
 
@@ -1130,8 +1299,13 @@ void main() {
         // Simulates CJK-style input where composing text changes multiple
         // times before resolving.
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('ab')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('ab')],
+            ),
           ]),
         );
 
@@ -1171,9 +1345,11 @@ void main() {
     group('Link support', () {
       test('setLink applies link style with URL to selection', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
             TextBlock(
               id: 'a',
+              blockType: BlockType.paragraph,
               segments: [const StyledSegment('click here please')],
             ),
           ]),
@@ -1198,8 +1374,13 @@ void main() {
 
       test('setLink is no-op on collapsed cursor', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
 
@@ -1215,43 +1396,61 @@ void main() {
     });
 
     group('Link tap', () {
-      test('buildTextSpan has no recognizers (taps handled at gesture level)',
-          () {
-        final controller = EditorController(
-          document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment('Visit '),
-              const StyledSegment(
-                  'Google', {InlineStyle.link}, {'url': 'https://google.com'}),
-              const StyledSegment(' today'),
+      test(
+        'buildTextSpan has no recognizers (taps handled at gesture level)',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment('Visit '),
+                  const StyledSegment(
+                    'Google',
+                    {InlineStyle.link},
+                    {'url': 'https://google.com'},
+                  ),
+                  const StyledSegment(' today'),
+                ],
+              ),
             ]),
-          ]),
-        );
+          );
 
-        final span = controller.buildTextSpan(
-          context: _MockBuildContext(),
-          style: const TextStyle(),
-          withComposing: false,
-        );
+          final span = controller.buildTextSpan(
+            context: _MockBuildContext(),
+            style: const TextStyle(),
+            withComposing: false,
+          );
 
-        // No recognizers on any span — link taps are detected via
-        // segmentAtOffset / linkAtDisplayOffset instead.
-        final linkSpan = _findSpanWithText(span, 'Google');
-        expect(linkSpan, isNotNull);
-        expect(linkSpan!.recognizer, isNull);
+          // No recognizers on any span — link taps are detected via
+          // segmentAtOffset / linkAtDisplayOffset instead.
+          final linkSpan = _findSpanWithText(span, 'Google');
+          expect(linkSpan, isNotNull);
+          expect(linkSpan!.recognizer, isNull);
 
-        controller.dispose();
-      });
+          controller.dispose();
+        },
+      );
 
       test('segmentAtOffset returns the link segment', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment('Visit '),
-              const StyledSegment(
-                  'Google', {InlineStyle.link}, {'url': 'https://google.com'}),
-              const StyledSegment(' today'),
-            ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('Visit '),
+                const StyledSegment(
+                  'Google',
+                  {InlineStyle.link},
+                  {'url': 'https://google.com'},
+                ),
+                const StyledSegment(' today'),
+              ],
+            ),
           ]),
         );
 
@@ -1283,12 +1482,20 @@ void main() {
 
       test('linkAtDisplayOffset returns URL for link, null for plain text', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment('Hi '),
-              const StyledSegment(
-                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
-            ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('Hi '),
+                const StyledSegment(
+                  'link',
+                  {InlineStyle.link},
+                  {'url': 'https://x.com'},
+                ),
+              ],
+            ),
           ]),
         );
 
@@ -1308,13 +1515,21 @@ void main() {
     group('currentAttributes', () {
       test('returns link URL when cursor is inside a link', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment('before '),
-              const StyledSegment(
-                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
-              const StyledSegment(' after'),
-            ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('before '),
+                const StyledSegment(
+                  'link',
+                  {InlineStyle.link},
+                  {'url': 'https://x.com'},
+                ),
+                const StyledSegment(' after'),
+              ],
+            ),
           ]),
         );
         // Place cursor inside "link" (display offset 9).
@@ -1326,8 +1541,13 @@ void main() {
 
       test('returns empty map when cursor is on plain text', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('plain')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('plain')],
+            ),
           ]),
         );
         expect(controller.currentAttributes, isEmpty);
@@ -1337,11 +1557,19 @@ void main() {
     group('setLink idempotent', () {
       test('setLink on already-linked range updates URL', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment(
-                  'click', {InlineStyle.link}, {'url': 'https://old.com'}),
-            ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'click',
+                  {InlineStyle.link},
+                  {'url': 'https://old.com'},
+                ),
+              ],
+            ),
           ]),
         );
         // Select all.
@@ -1357,8 +1585,13 @@ void main() {
 
       test('setLink on plain text applies link', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
         controller.value = controller.value.copyWith(
@@ -1375,12 +1608,17 @@ void main() {
     group('encodeSelection', () {
       test('encodes bold text as markdown', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment('plain '),
-              const StyledSegment('bold', {InlineStyle.bold}),
-              const StyledSegment(' text'),
-            ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('plain '),
+                const StyledSegment('bold', {InlineStyle.bold}),
+                const StyledSegment(' text'),
+              ],
+            ),
           ]),
         );
         // Select "bold" (offset 6..10).
@@ -1393,6 +1631,7 @@ void main() {
 
       test('encodes cross-block selection', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
             TextBlock(
               id: 'a',
@@ -1401,6 +1640,7 @@ void main() {
             ),
             TextBlock(
               id: 'b',
+              blockType: BlockType.paragraph,
               segments: [const StyledSegment('Body')],
             ),
           ]),
@@ -1419,8 +1659,13 @@ void main() {
 
       test('returns null for collapsed cursor', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
         expect(controller.encodeSelection(), isNull);
@@ -1430,8 +1675,13 @@ void main() {
     group('paste markdown', () {
       test('pasting bold markdown preserves formatting', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('before after')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('before after')],
+            ),
           ]),
         );
         // Simulate paste of "**bold**" at offset 7 (between "before " and "after").
@@ -1447,7 +1697,8 @@ void main() {
         final segs = controller.document.allBlocks[0].segments;
         expect(
           segs.any(
-              (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold)),
+            (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold),
+          ),
           isTrue,
           reason: 'Pasted **bold** should be decoded as bold text',
         );
@@ -1455,8 +1706,13 @@ void main() {
 
       test('pasting heading markdown creates H1 block', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('existing')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('existing')],
+            ),
           ]),
         );
         controller.value = controller.value.copyWith(
@@ -1473,7 +1729,8 @@ void main() {
 
       test('pasting on empty paragraph preserves block types correctly', () {
         final controller = EditorController(
-          document: Document.empty(),
+          schema: EditorSchema.standard(),
+          document: Document.empty(BlockType.paragraph),
         );
         // Paste markdown with mixed block types.
         final md = '# Title\n\nParagraph\n\n- List item';
@@ -1495,6 +1752,7 @@ void main() {
 
       test('paste on heading does not make everything a heading', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
             TextBlock(
               id: 'a',
@@ -1518,26 +1776,38 @@ void main() {
         expect(blocks.length, greaterThanOrEqualTo(2));
         // At least one block after the heading should be paragraph.
         final nonHeadings = blocks.where(
-            (b) => b.blockType == BlockType.paragraph);
-        expect(nonHeadings.isNotEmpty, isTrue,
-            reason: 'Pasted blocks should not all inherit heading type');
+          (b) => b.blockType == BlockType.paragraph,
+        );
+        expect(
+          nonHeadings.isNotEmpty,
+          isTrue,
+          reason: 'Pasted blocks should not all inherit heading type',
+        );
       });
     });
 
     group('canIndent / canOutdent', () {
       test('canIndent true for list item with previous sibling', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.listItem,
-                segments: [const StyledSegment('first')]),
-            TextBlock(id: 'b', blockType: BlockType.listItem,
-                segments: [const StyledSegment('second')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('first')],
+            ),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('second')],
+            ),
           ]),
         );
         // Cursor on second list item.
         controller.value = controller.value.copyWith(
           selection: TextSelection.collapsed(
-              offset: controller.text.length), // end of second
+            offset: controller.text.length,
+          ), // end of second
         );
         expect(controller.canIndent, isTrue);
         expect(controller.canOutdent, isFalse); // root level
@@ -1545,9 +1815,13 @@ void main() {
 
       test('canIndent false for heading', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.h1,
-                segments: [const StyledSegment('Title')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Title')],
+            ),
           ]),
         );
         expect(controller.canIndent, isFalse);
@@ -1555,19 +1829,25 @@ void main() {
 
       test('canOutdent true for nested block', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.listItem,
-                segments: [const StyledSegment('parent')],
-                children: [
-                  TextBlock(id: 'b', blockType: BlockType.listItem,
-                      segments: [const StyledSegment('child')]),
-                ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(
+                  id: 'b',
+                  blockType: BlockType.listItem,
+                  segments: [const StyledSegment('child')],
+                ),
+              ],
+            ),
           ]),
         );
         // Cursor on nested child.
         controller.value = controller.value.copyWith(
-          selection: TextSelection.collapsed(
-              offset: controller.text.length),
+          selection: TextSelection.collapsed(offset: controller.text.length),
         );
         expect(controller.canOutdent, isTrue);
       });
@@ -1576,8 +1856,13 @@ void main() {
     group('canSetBlockType', () {
       test('returns true for valid conversion', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
         expect(controller.canSetBlockType(BlockType.h1), isTrue);
@@ -1586,8 +1871,13 @@ void main() {
 
       test('returns false for void types', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
           ]),
         );
         expect(controller.canSetBlockType(BlockType.divider), isFalse);
@@ -1595,19 +1885,25 @@ void main() {
 
       test('returns false for heading on nested block', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.listItem,
-                segments: [const StyledSegment('parent')],
-                children: [
-                  TextBlock(id: 'b', blockType: BlockType.paragraph,
-                      segments: [const StyledSegment('child')]),
-                ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(
+                  id: 'b',
+                  blockType: BlockType.paragraph,
+                  segments: [const StyledSegment('child')],
+                ),
+              ],
+            ),
           ]),
         );
         // Cursor on nested child.
         controller.value = controller.value.copyWith(
-          selection: TextSelection.collapsed(
-              offset: controller.text.length),
+          selection: TextSelection.collapsed(offset: controller.text.length),
         );
         expect(controller.canSetBlockType(BlockType.h1), isFalse);
         expect(controller.canSetBlockType(BlockType.paragraph), isTrue);
@@ -1617,8 +1913,13 @@ void main() {
     group('insertDivider', () {
       test('inserts divider at cursor and creates paragraph after', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', segments: [const StyledSegment('hello world')]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello world')],
+            ),
           ]),
         );
         // Cursor at offset 5 ("hello|")
@@ -1636,9 +1937,14 @@ void main() {
 
       test('canInsertDivider false on void block', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
             TextBlock(id: 'a', blockType: BlockType.divider),
-            TextBlock(id: 'b', segments: [const StyledSegment('after')]),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('after')],
+            ),
           ]),
         );
         // Cursor pushed to after divider prefix, but model is on divider.
@@ -1647,20 +1953,189 @@ void main() {
 
       test('canInsertDivider false on nested block', () {
         final controller = EditorController(
+          schema: EditorSchema.standard(),
           document: Document([
-            TextBlock(id: 'a', blockType: BlockType.listItem,
-                segments: [const StyledSegment('parent')],
-                children: [
-                  TextBlock(id: 'b', blockType: BlockType.listItem,
-                      segments: [const StyledSegment('child')]),
-                ]),
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(
+                  id: 'b',
+                  blockType: BlockType.listItem,
+                  segments: [const StyledSegment('child')],
+                ),
+              ],
+            ),
           ]),
         );
         controller.value = controller.value.copyWith(
-          selection: TextSelection.collapsed(
-              offset: controller.text.length),
+          selection: TextSelection.collapsed(offset: controller.text.length),
         );
         expect(controller.canInsertDivider, isFalse);
+      });
+    });
+
+    group('Tab indent', () {
+      test('Tab indents a list item under its previous sibling', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+          ]),
+        );
+
+        // Place cursor in the second list item "second".
+        // Display: "• first\n• second" — find the offset of 'second'.
+        final secondStart = controller.text.indexOf('second');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: secondStart),
+        );
+
+        // Simulate Tab key: insert \t at cursor position.
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, secondStart) + '\t' + before.substring(secondStart),
+          selection: TextSelection.collapsed(offset: secondStart + 1),
+        );
+
+        // "second" should now be nested under "first".
+        expect(controller.document.blocks.length, 1);
+        expect(controller.document.blocks[0].children.length, 1);
+        expect(controller.document.blocks[0].children[0].plainText, 'second');
+      });
+
+      test('Tab does nothing for first block (no previous sibling)', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('only')]),
+          ]),
+        );
+
+        final cursorPos = controller.text.indexOf('only');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: cursorPos),
+        );
+
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, cursorPos) + '\t' + before.substring(cursorPos),
+          selection: TextSelection.collapsed(offset: cursorPos + 1),
+        );
+
+        // Still one root block, no nesting.
+        expect(controller.document.blocks.length, 1);
+        expect(controller.document.blocks[0].children, isEmpty);
+      });
+    });
+
+    group('Paste cursor', () {
+      test('cursor lands at end of pasted markdown content', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document.empty(BlockType.paragraph),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+
+        // Paste markdown with heading + paragraph.
+        const pastedText = '# Title\n\nBody text';
+        controller.value = TextEditingValue(
+          text: pastedText,
+          selection: TextSelection.collapsed(offset: pastedText.length),
+        );
+
+        // Should have at least 2 blocks.
+        expect(controller.document.allBlocks.length, greaterThanOrEqualTo(2));
+
+        // The cursor (model space) should be at the end of the pasted content.
+        final modelCursor = controller.displayToModel(
+          controller.value.selection.baseOffset,
+        );
+        expect(modelCursor, controller.document.plainText.length);
+      });
+    });
+
+    group('Cut from block start', () {
+      test('cutting from start of heading resets to paragraph', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+          ]),
+        );
+
+        // Select "Titl" (from start, not all).
+        // Display text includes the spacer before h1.
+        // Find the offset of 'T' in display text.
+        final tStart = controller.text.indexOf('T');
+        final lEnd = controller.text.indexOf('l') + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: tStart, extentOffset: lEnd),
+        );
+
+        // Simulate cut: replace selection with empty.
+        controller.value = controller.value.copyWith(
+          text: controller.text.substring(0, tStart) + controller.text.substring(lEnd),
+          selection: TextSelection.collapsed(offset: tStart),
+        );
+
+        // Block should be converted to paragraph with remaining text "e".
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks.first.plainText, 'e');
+      });
+
+      test('cutting mid-block does NOT reset heading', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+          ]),
+        );
+
+        // Select "itl" (not from start).
+        final iStart = controller.text.indexOf('i');
+        final lEnd = controller.text.indexOf('l') + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: iStart, extentOffset: lEnd),
+        );
+
+        // Simulate cut: replace selection with empty.
+        controller.value = controller.value.copyWith(
+          text: controller.text.substring(0, iStart) + controller.text.substring(lEnd),
+          selection: TextSelection.collapsed(offset: iStart),
+        );
+
+        // Block should remain h1 — not cutting from start.
+        expect(controller.document.allBlocks.first.blockType, BlockType.h1);
+        expect(controller.document.allBlocks.first.plainText, 'Te');
+      });
+
+      test('cutting from start of list item resets to paragraph', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('item')]),
+          ]),
+        );
+
+        // Select "ite" from start (after prefix).
+        final iStart = controller.text.indexOf('i');
+        final eEnd = controller.text.indexOf('e') + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: iStart, extentOffset: eEnd),
+        );
+
+        controller.value = controller.value.copyWith(
+          text: controller.text.substring(0, iStart) + controller.text.substring(eEnd),
+          selection: TextSelection.collapsed(offset: iStart),
+        );
+
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks.first.plainText, 'm');
       });
     });
   });

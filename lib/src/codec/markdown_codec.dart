@@ -1,6 +1,5 @@
 import '../model/block.dart';
 import '../model/document.dart';
-import '../model/inline_style.dart';
 import '../schema/editor_schema.dart';
 import 'block_codec.dart';
 import 'format.dart';
@@ -37,8 +36,8 @@ class MarkdownCodec {
       if (i > 0) {
         final prev = entries[i - 1];
         final curr = entries[i];
-        final tightPair = _isListLike(prev.blockType) &&
-            _isListLike(curr.blockType);
+        final tightPair = _schema.isListLike(prev.blockType) &&
+            _schema.isListLike(curr.blockType);
         buf.write(tightPair ? '\n' : '\n\n');
       }
       buf.write(entries[i].line);
@@ -149,7 +148,9 @@ class MarkdownCodec {
   // -----------------------------------------------------------------------
 
   Document decode(String markdown) {
-    if (markdown.isEmpty) return Document.empty();
+    if (markdown.isEmpty) {
+      return Document.empty(_schema.defaultBlockType);
+    }
     // Split on \n\n for paragraph breaks, then further split tight lists
     // (consecutive lines that each match a block prefix).
     final rawParagraphs = markdown.split('\n\n');
@@ -199,7 +200,7 @@ class MarkdownCodec {
 
   /// Try all registered block decoders. If multiple match, pick the most
   /// specific one (the decoder that consumed the most prefix, i.e. whose
-  /// DecodeMatch.content is shortest). Falls back to paragraph.
+  /// DecodeMatch.content is shortest). Falls back to the default block type.
   TextBlock _decodeBlock(String text) {
     Object? bestKey;
     DecodeMatch? bestMatch;
@@ -220,7 +221,7 @@ class MarkdownCodec {
       }
     }
 
-    if (bestMatch != null && bestKey is BlockType) {
+    if (bestMatch != null && bestKey != null) {
       return TextBlock(
         id: generateBlockId(),
         blockType: bestKey,
@@ -229,8 +230,12 @@ class MarkdownCodec {
       );
     }
 
-    // Fallback: paragraph.
-    return TextBlock(id: generateBlockId(), segments: _decodeSegments(text));
+    // Fallback: default block type.
+    return TextBlock(
+      id: generateBlockId(),
+      blockType: _schema.defaultBlockType,
+      segments: _decodeSegments(text),
+    );
   }
 
   static const _maxDecodeDepth = 10;
@@ -303,13 +308,9 @@ class MarkdownCodec {
           pos++;
           continue;
         }
-        final style = decoded.key;
-        if (style is! InlineStyle) {
-          pos += decoded.match.fullMatchLength;
-          continue;
-        }
         segments.add(
-          StyledSegment(decoded.match.text, {style}, decoded.match.attributes),
+          StyledSegment(
+              decoded.match.text, {decoded.key}, decoded.match.attributes),
         );
         pos += decoded.match.fullMatchLength;
         continue;
@@ -326,16 +327,11 @@ class MarkdownCodec {
             final content = match.group(i + 1);
             if (content == null) continue;
 
-            Set<InlineStyle> styles;
+            Set<Object> styles;
             if (i < combinedEntries.length) {
-              // Combined entry — extract InlineStyle keys.
-              styles = combinedEntries[i]
-                  .keys
-                  .whereType<InlineStyle>()
-                  .toSet();
+              styles = combinedEntries[i].keys.toSet();
             } else {
-              final key = wrapEntries[i - combinedEntries.length].key;
-              styles = key is InlineStyle ? {key} : {};
+              styles = {wrapEntries[i - combinedEntries.length].key};
             }
 
             if (styles.isNotEmpty && _depth < _maxDecodeDepth) {
@@ -492,11 +488,6 @@ class _InlineCombinedWrapEntry {
 class _EncodedLine {
   const _EncodedLine(this.line, this.blockType, this.depth);
   final String line;
-  final BlockType blockType;
+  final Object blockType;
   final int depth;
 }
-
-bool _isListLike(BlockType type) =>
-    type == BlockType.listItem ||
-    type == BlockType.numberedList ||
-    type == BlockType.taskItem;

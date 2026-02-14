@@ -137,7 +137,7 @@ void main() {
     test('schema inline codecs are used for encode', () {
       final codec = MarkdownCodec();
       final doc = Document([
-        TextBlock(id: 'a', segments: [
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
           const StyledSegment('normal '),
           const StyledSegment('bold', {InlineStyle.bold}),
           const StyledSegment(' '),
@@ -162,14 +162,15 @@ void main() {
 
     test('block def without codec falls back to plain content', () {
       final schema = EditorSchema(
+        defaultBlockType: BlockType.paragraph,
         blocks: {
           BlockType.paragraph: const BlockDef(label: 'Paragraph'),
         },
-        inlineStyles: {},
+        inlineStyles: <Object, InlineStyleDef>{},
       );
       final codec = MarkdownCodec(schema: schema);
       final doc = Document([
-        TextBlock(id: 'a', segments: [const StyledSegment('Hello')]),
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Hello')]),
       ]);
       // Fallback: indent + content
       expect(codec.encode(doc), 'Hello');

@@ -4,13 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('BulletEditor link tap', () {
-    testWidgets('onTap fires with segment info when tapping', (tester) async {
-      final tappedDetails = <EditorTapDetails>[];
-
+    testWidgets('tapping text allows segment lookup via controller', (tester) async {
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('Visit '),
               const StyledSegment(
@@ -31,7 +31,6 @@ void main() {
               height: 200,
               child: BulletEditor(
                 controller: controller,
-                onTap: (details) => tappedDetails.add(details),
               ),
             ),
           ),
@@ -42,15 +41,17 @@ void main() {
       final textFieldFinder = find.byType(TextField);
       expect(textFieldFinder, findsOneWidget);
 
-      // Tap near the left of the text field — should hit 'Visit ' or 'Google'.
+      // Tap near the left of the text field.
       final box = tester.getRect(textFieldFinder);
-      // Tap at ~40% from left, near where 'Google' starts.
       await tester.tapAt(Offset(box.left + box.width * 0.25, box.top + 20));
       await tester.pumpAndSettle();
 
-      expect(tappedDetails, isNotEmpty, reason: 'onTap should fire on any tap');
-      // We got a segment — the pipeline works.
-      expect(tappedDetails.first.segment, isNotNull);
+      // After tapping, the selection should be valid and we can look up the segment.
+      expect(controller.value.selection.isValid, isTrue);
+      final segment = controller.segmentAtOffset(
+        controller.value.selection.baseOffset,
+      );
+      expect(segment, isNotNull);
     });
 
     testWidgets('onLinkTap fires with URL when tapping link text', (
@@ -59,9 +60,11 @@ void main() {
       String? tappedUrl;
 
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment(
                 'click here',
@@ -71,6 +74,7 @@ void main() {
             ],
           ),
         ]),
+        onLinkTap: (url) => tappedUrl = url,
       );
 
       await tester.pumpWidget(
@@ -80,7 +84,6 @@ void main() {
               height: 200,
               child: BulletEditor(
                 controller: controller,
-                onLinkTap: (url) => tappedUrl = url,
               ),
             ),
           ),
@@ -101,10 +104,11 @@ void main() {
       // Unit-level test that the segment lookup works for different offsets
       // across multiple blocks, without relying on simulated taps.
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', segments: [const StyledSegment('first block')]),
-          TextBlock(id: 'b', segments: [const StyledSegment('second block')]),
-          TextBlock(id: 'c', segments: [const StyledSegment('third block')]),
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first block')]),
+          TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('second block')]),
+          TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('third block')]),
         ]),
       );
 
@@ -121,18 +125,21 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('onTap fires with null linkUrl on plain text', (tester) async {
-      EditorTapDetails? lastTap;
+    testWidgets('tapping plain text does not trigger onLinkTap', (tester) async {
+      String? tappedUrl;
 
       final controller = EditorController(
+        schema: EditorSchema.standard(),
         document: Document([
           TextBlock(
             id: 'a',
+            blockType: BlockType.paragraph,
             segments: [
               const StyledSegment('just plain text here nothing special'),
             ],
           ),
         ]),
+        onLinkTap: (url) => tappedUrl = url,
       );
 
       await tester.pumpWidget(
@@ -142,7 +149,6 @@ void main() {
               height: 200,
               child: BulletEditor(
                 controller: controller,
-                onTap: (details) => lastTap = details,
               ),
             ),
           ),
@@ -154,9 +160,105 @@ void main() {
       await tester.tapAt(tester.getCenter(textFieldFinder));
       await tester.pumpAndSettle();
 
-      expect(lastTap, isNotNull, reason: 'onTap should have fired');
-      expect(lastTap!.segment, isNotNull);
-      expect(lastTap!.segment!.styles, isNot(contains(InlineStyle.link)));
+      // Plain text should not trigger onLinkTap.
+      expect(tappedUrl, isNull);
+
+      // But the segment at the cursor should be valid plain text.
+      expect(controller.value.selection.isValid, isTrue);
+      final segment = controller.segmentAtOffset(
+        controller.value.selection.baseOffset,
+      );
+      expect(segment, isNotNull);
+      expect(segment!.styles, isNot(contains(InlineStyle.link)));
+    });
+  });
+
+  group('BulletEditor undo/redo via Actions', () {
+    testWidgets('UndoTextIntent routes to controller.undo()', (tester) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Focus the text field and type something.
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection.collapsed(offset: 5),
+      );
+      // Simulate a typed character so there's something to undo.
+      controller.value = controller.value.copyWith(
+        text: controller.value.text.replaceRange(5, 5, 'X'),
+        selection: const TextSelection.collapsed(offset: 6),
+      );
+      await tester.pump();
+      expect(controller.document.allBlocks.first.plainText, contains('X'));
+
+      // Dispatch UndoTextIntent via the Actions widget.
+      final context = tester.element(find.byType(TextField));
+      Actions.invoke(context, const UndoTextIntent(SelectionChangedCause.keyboard));
+      await tester.pump();
+
+      // After undo, the 'X' should be gone.
+      expect(controller.document.allBlocks.first.plainText, 'hello');
+    });
+
+    testWidgets('RedoTextIntent routes to controller.redo()', (tester) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Focus and type.
+      await tester.tap(find.byType(TextField));
+      await tester.pumpAndSettle();
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection.collapsed(offset: 5),
+      );
+      controller.value = controller.value.copyWith(
+        text: controller.value.text.replaceRange(5, 5, 'X'),
+        selection: const TextSelection.collapsed(offset: 6),
+      );
+      await tester.pump();
+
+      // Undo first.
+      final context = tester.element(find.byType(TextField));
+      Actions.invoke(context, const UndoTextIntent(SelectionChangedCause.keyboard));
+      await tester.pump();
+      expect(controller.document.allBlocks.first.plainText, 'hello');
+
+      // Now redo.
+      Actions.invoke(context, const RedoTextIntent(SelectionChangedCause.keyboard));
+      await tester.pump();
+      expect(controller.document.allBlocks.first.plainText, contains('X'));
     });
   });
 }
