@@ -52,9 +52,9 @@ void main() {
       expect(tappedDetails.first.segment, isNotNull);
     });
 
-    testWidgets('onTap provides linkUrl when tapping link text',
+    testWidgets('onLinkTap fires with URL when tapping link text',
         (tester) async {
-      EditorTapDetails? lastTap;
+      String? tappedUrl;
 
       final controller = EditorController(
         document: Document([
@@ -75,7 +75,7 @@ void main() {
               height: 200,
               child: BulletEditor(
                 controller: controller,
-                onTap: (details) => lastTap = details,
+                onLinkTap: (url) => tappedUrl = url,
               ),
             ),
           ),
@@ -83,14 +83,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Tap in the center of the text field — should be inside 'click here'.
       final textFieldFinder = find.byType(TextField);
       await tester.tapAt(tester.getCenter(textFieldFinder));
       await tester.pumpAndSettle();
 
-      expect(lastTap, isNotNull, reason: 'onTap should have fired');
-      expect(lastTap!.linkUrl, 'https://example.com',
-          reason: 'Should detect link at tap position');
+      expect(tappedUrl, 'https://example.com');
     });
 
     testWidgets('segmentAtOffset returns correct segment for each block',
@@ -156,8 +153,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(lastTap, isNotNull, reason: 'onTap should have fired');
-      expect(lastTap!.linkUrl, isNull,
-          reason: 'Plain text should not have a link URL');
+      expect(lastTap!.segment, isNotNull);
+      expect(lastTap!.segment!.styles, isNot(contains(InlineStyle.link)));
     });
   });
 }

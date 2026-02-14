@@ -1196,17 +1196,23 @@ void main() {
           ]),
         );
 
-        // Model offset 7 = inside 'Google' (after 'Visit ' + 1 char)
-        final seg = controller.segmentAtOffset(7);
-        expect(seg, isNotNull);
-        expect(seg!.text, 'Google');
-        expect(seg.styles, contains(InlineStyle.link));
-        expect(seg.attributes['url'], 'https://google.com');
+        // Model offset 6 = start of 'Google' (forward-matching)
+        final startSeg = controller.segmentAtOffset(6);
+        expect(startSeg, isNotNull);
+        expect(startSeg!.text, 'Google');
+        expect(startSeg.styles, contains(InlineStyle.link));
+        expect(startSeg.attributes['url'], 'https://google.com');
 
-        // Model offset 12 = end of 'Google' — still returns link (boundary)
+        // Model offset 8 = inside 'Google'
+        final midSeg = controller.segmentAtOffset(8);
+        expect(midSeg, isNotNull);
+        expect(midSeg!.text, 'Google');
+
+        // Model offset 12 = end of 'Google' — forward-match returns ' today'
+        // but linkAtDisplayOffset checks both sides and finds the link
         final endSeg = controller.segmentAtOffset(12);
         expect(endSeg, isNotNull);
-        expect(endSeg!.text, 'Google');
+        expect(endSeg!.text, ' today'); // forward-match at boundary
 
         // Model offset 2 = inside 'Visit ' segment (no link)
         final plainSeg = controller.segmentAtOffset(2);
@@ -1227,9 +1233,11 @@ void main() {
           ]),
         );
 
-        // Display offset 4 = model offset 4 = inside 'link'
-        expect(controller.linkAtDisplayOffset(4), 'https://x.com');
-        // Display offset 7 = model offset 7 = end of 'link' (boundary, still link)
+        // Display offset 3 = model offset 3 = start of 'link' (forward-match)
+        expect(controller.linkAtDisplayOffset(3), 'https://x.com');
+        // Display offset 5 = model offset 5 = inside 'link'
+        expect(controller.linkAtDisplayOffset(5), 'https://x.com');
+        // Display offset 7 = model offset 7 = end of 'link' (backward check)
         expect(controller.linkAtDisplayOffset(7), 'https://x.com');
         // Display offset 1 = model offset 1 = inside 'Hi ' (no link)
         expect(controller.linkAtDisplayOffset(1), isNull);

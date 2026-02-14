@@ -871,31 +871,36 @@ class EditorController extends TextEditingController {
 
   /// Get the styled segment at a model offset, or null if out of range.
   /// Use this to detect what the user tapped on (link, image, etc.).
-  /// Uses the same boundary logic as [currentAttributes]: at a boundary
-  /// between two segments, prefers the preceding one (so the end of a
-  /// link still counts as "on the link").
+  /// At segment boundaries, returns the segment starting at that offset
+  /// (forward-matching). Use [segmentBeforeOffset] for the preceding segment.
   StyledSegment? segmentAtOffset(int modelOffset) {
     final pos = _document.blockAt(modelOffset);
     final block = _document.allBlocks[pos.blockIndex];
     var offset = 0;
     for (final seg in block.segments) {
       final segEnd = offset + seg.text.length;
-      // Same logic as currentAttributes — inclusive end, exclusive start
-      // (except at block start where offset == 0).
-      if (pos.localOffset <= segEnd &&
-          (pos.localOffset > offset || offset == 0)) {
+      if (pos.localOffset >= offset && pos.localOffset < segEnd) {
         return seg;
       }
       offset = segEnd;
+    }
+    // At block end — return last segment.
+    if (block.segments.isNotEmpty && pos.localOffset == block.length) {
+      return block.segments.last;
     }
     return null;
   }
 
   /// Get the link URL at a display offset, or null if not on a link.
-  /// Convenience for tap handlers — converts display→model and checks.
+  /// Checks both the segment at the offset and the preceding one, so
+  /// tapping at either the start or end of a link detects it.
   String? linkAtDisplayOffset(int displayOffset) {
     final modelOffset = displayToModel(displayOffset);
-    final seg = segmentAtOffset(modelOffset);
+    return _linkFrom(segmentAtOffset(modelOffset)) ??
+        (modelOffset > 0 ? _linkFrom(segmentAtOffset(modelOffset - 1)) : null);
+  }
+
+  static String? _linkFrom(StyledSegment? seg) {
     if (seg != null &&
         seg.styles.contains(InlineStyle.link) &&
         seg.attributes['url'] != null) {

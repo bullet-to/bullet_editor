@@ -364,11 +364,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 controller: _controller,
                 focusNode: _focusNode,
                 onKeyEvent: _handleKeyEvent,
-                onTap: (details) {
-                  debugPrint('TAP: segment=${details.segment?.text}, '
-                      'styles=${details.segment?.styles}, '
-                      'url=${details.linkUrl}');
-                },
+                onLinkTap: (url) => debugPrint('Link tapped: $url'),
               ),
             ),
             const SizedBox(height: 16),

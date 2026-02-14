@@ -15,24 +15,19 @@ class EditorTapDetails {
   const EditorTapDetails({
     required this.globalPosition,
     required this.segment,
+    this.precedingSegment,
   });
 
   /// The global position of the tap.
   final Offset globalPosition;
 
-  /// The styled segment at the tap position, or null if tapping empty space.
+  /// The segment at the tap position (prefers preceding segment at boundaries,
+  /// matching the editor's active formatting behavior).
   final StyledSegment? segment;
 
-  /// Convenience: the link URL if the tap landed on a link, otherwise null.
-  String? get linkUrl {
-    final seg = segment;
-    if (seg != null &&
-        seg.styles.contains(InlineStyle.link) &&
-        seg.attributes['url'] != null) {
-      return seg.attributes['url'] as String;
-    }
-    return null;
-  }
+  /// The other segment at a boundary (the forward-matching one when [segment]
+  /// is the preceding, or vice versa). Null when not at a boundary.
+  final StyledSegment? precedingSegment;
 }
 
 /// A rich text editor widget built on Flutter's TextField.
@@ -56,6 +51,7 @@ class BulletEditor extends StatefulWidget {
     this.style,
     this.decoration,
     this.onTap,
+    this.onLinkTap,
     this.onKeyEvent,
     this.expands = true,
     this.readOnly = false,
@@ -73,9 +69,13 @@ class BulletEditor extends StatefulWidget {
   /// Input decoration for the underlying TextField.
   final InputDecoration? decoration;
 
-  /// Called when the user taps on the editor content. Use to handle
-  /// link taps, image taps, or any interactive segment.
+  /// Called when the user taps on the editor content. Use for custom
+  /// tap handling (image taps, mention taps, etc.).
   final EditorTapCallback? onTap;
+
+  /// Called when the user taps on a link. Receives the URL.
+  /// Convenience — equivalent to checking for a link in [onTap].
+  final void Function(String url)? onLinkTap;
 
   /// Optional key event handler for custom keyboard shortcuts.
   /// Called before the editor's built-in handling.
@@ -153,17 +153,41 @@ class _BulletEditorState extends State<BulletEditor> {
   }
 
   void _onTap() {
-    if (widget.onTap == null) return;
+    if (widget.onTap == null && widget.onLinkTap == null) return;
     final sel = widget.controller.selection;
     if (!sel.isValid || !sel.isCollapsed) return;
 
-    final seg = widget.controller.segmentAtOffset(
-      widget.controller.displayToModel(sel.baseOffset),
-    );
-    widget.onTap!(EditorTapDetails(
-      globalPosition: Offset.zero,
-      segment: seg,
-    ));
+    final modelOffset = widget.controller.displayToModel(sel.baseOffset);
+    final seg = widget.controller.segmentAtOffset(modelOffset);
+    final prevSeg =
+        modelOffset > 0 ? widget.controller.segmentAtOffset(modelOffset - 1) : null;
+
+    // Primary segment matches the editor's active formatting: at a boundary,
+    // prefer the preceding segment (the one the cursor "came from").
+    final primary = (prevSeg != null && prevSeg != seg) ? prevSeg : seg;
+    final secondary = (primary == prevSeg) ? seg : prevSeg;
+
+    if (widget.onTap != null) {
+      widget.onTap!(EditorTapDetails(
+        globalPosition: Offset.zero,
+        segment: primary,
+        precedingSegment: secondary,
+      ));
+    }
+
+    if (widget.onLinkTap != null) {
+      final url = _linkFrom(primary) ?? _linkFrom(secondary);
+      if (url != null) widget.onLinkTap!(url);
+    }
+  }
+
+  static String? _linkFrom(StyledSegment? seg) {
+    if (seg != null &&
+        seg.styles.contains(InlineStyle.link) &&
+        seg.attributes['url'] != null) {
+      return seg.attributes['url'] as String;
+    }
+    return null;
   }
 
   @override
