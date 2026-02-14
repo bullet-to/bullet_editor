@@ -1,11 +1,9 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
 import '../schema/editor_schema.dart';
-import 'editor_controller.dart' show LinkTapCallback;
 import 'offset_mapper.dart';
 
 /// Build a TextSpan tree from a Document for rendering in a TextField.
@@ -16,16 +14,16 @@ import 'offset_mapper.dart';
 /// Rendering is driven by the [schema]: block base styles, prefix widgets,
 /// and inline style resolution all come from schema lookups — no hardcoded
 /// switch statements.
-/// [onLinkTap] is called when a link span is tapped. If provided,
-/// `TapGestureRecognizer`s are created and added to [recognizers] for
-/// lifecycle management (the caller must dispose them).
+///
+/// Link taps are NOT handled via TextSpan.recognizer — Flutter asserts
+/// `readOnly` when recognizers are present on non-macOS platforms. Instead,
+/// link taps are detected at the gesture level via the controller's
+/// `segmentAtOffset` helper.
 TextSpan buildDocumentSpan(
   Document doc,
   TextStyle? style,
-  EditorSchema schema, {
-  LinkTapCallback? onLinkTap,
-  List<GestureRecognizer>? recognizers,
-}) {
+  EditorSchema schema,
+) {
   final children = <InlineSpan>[];
   final flat = doc.allBlocks;
 
@@ -84,15 +82,6 @@ TextSpan buildDocumentSpan(
       children.add(TextSpan(text: placeholder, style: bStyle));
     } else {
       for (final seg in block.segments) {
-        GestureRecognizer? recognizer;
-        if (onLinkTap != null &&
-            seg.styles.contains(InlineStyle.link) &&
-            seg.attributes['url'] != null) {
-          final url = seg.attributes['url'] as String;
-          recognizer = TapGestureRecognizer()
-            ..onTap = () => onLinkTap(url);
-          recognizers?.add(recognizer);
-        }
         children.add(
           TextSpan(
             text: seg.text,
@@ -102,7 +91,6 @@ TextSpan buildDocumentSpan(
               schema,
               attributes: seg.attributes,
             ),
-            recognizer: recognizer,
           ),
         );
       }

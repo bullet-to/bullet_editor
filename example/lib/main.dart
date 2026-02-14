@@ -32,7 +32,6 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   late final EditorController _controller;
   late final FocusNode _focusNode;
-  final _undoController = UndoHistoryController();
 
   @override
   void initState() {
@@ -112,7 +111,6 @@ class _EditorScreenState extends State<EditorScreen> {
 
     _controller = EditorController(
       document: doc,
-      onLinkTap: (url) => debugPrint('Link tapped: $url'),
       // Input rules come from the schema — no manual list needed.
     );
     _controller.addListener(() => setState(() {}));
@@ -124,7 +122,6 @@ class _EditorScreenState extends State<EditorScreen> {
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
-    _undoController.dispose();
     super.dispose();
   }
 
@@ -264,37 +261,19 @@ class _EditorScreenState extends State<EditorScreen> {
     return buf.toString();
   }
 
-  /// Intercept Tab / Shift+Tab before Flutter's focus system eats them.
+  /// App-level keyboard shortcuts (copy/cut with markdown encoding).
+  /// Tab, Shift+Tab, Cmd+Z, Cmd+Shift+Z are handled by BulletEditor.
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
 
-    if (event.logicalKey == LogicalKeyboardKey.tab) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
-        _controller.outdent();
-      } else {
-        _controller.indent();
-      }
-      setState(() {});
-      return KeyEventResult.handled;
-    }
-
-    // Cmd/Ctrl shortcuts.
     final isMeta =
         HardwareKeyboard.instance.isMetaPressed ||
         HardwareKeyboard.instance.isControlPressed;
     if (!isMeta) return KeyEventResult.ignored;
 
     switch (event.logicalKey) {
-      case LogicalKeyboardKey.keyZ:
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          _controller.redo();
-        } else {
-          _controller.undo();
-        }
-        setState(() {});
-        return KeyEventResult.handled;
       case LogicalKeyboardKey.keyC:
         // Rich copy: encode selection as markdown.
         final md = _controller.encodeSelection();
@@ -357,46 +336,39 @@ class _EditorScreenState extends State<EditorScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Toolbar.
-            Row(
-              children: [
-                Expanded(
-                  child: EditorToolbar(
-                    controller: _controller,
-                    editorFocusNode: _focusNode,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(
-                    Icons.link,
-                    color: _controller.activeStyles.contains(InlineStyle.link)
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                  ),
-                  tooltip: 'Link (Cmd+K)',
-                  onPressed: _showLinkDialog,
-                ),
-              ],
-            ),
+            // Row(
+            //   children: [
+            //     Expanded(
+            //       child: EditorToolbar(
+            //         controller: _controller,
+            //         editorFocusNode: _focusNode,
+            //       ),
+            //     ),
+            //     const SizedBox(width: 8),
+            //     IconButton(
+            //       icon: Icon(
+            //         Icons.link,
+            //         color: _controller.activeStyles.contains(InlineStyle.link)
+            //             ? Theme.of(context).colorScheme.primary
+            //             : null,
+            //       ),
+            //       tooltip: 'Link (Cmd+K)',
+            //       onPressed: _showLinkDialog,
+            //     ),
+            //   ],
+            // ),
             const SizedBox(height: 8),
-            // The editor — wrapped in Focus to intercept Tab/Shift+Tab.
             Expanded(
               flex: 3,
-              child: Focus(
+              child: BulletEditor(
+                controller: _controller,
+                focusNode: _focusNode,
                 onKeyEvent: _handleKeyEvent,
-                child: TextField(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  undoController: _undoController,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  style: const TextStyle(fontSize: 16, height: 1.5),
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.all(12),
-                  ),
-                ),
+                onTap: (details) {
+                  debugPrint('TAP: segment=${details.segment?.text}, '
+                      'styles=${details.segment?.styles}, '
+                      'url=${details.linkUrl}');
+                },
               ),
             ),
             const SizedBox(height: 16),

@@ -1156,8 +1156,8 @@ void main() {
     });
 
     group('Link tap', () {
-      test('buildTextSpan creates recognizers when onLinkTap is set', () {
-        final tappedUrls = <String>[];
+      test('buildTextSpan has no recognizers (taps handled at gesture level)',
+          () {
         final controller = EditorController(
           document: Document([
             TextBlock(id: 'a', segments: [
@@ -1167,7 +1167,6 @@ void main() {
               const StyledSegment(' today'),
             ]),
           ]),
-          onLinkTap: (url) => tappedUrls.add(url),
         );
 
         final span = controller.buildTextSpan(
@@ -1176,78 +1175,64 @@ void main() {
           withComposing: false,
         );
 
-        // Find the link TextSpan.
+        // No recognizers on any span — link taps are detected via
+        // segmentAtOffset / linkAtDisplayOffset instead.
         final linkSpan = _findSpanWithText(span, 'Google');
-        expect(linkSpan, isNotNull);
-        expect(linkSpan!.recognizer, isNotNull);
-
-        // Simulate tap.
-        (linkSpan.recognizer! as TapGestureRecognizer).onTap!();
-        expect(tappedUrls, ['https://google.com']);
-
-        controller.dispose();
-      });
-
-      test('buildTextSpan has no recognizers when onLinkTap is null', () {
-        final controller = EditorController(
-          document: Document([
-            TextBlock(id: 'a', segments: [
-              const StyledSegment(
-                  'link', {InlineStyle.link}, {'url': 'https://x.com'}),
-            ]),
-          ]),
-        );
-
-        final span = controller.buildTextSpan(
-          context: _MockBuildContext(),
-          style: const TextStyle(),
-          withComposing: false,
-        );
-
-        final linkSpan = _findSpanWithText(span, 'link');
         expect(linkSpan, isNotNull);
         expect(linkSpan!.recognizer, isNull);
 
         controller.dispose();
       });
 
-      test('recognizers are disposed on rebuild', () {
+      test('segmentAtOffset returns the link segment', () {
         final controller = EditorController(
           document: Document([
             TextBlock(id: 'a', segments: [
+              const StyledSegment('Visit '),
+              const StyledSegment(
+                  'Google', {InlineStyle.link}, {'url': 'https://google.com'}),
+              const StyledSegment(' today'),
+            ]),
+          ]),
+        );
+
+        // Model offset 7 = inside 'Google' (after 'Visit ' + 1 char)
+        final seg = controller.segmentAtOffset(7);
+        expect(seg, isNotNull);
+        expect(seg!.text, 'Google');
+        expect(seg.styles, contains(InlineStyle.link));
+        expect(seg.attributes['url'], 'https://google.com');
+
+        // Model offset 12 = end of 'Google' — still returns link (boundary)
+        final endSeg = controller.segmentAtOffset(12);
+        expect(endSeg, isNotNull);
+        expect(endSeg!.text, 'Google');
+
+        // Model offset 2 = inside 'Visit ' segment (no link)
+        final plainSeg = controller.segmentAtOffset(2);
+        expect(plainSeg, isNotNull);
+        expect(plainSeg!.styles, isNot(contains(InlineStyle.link)));
+
+        controller.dispose();
+      });
+
+      test('linkAtDisplayOffset returns URL for link, null for plain text', () {
+        final controller = EditorController(
+          document: Document([
+            TextBlock(id: 'a', segments: [
+              const StyledSegment('Hi '),
               const StyledSegment(
                   'link', {InlineStyle.link}, {'url': 'https://x.com'}),
             ]),
           ]),
-          onLinkTap: (_) {},
         );
 
-        final ctx = _MockBuildContext();
-
-        // First build.
-        final span1 = controller.buildTextSpan(
-          context: ctx,
-          style: const TextStyle(),
-          withComposing: false,
-        );
-        final recognizer1 = _findSpanWithText(span1, 'link')!.recognizer!;
-
-        // Second build — old recognizer should be disposed.
-        controller.buildTextSpan(
-          context: ctx,
-          style: const TextStyle(),
-          withComposing: false,
-        );
-
-        // Disposed recognizers throw when accessed in debug mode, but we
-        // can verify new ones were created by checking they're different objects.
-        final span2 = controller.buildTextSpan(
-          context: ctx,
-          style: const TextStyle(),
-          withComposing: false,
-        );
-        final recognizer2 = _findSpanWithText(span2, 'link')!.recognizer!;
-        expect(identical(recognizer1, recognizer2), isFalse);
+        // Display offset 4 = model offset 4 = inside 'link'
+        expect(controller.linkAtDisplayOffset(4), 'https://x.com');
+        // Display offset 7 = model offset 7 = end of 'link' (boundary, still link)
+        expect(controller.linkAtDisplayOffset(7), 'https://x.com');
+        // Display offset 1 = model offset 1 = inside 'Hi ' (no link)
+        expect(controller.linkAtDisplayOffset(1), isNull);
 
         controller.dispose();
       });

@@ -25,4 +25,5 @@ export 'src/schema/default_schema.dart';
 export 'src/schema/editor_schema.dart';
 export 'src/schema/inline_style_def.dart';
 // Widgets
+export 'src/widgets/bullet_editor.dart';
 export 'src/widgets/editor_toolbar.dart';

@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../codec/markdown_codec.dart';
@@ -53,7 +52,6 @@ class EditorController extends TextEditingController {
   final EditorSchema _schema;
   final UndoManager _undoManager;
   LinkTapCallback? _onLinkTap;
-  final List<GestureRecognizer> _recognizers = [];
   bool _isSyncing = false;
 
   /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
@@ -80,7 +78,7 @@ class EditorController extends TextEditingController {
   /// `{'url': '...'}` for a link). Empty map if no attributes.
   Map<String, dynamic> get currentAttributes {
     if (!value.selection.isValid) return const {};
-    final modelOffset = _displayToModel(value.selection.baseOffset);
+    final modelOffset = displayToModel(value.selection.baseOffset);
     final pos = _document.blockAt(modelOffset);
     final block = _document.allBlocks[pos.blockIndex];
     var offset = 0;
@@ -110,22 +108,24 @@ class EditorController extends TextEditingController {
     int start,
     int end,
     void Function(int flatIndex, TextBlock block, int localStart, int localEnd)
-        visitor,
+    visitor,
   ) {
     final startPos = _document.blockAt(start);
     final endPos = _document.blockAt(end);
     for (var i = startPos.blockIndex; i <= endPos.blockIndex; i++) {
       final block = _document.allBlocks[i];
       final localStart = i == startPos.blockIndex ? startPos.localOffset : 0;
-      final localEnd =
-          i == endPos.blockIndex ? endPos.localOffset : block.length;
+      final localEnd = i == endPos.blockIndex
+          ? endPos.localOffset
+          : block.length;
       if (localEnd > localStart) {
         visitor(i, block, localStart, localEnd);
       }
     }
   }
 
-  int _displayToModel(int displayOffset) =>
+  /// Convert a display offset (TextField position) to a model offset.
+  int displayToModel(int displayOffset) =>
       mapper.displayToModel(_document, displayOffset, _schema);
 
   TextSelection _selectionToModel(TextSelection sel) =>
@@ -189,16 +189,14 @@ class EditorController extends TextEditingController {
   }
 
   /// Undo the last edit. Restores the document and cursor from the snapshot.
-  void undo() => _applyUndoRedo(
-        retrieve: _undoManager.undo,
-        stash: _undoManager.pushRedo,
-      );
+  void undo() =>
+      _applyUndoRedo(retrieve: _undoManager.undo, stash: _undoManager.pushRedo);
 
   /// Redo the last undone edit. Restores the document and cursor from the snapshot.
   void redo() => _applyUndoRedo(
-        retrieve: _undoManager.redo,
-        stash: _undoManager.pushUndoRaw,
-      );
+    retrieve: _undoManager.redo,
+    stash: _undoManager.pushUndoRaw,
+  );
 
   void _applyUndoRedo({
     required UndoEntry? Function() retrieve,
@@ -207,11 +205,13 @@ class EditorController extends TextEditingController {
     final entry = retrieve();
     if (entry == null) return;
 
-    stash(UndoEntry(
-      document: _document,
-      selection: _selectionToModel(value.selection),
-      timestamp: DateTime.now(),
-    ));
+    stash(
+      UndoEntry(
+        document: _document,
+        selection: _selectionToModel(value.selection),
+        timestamp: DateTime.now(),
+      ),
+    );
 
     _document = entry.document;
     _syncToTextField(modelSelection: entry.selection);
@@ -239,8 +239,10 @@ class EditorController extends TextEditingController {
     if (!value.selection.isValid || !value.selection.isCollapsed) return false;
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
-    final result = IndentBlock(pos.blockIndex, policies: _schema.policies)
-        .apply(_document);
+    final result = IndentBlock(
+      pos.blockIndex,
+      policies: _schema.policies,
+    ).apply(_document);
     return !identical(result, _document);
   }
 
@@ -253,9 +255,11 @@ class EditorController extends TextEditingController {
     final pos = _document.blockAt(modelSel.baseOffset);
     final block = _document.allBlocks[pos.blockIndex];
     if (block.blockType == type) return true; // already this type — "valid"
-    final result = ChangeBlockType(pos.blockIndex, type,
-            policies: _schema.policies)
-        .apply(_document);
+    final result = ChangeBlockType(
+      pos.blockIndex,
+      type,
+      policies: _schema.policies,
+    ).apply(_document);
     return !identical(result, _document);
   }
 
@@ -325,7 +329,8 @@ class EditorController extends TextEditingController {
     // Cursor goes to the block after the divider (pos.blockIndex + 2).
     final cursorOffset = _document.globalOffset(pos.blockIndex + 2, 0);
     _syncToTextField(
-        modelSelection: TextSelection.collapsed(offset: cursorOffset));
+      modelSelection: TextSelection.collapsed(offset: cursorOffset),
+    );
     _activeStyles = _document.stylesAt(cursorOffset);
   }
 
@@ -354,7 +359,7 @@ class EditorController extends TextEditingController {
       } else {
         _activeStyles = Set.of(_activeStyles)..add(style);
       }
-      _styleOverrideOffset = _displayToModel(value.selection.baseOffset);
+      _styleOverrideOffset = displayToModel(value.selection.baseOffset);
       notifyListeners();
       return;
     }
@@ -413,18 +418,34 @@ class EditorController extends TextEditingController {
         offset = segEnd;
       }
       if (hasLink) {
-        removeOps.add(ToggleStyle(
-            i, localStart, localEnd, InlineStyle.link, attributes: attrs));
+        removeOps.add(
+          ToggleStyle(
+            i,
+            localStart,
+            localEnd,
+            InlineStyle.link,
+            attributes: attrs,
+          ),
+        );
       }
-      addOps.add(ToggleStyle(
-          i, localStart, localEnd, InlineStyle.link, attributes: attrs));
+      addOps.add(
+        ToggleStyle(
+          i,
+          localStart,
+          localEnd,
+          InlineStyle.link,
+          attributes: attrs,
+        ),
+      );
     });
 
     if (addOps.isEmpty) return;
 
     _pushUndo();
     final tx = Transaction(
-        operations: [...removeOps, ...addOps], selectionAfter: modelSel);
+      operations: [...removeOps, ...addOps],
+      selectionAfter: modelSel,
+    );
     _document = tx.apply(_document);
     _activeStyles = _stylesForSelection(
       TextSelection(baseOffset: start, extentOffset: end),
@@ -515,12 +536,12 @@ class EditorController extends TextEditingController {
       afterSel = finalTx.selectionAfter!;
     } else {
       // Compute fallback against the NEW document (after apply).
-      final newModelOffset = _displayToModel(value.selection.baseOffset);
+      final newModelOffset = displayToModel(value.selection.baseOffset);
       afterSel = TextSelection.collapsed(offset: newModelOffset);
     }
     _syncToTextField(modelSelection: afterSel);
     _activeStyles = _document.stylesAt(
-      _displayToModel(value.selection.baseOffset),
+      displayToModel(value.selection.baseOffset),
     );
   }
 
@@ -538,7 +559,7 @@ class EditorController extends TextEditingController {
       _previousValue = value;
       _isSyncing = false;
     }
-    final modelOffset = _displayToModel(value.selection.baseOffset);
+    final modelOffset = displayToModel(value.selection.baseOffset);
     if (_styleOverrideOffset >= 0 && modelOffset == _styleOverrideOffset) {
       // Cursor still at the override position — preserve manual styles.
     } else {
@@ -602,7 +623,7 @@ class EditorController extends TextEditingController {
     final cleanInserted = diff.insertedText
         .replaceAll(mapper.prefixChar, '')
         .replaceAll(mapper.emptyBlockChar, '');
-    final modelStart = _displayToModel(diff.start);
+    final modelStart = displayToModel(diff.start);
     final deletedText = _previousValue.text.substring(
       diff.start,
       diff.start + diff.deletedLength,
@@ -760,10 +781,14 @@ class EditorController extends TextEditingController {
     // Check if the decoded result has any formatting worth preserving.
     // If it's just a single paragraph with no styles/attributes, skip — let
     // the normal plain-text pipeline handle it.
-    final hasFormatting = blocks.length > 1 ||
+    final hasFormatting =
+        blocks.length > 1 ||
         blocks.any((b) => b.blockType != BlockType.paragraph) ||
-        blocks.any((b) => b.segments.any((s) =>
-            s.styles.isNotEmpty || s.attributes.isNotEmpty));
+        blocks.any(
+          (b) => b.segments.any(
+            (s) => s.styles.isNotEmpty || s.attributes.isNotEmpty,
+          ),
+        );
 
     if (!hasFormatting) return null;
 
@@ -775,11 +800,22 @@ class EditorController extends TextEditingController {
       final deleteEnd = diff.start + diff.deletedLength;
       final endPos = _document.blockAt(deleteEnd);
       if (startPos.blockIndex == endPos.blockIndex) {
-        ops.add(DeleteText(
-            startPos.blockIndex, startPos.localOffset, diff.deletedLength));
+        ops.add(
+          DeleteText(
+            startPos.blockIndex,
+            startPos.localOffset,
+            diff.deletedLength,
+          ),
+        );
       } else {
-        ops.add(DeleteRange(startPos.blockIndex, startPos.localOffset,
-            endPos.blockIndex, endPos.localOffset));
+        ops.add(
+          DeleteRange(
+            startPos.blockIndex,
+            startPos.localOffset,
+            endPos.blockIndex,
+            endPos.localOffset,
+          ),
+        );
       }
     }
 
@@ -831,14 +867,44 @@ class EditorController extends TextEditingController {
     _isSyncing = false;
   }
 
-  // -- Rendering --
+  // -- Tap handling --
 
-  void _disposeRecognizers() {
-    for (final r in _recognizers) {
-      r.dispose();
+  /// Get the styled segment at a model offset, or null if out of range.
+  /// Use this to detect what the user tapped on (link, image, etc.).
+  /// Uses the same boundary logic as [currentAttributes]: at a boundary
+  /// between two segments, prefers the preceding one (so the end of a
+  /// link still counts as "on the link").
+  StyledSegment? segmentAtOffset(int modelOffset) {
+    final pos = _document.blockAt(modelOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    var offset = 0;
+    for (final seg in block.segments) {
+      final segEnd = offset + seg.text.length;
+      // Same logic as currentAttributes — inclusive end, exclusive start
+      // (except at block start where offset == 0).
+      if (pos.localOffset <= segEnd &&
+          (pos.localOffset > offset || offset == 0)) {
+        return seg;
+      }
+      offset = segEnd;
     }
-    _recognizers.clear();
+    return null;
   }
+
+  /// Get the link URL at a display offset, or null if not on a link.
+  /// Convenience for tap handlers — converts display→model and checks.
+  String? linkAtDisplayOffset(int displayOffset) {
+    final modelOffset = displayToModel(displayOffset);
+    final seg = segmentAtOffset(modelOffset);
+    if (seg != null &&
+        seg.styles.contains(InlineStyle.link) &&
+        seg.attributes['url'] != null) {
+      return seg.attributes['url'] as String;
+    }
+    return null;
+  }
+
+  // -- Rendering --
 
   @override
   TextSpan buildTextSpan({
@@ -846,21 +912,16 @@ class EditorController extends TextEditingController {
     TextStyle? style,
     required bool withComposing,
   }) {
-    // Dispose previous batch of recognizers before building new ones.
-    _disposeRecognizers();
     return spans.buildDocumentSpan(
       _document,
       style,
       _schema,
-      onLinkTap: _onLinkTap,
-      recognizers: _recognizers,
     );
   }
 
   @override
   void dispose() {
     removeListener(_onValueChanged);
-    _disposeRecognizers();
     super.dispose();
   }
 }
