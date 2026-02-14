@@ -288,28 +288,68 @@ class EditorController<B extends Object, S extends Object>
   // -- Public actions --
 
   void indent() {
-    if (!value.selection.isValid || !value.selection.isCollapsed) return;
+    if (!value.selection.isValid) return;
     final modelSel = _selectionToModel(value.selection);
-    final pos = _document.blockAt(modelSel.baseOffset);
+    final (start, end) = _orderedRange(modelSel);
+    final startBlock = _document.blockAt(start).blockIndex;
+    final endBlock = _document.blockAt(end).blockIndex;
 
     _pushUndo();
-    _document = IndentBlock(
-      pos.blockIndex,
-      policies: _schema.policies,
-    ).apply(_document);
+    // Indent from first to last so they all become siblings under the
+    // preceding block, rather than nesting inside each other.
+    for (var i = startBlock; i <= endBlock; i++) {
+      _document = IndentBlock(i, policies: _schema.policies).apply(_document);
+    }
     _syncToTextField(modelSelection: modelSel);
-    _activeStyles = _document.stylesAt(modelSel.baseOffset);
+    _activeStyles = _document.stylesAt(start);
   }
 
   void outdent() {
-    if (!value.selection.isValid || !value.selection.isCollapsed) return;
+    if (!value.selection.isValid) return;
     final modelSel = _selectionToModel(value.selection);
-    final pos = _document.blockAt(modelSel.baseOffset);
+    final (start, end) = _orderedRange(modelSel);
+    final startBlock = _document.blockAt(start).blockIndex;
+    final endBlock = _document.blockAt(end).blockIndex;
 
     _pushUndo();
-    _document = OutdentBlock(pos.blockIndex).apply(_document);
+    // Collect block IDs and original depths. Process first-to-last so
+    // parents outdent before children (children travel with parent).
+    // Skip blocks whose depth already decreased (moved with parent).
+    // For siblings at the same depth, insert after the last outdented
+    // block to preserve order (OutdentBlock inserts after the parent,
+    // which reverses siblings when done first-to-last).
+    final blockInfo = <(String, int)>[];
+    for (var i = startBlock; i <= endBlock; i++) {
+      blockInfo.add((_document.allBlocks[i].id, _document.depthOf(i)));
+    }
+    String? lastOutdentedId;
+    int? lastOriginalDepth;
+    for (final (id, originalDepth) in blockInfo) {
+      final idx = _document.indexOfBlock(id);
+      if (idx < 0) continue;
+      final currentDepth = _document.depthOf(idx);
+      if (currentDepth < originalDepth) continue; // Moved with parent.
+      if (currentDepth > 0) {
+        // Sibling of the previously outdented block: insert after it
+        // to preserve order instead of using OutdentBlock (which inserts
+        // after the shared parent, reversing order).
+        if (lastOutdentedId != null && originalDepth == lastOriginalDepth) {
+          final block = _document.allBlocks[idx];
+          _document = _document.removeBlockPromoteChildren(idx);
+          final insertAfter = _document.indexOfBlock(lastOutdentedId);
+          if (insertAfter >= 0) {
+            _document = _document.insertAfterFlatIndex(insertAfter, block);
+            lastOutdentedId = id;
+            continue;
+          }
+        }
+        _document = OutdentBlock(idx).apply(_document);
+        lastOutdentedId = id;
+        lastOriginalDepth = originalDepth;
+      }
+    }
     _syncToTextField(modelSelection: modelSel);
-    _activeStyles = _document.stylesAt(modelSel.baseOffset);
+    _activeStyles = _document.stylesAt(start);
   }
 
   /// Insert a divider at the cursor position.

@@ -2297,6 +2297,106 @@ void main() {
         expect(controller.document.blocks.length, 2);
       });
 
+      test('indent with multi-block selection indents all selected blocks', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+            TextBlock(id: 'c', blockType: BlockType.listItem, segments: [const StyledSegment('third')]),
+          ]),
+        );
+
+        // Select from "second" to "third".
+        final secondStart = controller.text.indexOf('second');
+        final thirdEnd = controller.text.indexOf('third') + 5;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: secondStart, extentOffset: thirdEnd),
+        );
+
+        controller.indent();
+
+        // "second" and "third" should both be nested under "first".
+        expect(controller.document.blocks.length, 1);
+        expect(controller.document.blocks[0].children.length, 2);
+        expect(controller.document.blocks[0].children[0].plainText, 'second');
+        expect(controller.document.blocks[0].children[1].plainText, 'third');
+      });
+
+      test('outdent with multi-block selection outdents all selected blocks', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child1')]),
+                TextBlock(id: 'c', blockType: BlockType.listItem, segments: [const StyledSegment('child2')]),
+              ],
+            ),
+          ]),
+        );
+
+        // Select both children.
+        final c1Start = controller.text.indexOf('child1');
+        final c2End = controller.text.indexOf('child2') + 6;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: c1Start, extentOffset: c2End),
+        );
+
+        controller.outdent();
+
+        // Both children should be promoted to root.
+        expect(controller.document.blocks.length, 3);
+        expect(controller.document.blocks[0].plainText, 'parent');
+        expect(controller.document.blocks[1].plainText, 'child1');
+        expect(controller.document.blocks[2].plainText, 'child2');
+      });
+
+      test('outdent nested selection outdents each block one level', () {
+        // Parent > Nested > Tab. Select Nested + Tab, outdent.
+        // Each selected block outdents one level independently.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('Parent item')],
+              children: [
+                TextBlock(
+                  id: 'b',
+                  blockType: BlockType.listItem,
+                  segments: [const StyledSegment('Nested child')],
+                  children: [
+                    TextBlock(id: 'c', blockType: BlockType.listItem, segments: [const StyledSegment('Tab to indent')]),
+                  ],
+                ),
+              ],
+            ),
+          ]),
+        );
+
+        // Select "Nested child" and "Tab to indent".
+        final nestedStart = controller.text.indexOf('Nested');
+        final tabEnd = controller.text.indexOf('Tab to indent') + 13;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: nestedStart, extentOffset: tabEnd),
+        );
+
+        controller.outdent();
+
+        // "Nested child" outdents first (carries Tab with it) to root.
+        // "Tab to indent" skipped (already moved with parent).
+        expect(controller.document.blocks.length, 2);
+        expect(controller.document.blocks[0].plainText, 'Parent item');
+        expect(controller.document.blocks[1].plainText, 'Nested child');
+        expect(controller.document.blocks[1].children.length, 1);
+        expect(controller.document.blocks[1].children[0].plainText, 'Tab to indent');
+      });
+
       test('\\t in text diff is stripped (indent is via onKeyEvent only)', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
