@@ -221,7 +221,8 @@ void main() {
       // Inside bold "bold"
       expect(doc.stylesAt(5), {InlineStyle.bold});
       expect(doc.stylesAt(7), {InlineStyle.bold});
-      // At end of bold segment (offset 8 = boundary)
+      // At boundary (offset 8 = end of bold / start of " xyz").
+      // Backward boundary → bold (typing continues the style you just left).
       expect(doc.stylesAt(8), {InlineStyle.bold});
       // Inside unstyled " xyz"
       expect(doc.stylesAt(9), <InlineStyle>{});

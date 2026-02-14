@@ -1539,6 +1539,89 @@ void main() {
         expect(controller.currentAttributes['url'], 'https://x.com');
       });
 
+      test('returns link URL when selection starts at link boundary', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('before '),
+                const StyledSegment(
+                  'link',
+                  {InlineStyle.link},
+                  {'url': 'https://x.com'},
+                ),
+                const StyledSegment(' after'),
+              ],
+            ),
+          ]),
+        );
+        // Select exactly "link" — baseOffset at the start of the link segment.
+        final linkStart = controller.text.indexOf('link');
+        final linkEnd = linkStart + 4;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: linkStart, extentOffset: linkEnd),
+        );
+        expect(controller.currentAttributes['url'], 'https://x.com');
+      });
+
+      test('returns link URL when collapsed cursor is at link end', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('before '),
+                const StyledSegment(
+                  'link',
+                  {InlineStyle.link},
+                  {'url': 'https://x.com'},
+                ),
+                const StyledSegment(' after'),
+              ],
+            ),
+          ]),
+        );
+        // Collapsed cursor right after "link" (at link end boundary).
+        final linkEnd = controller.text.indexOf('link') + 4;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: linkEnd),
+        );
+        expect(controller.currentAttributes['url'], 'https://x.com');
+      });
+
+      test('returns empty map when collapsed cursor is at link start', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('before '),
+                const StyledSegment(
+                  'link',
+                  {InlineStyle.link},
+                  {'url': 'https://x.com'},
+                ),
+                const StyledSegment(' after'),
+              ],
+            ),
+          ]),
+        );
+        // Collapsed cursor at the start of "link" (boundary with "before ").
+        final linkStart = controller.text.indexOf('link');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: linkStart),
+        );
+        // At start boundary with collapsed cursor → predecessor segment.
+        expect(controller.currentAttributes, isEmpty);
+      });
+
       test('returns empty map when cursor is on plain text', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),

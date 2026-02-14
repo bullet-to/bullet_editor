@@ -92,18 +92,14 @@ class EditorController<B extends Object, S extends Object>
   Map<String, dynamic> get currentAttributes {
     if (!value.selection.isValid) return const {};
     final modelOffset = displayToModel(value.selection.baseOffset);
-    final pos = _document.blockAt(modelOffset);
-    final block = _document.allBlocks[pos.blockIndex];
-    var offset = 0;
-    for (final seg in block.segments) {
-      final segEnd = offset + seg.text.length;
-      if (pos.localOffset <= segEnd &&
-          (pos.localOffset > offset || offset == 0)) {
-        return seg.attributes;
-      }
-      offset = segEnd;
-    }
-    return const {};
+    // With a selection, prefer the segment being selected (forward).
+    // With a collapsed cursor, prefer the segment the cursor is "on" (backward)
+    // so that positioning at the end of a link reports that link's attributes.
+    final boundary = value.selection.isCollapsed
+        ? SegmentBoundary.backward
+        : SegmentBoundary.forward;
+    final seg = _document.segmentAt(modelOffset, boundary: boundary);
+    return seg?.attributes ?? const {};
   }
 
   // -- Offset helpers (delegate to offset_mapper) --
@@ -976,34 +972,17 @@ class EditorController<B extends Object, S extends Object>
   // -- Tap handling --
 
   /// Get the styled segment at a model offset, or null if out of range.
-  /// Use this to detect what the user tapped on (link, image, etc.).
-  /// At segment boundaries, returns the segment starting at that offset
-  /// (forward-matching). Use [segmentBeforeOffset] for the preceding segment.
-  StyledSegment? segmentAtOffset(int modelOffset) {
-    final pos = _document.blockAt(modelOffset);
-    final block = _document.allBlocks[pos.blockIndex];
-    var offset = 0;
-    for (final seg in block.segments) {
-      final segEnd = offset + seg.text.length;
-      if (pos.localOffset >= offset && pos.localOffset < segEnd) {
-        return seg;
-      }
-      offset = segEnd;
-    }
-    // At block end — return last segment.
-    if (block.segments.isNotEmpty && pos.localOffset == block.length) {
-      return block.segments.last;
-    }
-    return null;
-  }
+  /// Delegates to [Document.segmentAt] with forward boundary.
+  StyledSegment? segmentAtOffset(int modelOffset) =>
+      _document.segmentAt(modelOffset);
 
   /// Get the link URL at a display offset, or null if not on a link.
-  /// Checks both the segment at the offset and the preceding one, so
-  /// tapping at either the start or end of a link detects it.
+  /// Checks both forward and backward boundaries so tapping at either
+  /// edge of a link detects it.
   String? linkAtDisplayOffset(int displayOffset) {
     final modelOffset = displayToModel(displayOffset);
-    return _linkFrom(segmentAtOffset(modelOffset)) ??
-        (modelOffset > 0 ? _linkFrom(segmentAtOffset(modelOffset - 1)) : null);
+    return _linkFrom(_document.segmentAt(modelOffset)) ??
+        _linkFrom(_document.segmentAt(modelOffset, boundary: SegmentBoundary.backward));
   }
 
   static String? _linkFrom(StyledSegment? seg) {

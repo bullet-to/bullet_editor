@@ -2,6 +2,16 @@ import 'dart:math';
 
 import 'block.dart';
 
+/// Controls which segment is returned when an offset falls on a boundary
+/// between two adjacent segments.
+enum SegmentBoundary {
+  /// Return the segment starting at this offset (what you'd type into).
+  forward,
+
+  /// Return the segment ending at this offset (the one the cursor is "on").
+  backward,
+}
+
 /// Result of mapping a global TextField offset to a block + local offset.
 class BlockPosition {
   const BlockPosition(this.blockIndex, this.localOffset);
@@ -93,21 +103,59 @@ class Document<B> {
     return offset + localOffset;
   }
 
-  /// Get the inline styles at a global TextField offset.
-  Set<Object> stylesAt(int globalOffset) {
-    final flat = allBlocks;
+  /// Return the [StyledSegment] at a global offset within the document.
+  ///
+  /// At segment boundaries the [boundary] parameter controls which segment
+  /// is returned:
+  /// - [SegmentBoundary.forward] — the segment starting at this offset
+  ///   (what you'd type into). Default; used for `_activeStyles`.
+  /// - [SegmentBoundary.backward] — the segment ending at this offset
+  ///   (the one the cursor is "on"). Used for link detection at link end.
+  ///
+  /// Returns null if the block has no segments.
+  StyledSegment? segmentAt(int globalOffset, {
+    SegmentBoundary boundary = SegmentBoundary.forward,
+  }) {
     final pos = blockAt(globalOffset);
-    final block = flat[pos.blockIndex];
-
+    final block = allBlocks[pos.blockIndex];
     var offset = 0;
-    for (final seg in block.segments) {
+    for (var i = 0; i < block.segments.length; i++) {
+      final seg = block.segments[i];
       final segEnd = offset + seg.text.length;
-      if (pos.localOffset <= segEnd && (pos.localOffset > offset || offset == 0)) {
-        return Set.of(seg.styles);
+
+      // Strictly inside — unambiguous.
+      if (pos.localOffset > offset && pos.localOffset < segEnd) return seg;
+
+      // At a boundary between two segments (offset == segEnd).
+      if (pos.localOffset == segEnd && seg.text.isNotEmpty) {
+        if (boundary == SegmentBoundary.backward) return seg;
+        // Forward: prefer next segment if available.
+        if (i + 1 < block.segments.length) {
+          offset = segEnd;
+          continue;
+        }
+        // No next segment — return this one.
+        return seg;
       }
+
+      // At segment start.
+      if (pos.localOffset == offset && seg.text.isNotEmpty) {
+        if (boundary == SegmentBoundary.forward || offset == 0) return seg;
+      }
+
       offset = segEnd;
     }
-    return {};
+    return null;
+  }
+
+  /// Get the inline styles at a global offset.
+  ///
+  /// Uses backward boundary so that the cursor at the end of a bold word
+  /// reports bold (matching standard editor behavior: typing continues
+  /// the style you just left).
+  Set<Object> stylesAt(int globalOffset) {
+    final seg = segmentAt(globalOffset, boundary: SegmentBoundary.backward);
+    return seg != null ? Set.of(seg.styles) : {};
   }
 
   /// Extract blocks/segments within a global offset range [start, end).
