@@ -12,7 +12,12 @@ import 'inline_style_def.dart';
 ///
 /// Use [EditorSchema.standard()] for the built-in block types and styles.
 class EditorSchema {
-  EditorSchema({required this.blocks, required this.inlineStyles});
+  EditorSchema({
+    required this.blocks,
+    required this.inlineStyles,
+    this.prefixWidthFactor = 1.5,
+    this.indentPerDepthFactor = 1.5,
+  });
 
   /// Creates the standard schema with all built-in block types and inline styles.
   factory EditorSchema.standard() => buildStandardSchema();
@@ -22,6 +27,14 @@ class EditorSchema {
 
   /// Inline style definitions keyed by style identifier.
   final Map<Object, InlineStyleDef> inlineStyles;
+
+  /// Width of the prefix area (bullet/number/checkbox) as a multiplier of
+  /// the block's resolved font size.
+  final double prefixWidthFactor;
+
+  /// Additional indent per nesting depth level as a multiplier of the base
+  /// font size.
+  final double indentPerDepthFactor;
 
   /// Look up a block definition. Returns a minimal fallback if not found.
   BlockDef blockDef(Object key) => blocks[key] ?? _fallbackBlockDef;

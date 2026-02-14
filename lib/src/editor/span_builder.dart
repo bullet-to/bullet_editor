@@ -112,8 +112,10 @@ TextSpan buildDocumentSpan(
       // Derive indent spacing from the base font size (style param, not bStyle,
       // so indentation is consistent across block types).
       final baseFontSize = style?.fontSize ?? kFallbackFontSize;
-      final indentPx = indentPerDepth(baseFontSize);
-      final prefixPx = prefixWidth(bStyle?.fontSize ?? baseFontSize);
+      final ipdf = schema.indentPerDepthFactor;
+      final pwf = schema.prefixWidthFactor;
+      final indentPx = indentPerDepth(baseFontSize, ipdf);
+      final prefixPx = prefixWidth(bStyle?.fontSize ?? baseFontSize, pwf);
 
       // List-like blocks: indent by depth, then show their prefix (bullet etc).
       // Non-list nested blocks: align text with the parent's text start,
@@ -132,7 +134,7 @@ TextSpan buildDocumentSpan(
       } else {
         // Nested non-list block: align with parent's text start.
         indent = isNested
-            ? (depth - 1) * indentPx + prefixWidth(baseFontSize)
+            ? (depth - 1) * indentPx + prefixWidth(baseFontSize, pwf)
             : 0;
         child = const SizedBox.shrink();
       }

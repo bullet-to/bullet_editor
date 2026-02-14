@@ -9,21 +9,39 @@ void main() {
   runApp(const BulletEditorExample());
 }
 
-class BulletEditorExample extends StatelessWidget {
+class BulletEditorExample extends StatefulWidget {
   const BulletEditorExample({super.key});
+
+  @override
+  State<BulletEditorExample> createState() => _BulletEditorExampleState();
+}
+
+class _BulletEditorExampleState extends State<BulletEditorExample> {
+  ThemeMode _themeMode = ThemeMode.light;
+
+  void _toggleTheme() {
+    setState(() {
+      _themeMode =
+          _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Bullet Editor POC',
-      theme: ThemeData(useMaterial3: true),
-      home: const EditorScreen(),
+      theme: ThemeData(useMaterial3: true, brightness: Brightness.light),
+      darkTheme: ThemeData(useMaterial3: true, brightness: Brightness.dark),
+      themeMode: _themeMode,
+      home: EditorScreen(onToggleTheme: _toggleTheme),
     );
   }
 }
 
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key});
+  const EditorScreen({super.key, this.onToggleTheme});
+
+  final VoidCallback? onToggleTheme;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -329,7 +347,20 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Bullet Editor POC')),
+      appBar: AppBar(
+        title: const Text('Bullet Editor POC'),
+        actions: [
+          IconButton(
+            icon: Icon(
+              Theme.of(context).brightness == Brightness.dark
+                  ? Icons.light_mode
+                  : Icons.dark_mode,
+            ),
+            tooltip: 'Toggle dark mode',
+            onPressed: widget.onToggleTheme,
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -374,9 +405,11 @@ class _EditorScreenState extends State<EditorScreen> {
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: Theme.of(context).colorScheme.surfaceContainerLow,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey[300]!),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
                 ),
                 child: SingleChildScrollView(
                   child: SelectableText(
@@ -384,7 +417,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     style: TextStyle(
                       fontSize: 12,
                       fontFamily: 'monospace',
-                      color: Colors.grey[800],
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
