@@ -172,6 +172,7 @@ Stress-test the markdown codec to guarantee lossless round-trips across all bloc
 ## Future Phases (unordered)
 
 - WidgetSpan blocks (images, tables, embeds)
+- Column-based architecture (one widget per block) — only needed if inline editing inside embeds (code blocks, tables) becomes a requirement. Current single-TextField approach handles void-block embeds with tap-to-edit well. The rewrite cost is high (cross-block selection, focus management, IME at boundaries).
 - Collaborative editing (CRDT-backed DocumentModel)
 - Reaction system (auto-save, sync, analytics)
 - Annotation layer (comments, suggestions)

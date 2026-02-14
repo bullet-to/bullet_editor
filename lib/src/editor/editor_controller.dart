@@ -527,7 +527,7 @@ class EditorController extends TextEditingController {
   ///
   /// If no input rule overrides selectionAfter, the fallback selection is
   /// computed from the current display cursor against the NEW document.
-  void _commitTransaction(Transaction tx) {
+  void _commitTransaction(Transaction tx, {TextSelection? cursorOverride}) {
     // During composing (and the resolve frame), skip input rules and undo.
     // One undo entry was already pushed when composing started.
     final isProvisional = _preComposingValue != null;
@@ -548,9 +548,13 @@ class EditorController extends TextEditingController {
 
     final TextSelection afterSel;
     if (finalTx != tx && finalTx.selectionAfter != null) {
+      // Input rule overrode the selection.
       afterSel = finalTx.selectionAfter!;
+    } else if (cursorOverride != null) {
+      // Caller supplied an explicit post-apply cursor (model space).
+      afterSel = cursorOverride;
     } else {
-      // Compute fallback against the NEW document (after apply).
+      // Fallback: map the display cursor through the NEW document.
       final newModelOffset = displayToModel(value.selection.baseOffset);
       afterSel = TextSelection.collapsed(offset: newModelOffset);
     }
@@ -590,12 +594,17 @@ class EditorController extends TextEditingController {
   void _handlePrefixDelete(int modelStart) {
     final pos = _document.blockAt(modelStart);
     if (pos.blockIndex > 0 && pos.localOffset == 0) {
-      final modelSelection = _selectionToModel(value.selection);
+      // Cursor should land at the merge point: end of the previous block.
+      final mergePoint = _document.globalOffset(
+        pos.blockIndex - 1,
+        _document.allBlocks[pos.blockIndex - 1].length,
+      );
+      final cursorAfter = TextSelection.collapsed(offset: mergePoint);
       final tx = Transaction(
         operations: [MergeBlocks(pos.blockIndex)],
-        selectionAfter: modelSelection,
+        selectionAfter: cursorAfter,
       );
-      _commitTransaction(tx);
+      _commitTransaction(tx, cursorOverride: cursorAfter);
       return;
     }
 

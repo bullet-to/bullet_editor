@@ -51,10 +51,11 @@ int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
       modelPos++;
     }
 
-    // Spacer: \uFFFC + \n — both display only (2 chars).
+    // Spacer: \u200C + \n — both display only (2 chars).
+    // Advance FIRST so the <= check covers both spacer characters.
     if (hasSpacerBefore(doc, i, schema)) {
-      if (displayOffset <= displayPos) return modelPos;
       displayPos += 2;
+      if (displayOffset <= displayPos) return modelPos;
     }
 
     if (hasPrefix(doc, i, schema)) {

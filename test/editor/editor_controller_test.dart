@@ -186,6 +186,39 @@ void main() {
       expect(controller.document.blocks[0].plainText, 'helloworld');
     });
 
+    test('Backspace at heading start (spacer) places cursor at merge point', () {
+      final controller = EditorController(
+        document: Document([
+          TextBlock(id: 'a', segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.h1,
+            segments: [const StyledSegment('world')],
+          ),
+        ]),
+      );
+
+      // h1 has spacingBefore, so display text has spacer \u200C\n before it.
+      // Display: "hello\n\u200C\nworld"
+      //           0    5 6    8
+      expect(controller.text, 'hello\n\u200C\nworld');
+
+      // Cursor at start of "world" = display offset 8.
+      // User presses backspace → Flutter removes the \n at offset 7.
+      // New display: "hello\n\u200Cworld", cursor at 7.
+      controller.value = const TextEditingValue(
+        text: 'hello\n\u200Cworld',
+        selection: TextSelection.collapsed(offset: 7),
+      );
+
+      // Blocks should merge.
+      expect(controller.document.blocks.length, 1);
+      expect(controller.document.blocks[0].plainText, 'helloworld');
+
+      // Cursor should be at display offset 5 (merge point, end of "hello").
+      expect(controller.value.selection.baseOffset, 5);
+    });
+
     test('Bold rule at start of block', () {
       final controller = EditorController(
         document: Document([
