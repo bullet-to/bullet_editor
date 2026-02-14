@@ -4,21 +4,23 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('BulletEditor link tap', () {
-    testWidgets('onTap fires with segment info when tapping',
-        (tester) async {
+    testWidgets('onTap fires with segment info when tapping', (tester) async {
       final tappedDetails = <EditorTapDetails>[];
 
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('Visit '),
-            const StyledSegment(
-              'Google',
-              {InlineStyle.link},
-              {'url': 'https://google.com'},
-            ),
-            const StyledSegment(' today'),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('Visit '),
+              const StyledSegment(
+                'Google',
+                {InlineStyle.link},
+                {'url': 'https://google.com'},
+              ),
+              const StyledSegment(' today'),
+            ],
+          ),
         ]),
       );
 
@@ -46,25 +48,28 @@ void main() {
       await tester.tapAt(Offset(box.left + box.width * 0.25, box.top + 20));
       await tester.pumpAndSettle();
 
-      expect(tappedDetails, isNotEmpty,
-          reason: 'onTap should fire on any tap');
+      expect(tappedDetails, isNotEmpty, reason: 'onTap should fire on any tap');
       // We got a segment — the pipeline works.
       expect(tappedDetails.first.segment, isNotNull);
     });
 
-    testWidgets('onLinkTap fires with URL when tapping link text',
-        (tester) async {
+    testWidgets('onLinkTap fires with URL when tapping link text', (
+      tester,
+    ) async {
       String? tappedUrl;
 
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment(
-              'click here',
-              {InlineStyle.link},
-              {'url': 'https://example.com'},
-            ),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment(
+                'click here',
+                {InlineStyle.link},
+                {'url': 'https://example.com'},
+              ),
+            ],
+          ),
         ]),
       );
 
@@ -90,21 +95,16 @@ void main() {
       expect(tappedUrl, 'https://example.com');
     });
 
-    testWidgets('segmentAtOffset returns correct segment for each block',
-        (tester) async {
+    testWidgets('segmentAtOffset returns correct segment for each block', (
+      tester,
+    ) async {
       // Unit-level test that the segment lookup works for different offsets
       // across multiple blocks, without relying on simulated taps.
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('first block'),
-          ]),
-          TextBlock(id: 'b', segments: [
-            const StyledSegment('second block'),
-          ]),
-          TextBlock(id: 'c', segments: [
-            const StyledSegment('third block'),
-          ]),
+          TextBlock(id: 'a', segments: [const StyledSegment('first block')]),
+          TextBlock(id: 'b', segments: [const StyledSegment('second block')]),
+          TextBlock(id: 'c', segments: [const StyledSegment('third block')]),
         ]),
       );
 
@@ -121,15 +121,17 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('onTap fires with null linkUrl on plain text',
-        (tester) async {
+    testWidgets('onTap fires with null linkUrl on plain text', (tester) async {
       EditorTapDetails? lastTap;
 
       final controller = EditorController(
         document: Document([
-          TextBlock(id: 'a', segments: [
-            const StyledSegment('just plain text here nothing special'),
-          ]),
+          TextBlock(
+            id: 'a',
+            segments: [
+              const StyledSegment('just plain text here nothing special'),
+            ],
+          ),
         ]),
       );
 

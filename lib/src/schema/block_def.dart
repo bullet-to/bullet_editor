@@ -57,10 +57,16 @@ class BlockDef {
 
   /// Builds the prefix widget for this block's WidgetSpan (bullet, number,
   /// checkbox, etc.). Return null for no prefix content (indentation-only).
-  /// The [doc] and [flatIndex] are provided for context (e.g. computing
-  /// ordinals for numbered lists).
-  final Widget? Function(Document doc, int flatIndex, TextBlock block)?
-      prefixBuilder;
+  ///
+  /// [doc] and [flatIndex] are provided for context (e.g. computing ordinals
+  /// for numbered lists). [resolvedStyle] is the block's resolved [TextStyle]
+  /// so prefixes can scale with the text (e.g. bullet size matches font size).
+  final Widget? Function(
+    Document doc,
+    int flatIndex,
+    TextBlock block,
+    TextStyle resolvedStyle,
+  )? prefixBuilder;
 
   /// Serialization codecs keyed by [Format]. Each codec defines how this
   /// block type encodes/decodes in that format.

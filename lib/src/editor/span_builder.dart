@@ -3,8 +3,13 @@ import 'package:flutter/widgets.dart';
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_style.dart';
+import '../schema/default_schema.dart'
+    show indentPerDepth, kFallbackFontSize, prefixWidth;
 import '../schema/editor_schema.dart';
 import 'offset_mapper.dart';
+
+/// Callback when a prefix widget (bullet, checkbox, etc.) is tapped.
+typedef PrefixTapCallback = void Function(int flatIndex, TextBlock block);
 
 /// Build a TextSpan tree from a Document for rendering in a TextField.
 ///
@@ -19,11 +24,15 @@ import 'offset_mapper.dart';
 /// `readOnly` when recognizers are present on non-macOS platforms. Instead,
 /// link taps are detected at the gesture level via the controller's
 /// `segmentAtOffset` helper.
+///
+/// If [onPrefixTap] is provided, prefix widgets are wrapped in a
+/// [GestureDetector] so taps on bullets/checkboxes/numbers fire the callback.
 TextSpan buildDocumentSpan(
   Document doc,
   TextStyle? style,
-  EditorSchema schema,
-) {
+  EditorSchema schema, {
+  PrefixTapCallback? onPrefixTap,
+}) {
   final children = <InlineSpan>[];
   final flat = doc.allBlocks;
 
@@ -53,11 +62,17 @@ TextSpan buildDocumentSpan(
     // Void blocks (e.g. divider): the WidgetSpan IS the entire visual content.
     // No text spans are emitted — the prefix occupies the full line.
     if (def.isVoid && hasPrefix(doc, i, schema)) {
-      final prefixWidget = def.prefixBuilder?.call(doc, i, block);
+      final prefixWidget =
+          def.prefixBuilder?.call(doc, i, block, bStyle ?? const TextStyle());
       children.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
-          child: prefixWidget ?? const SizedBox.shrink(),
+          child: _wrapPrefixTap(
+            prefixWidget ?? const SizedBox.shrink(),
+            onPrefixTap,
+            i,
+            block,
+          ),
         ),
       );
       continue;
@@ -66,11 +81,47 @@ TextSpan buildDocumentSpan(
     // Visual prefix: bullet, number, checkbox, or indentation spacer.
     if (hasPrefix(doc, i, schema)) {
       final depth = doc.depthOf(i);
-      final prefixWidget = def.prefixBuilder?.call(doc, i, block);
+      final isNested = depth > 0;
+      final isLL = schema.isListLike(block.blockType);
+      final prefixWidget = def.prefixBuilder?.call(
+        doc, i, block, bStyle ?? const TextStyle(),
+      );
+
+      // Derive indent spacing from the base font size (style param, not bStyle,
+      // so indentation is consistent across block types).
+      final baseFontSize = style?.fontSize ?? kFallbackFontSize;
+      final indentPx = indentPerDepth(baseFontSize);
+      final prefixPx = prefixWidth(bStyle?.fontSize ?? baseFontSize);
+
+      // List-like blocks: indent by depth, then show their prefix (bullet etc).
+      // Non-list nested blocks: align text with the parent's text start,
+      // using a zero-width WidgetSpan so the offset mapper still has a
+      // placeholder char.
+      final double indent;
+      final Widget child;
+      if (isLL || prefixWidget != null) {
+        indent = depth * indentPx;
+        child = _wrapPrefixTap(
+          prefixWidget ?? SizedBox(width: prefixPx),
+          onPrefixTap,
+          i,
+          block,
+        );
+      } else {
+        // Nested non-list block: align with parent's text start.
+        indent = isNested
+            ? (depth - 1) * indentPx + prefixWidth(baseFontSize)
+            : 0;
+        child = const SizedBox.shrink();
+      }
+
       children.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
-          child: SizedBox(width: 20.0 + (depth * 16.0), child: prefixWidget),
+          child: Padding(
+            padding: EdgeInsets.only(left: indent),
+            child: child,
+          ),
         ),
       );
     }
@@ -108,6 +159,21 @@ TextStyle? _blockBaseStyle(
 ) {
   final def = schema.blockDef(type);
   return def.baseStyle?.call(base) ?? base;
+}
+
+/// Wrap a prefix widget in a [GestureDetector] if [onTap] is provided.
+Widget _wrapPrefixTap(
+  Widget child,
+  PrefixTapCallback? onTap,
+  int flatIndex,
+  TextBlock block,
+) {
+  if (onTap == null) return child;
+  return GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () => onTap(flatIndex, block),
+    child: child,
+  );
 }
 
 /// Resolve inline styles into a TextStyle via schema lookup.

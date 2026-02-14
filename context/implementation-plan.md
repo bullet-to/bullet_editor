@@ -140,16 +140,16 @@ Rich copy/paste that preserves formatting across clipboard operations.
 
 ## Phase 11: Styling
 
-Theming, typography, and visual customisation of the editor and its content.
+Better defaults, Notion-like nesting/indentation, and a typography system.
 
-- **Editor theme:** `BulletEditorTheme` data class — text styles, colors, spacing, selection highlight, cursor color
-- **Block-level styling:** Per-block-type text style overrides (heading sizes, blockquote indentation/border, code block background)
-- **Inline style rendering:** Map `InlineStyle` → `TextStyle` via theme, support custom attributes (color, highlight)
+- **Improve defaults:** Sane out-of-the-box text styles — body size, heading scale, line height, paragraph spacing. Should look good with zero config, similar to Notion/Bear.
+- **Nesting & indentation:** Fix indent rendering to match Notion — nested list items indent content (not just the bullet), consistent left padding per depth level, visual nesting cues (lighter bullets, indentation guides). Tab/Shift+Tab should feel identical to Notion.
+- **Typography system:** A `Typography` config that defines the full type scale — body, H1–H3, code, blockquote. Users provide a `Typography` object (or we derive one from a base font/size) and every block type maps to it automatically.
 - **Theme injection:** `InheritedWidget` or constructor param so the editor respects the host app's theme out of the box
 - **Dark mode:** Light/dark variants, auto-switch with `MediaQuery.platformBrightness`
 - **Toolbar styling:** Theme-aware toolbar (icon colors, active state indicators, dividers)
 
-**Key question answered:** Can we decouple visual presentation from the document model cleanly enough that theming is a config concern, not a model concern?
+**Key question answered:** Can we ship defaults that look polished without config, while still letting users override everything via a typography/theme system?
 
 ---
 

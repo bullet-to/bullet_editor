@@ -23,7 +23,6 @@ EditorSchema buildStandardSchema() {
   return EditorSchema(
     blocks: {
       // --- Order: specific prefix rules before general ones ---
-
       BlockType.h3: BlockDef(
         label: 'Heading 3',
         policies: const BlockPolicies(
@@ -205,7 +204,6 @@ EditorSchema buildStandardSchema() {
     },
     inlineStyles: {
       // --- Order: link before bold before italic (specific before general) ---
-
       InlineStyle.link: InlineStyleDef(
         label: 'Link',
         isDataCarrying: true,
@@ -221,8 +219,9 @@ EditorSchema buildStandardSchema() {
               return '[$text]($url)';
             },
             decode: (text) {
-              final match =
-                  RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
+              final match = RegExp(
+                r'^\[([^\]]+)\]\(([^)]+)\)',
+              ).firstMatch(text);
               if (match == null) return null;
               return InlineDecodeMatch(
                 text: match.group(1)!,
@@ -263,18 +262,60 @@ EditorSchema buildStandardSchema() {
 // Prefix builders — moved from span_builder.dart
 // ---------------------------------------------------------------------------
 
-const _prefixStyle = TextStyle(fontSize: 14, color: Color(0xFF666666));
+/// Width of the prefix area (bullet/number/checkbox) before the text content,
+/// as a multiplier of the block's resolved font size.
+const double kPrefixWidthFactor = 1.5;
 
-Widget? _bulletPrefix(Document doc, int flatIndex, TextBlock block) {
-  return const Text('•  ', textAlign: TextAlign.right, style: _prefixStyle);
+/// Additional indent per nesting depth level, as a multiplier of the base
+/// font size.
+const double kIndentPerDepthFactor = 1.5;
+
+/// Fallback font size when no style is provided.
+const double kFallbackFontSize = 16.0;
+
+/// Compute prefix width from a resolved font size.
+double prefixWidth(double fontSize) => fontSize * kPrefixWidthFactor;
+
+/// Compute indent per depth level from a base font size.
+double indentPerDepth(double fontSize) => fontSize * kIndentPerDepthFactor;
+
+Widget? _bulletPrefix(
+  Document doc,
+  int flatIndex,
+  TextBlock block,
+  TextStyle resolvedStyle,
+) {
+  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
+  return SizedBox(
+    width: prefixWidth(fontSize),
+    child: Center(
+      child: Text('•', style: TextStyle(fontSize: fontSize * 1.2, height: 1)),
+    ),
+  );
 }
 
-Widget? _numberedPrefix(Document doc, int flatIndex, TextBlock block) {
+Widget? _numberedPrefix(
+  Document doc,
+  int flatIndex,
+  TextBlock block,
+  TextStyle resolvedStyle,
+) {
   final ordinal = computeOrdinal(doc, flatIndex);
-  return Text('$ordinal.  ', textAlign: TextAlign.right, style: _prefixStyle);
+  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
+  return SizedBox(
+    width: prefixWidth(fontSize),
+    child: Center(
+      child: Text('$ordinal.', style: TextStyle(fontSize: fontSize, height: 1)),
+    ),
+  );
 }
 
-Widget? _dividerPrefix(Document doc, int flatIndex, TextBlock block) {
+Widget? _dividerPrefix(
+  Document doc,
+  int flatIndex,
+  TextBlock block,
+  TextStyle resolvedStyle,
+) {
   return Container(
     width: double.infinity,
     height: 1,
@@ -283,13 +324,64 @@ Widget? _dividerPrefix(Document doc, int flatIndex, TextBlock block) {
   );
 }
 
-Widget? _taskPrefix(Document doc, int flatIndex, TextBlock block) {
+Widget? _taskPrefix(
+  Document doc,
+  int flatIndex,
+  TextBlock block,
+  TextStyle resolvedStyle,
+) {
   final checked = block.metadata[kCheckedKey] == true;
-  return Text(
-    checked ? '☑  ' : '☐  ',
-    textAlign: TextAlign.right,
-    style: _prefixStyle,
+  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
+  final size = fontSize * 0.85;
+  final borderRadius = size * 0.2;
+  final color = resolvedStyle.color ?? const Color(0xFF333333);
+
+  return SizedBox(
+    width: prefixWidth(fontSize),
+    child: Center(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+          border: Border.all(
+            color: checked ? const Color(0xFF2196F3) : color.withOpacity(0.4),
+            width: 1.5,
+          ),
+          color: checked ? const Color(0xFF2196F3) : null,
+        ),
+        child: checked
+            ? CustomPaint(
+                painter: _CheckPainter(color: const Color(0xFFFFFFFF)),
+              )
+            : null,
+      ),
+    ),
   );
+}
+
+class _CheckPainter extends CustomPainter {
+  _CheckPainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = size.width * 0.15
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final path = Path()
+      ..moveTo(size.width * 0.2, size.height * 0.5)
+      ..lineTo(size.width * 0.42, size.height * 0.72)
+      ..lineTo(size.width * 0.8, size.height * 0.28);
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_CheckPainter old) => color != old.color;
 }
 
 /// Compute the 1-based ordinal for a numbered list item among its siblings.

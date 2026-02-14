@@ -492,16 +492,31 @@ class EditorController extends TextEditingController {
     if (!value.selection.isValid) return;
     final modelSel = _selectionToModel(value.selection);
     final pos = _document.blockAt(modelSel.baseOffset);
-    final block = _document.allBlocks[pos.blockIndex];
+    toggleTaskCheckedAt(pos.blockIndex);
+  }
+
+  /// Toggle checked state of the task at [flatIndex].
+  ///
+  /// Used by prefix tap handling — the checkbox prefix calls this directly
+  /// with the block's flat index, independent of cursor position.
+  void toggleTaskCheckedAt(int flatIndex) {
+    final flat = _document.allBlocks;
+    if (flatIndex < 0 || flatIndex >= flat.length) return;
+    final block = flat[flatIndex];
     if (block.blockType != BlockType.taskItem) return;
 
     final current = block.metadata[kCheckedKey] == true;
     _pushUndo();
     _document = SetBlockMetadata(
-      pos.blockIndex,
+      flatIndex,
       kCheckedKey,
       !current,
     ).apply(_document);
+
+    // Preserve current selection if valid, otherwise just sync.
+    final modelSel = value.selection.isValid
+        ? _selectionToModel(value.selection)
+        : null;
     _syncToTextField(modelSelection: modelSel);
     notifyListeners();
   }
@@ -911,6 +926,18 @@ class EditorController extends TextEditingController {
 
   // -- Rendering --
 
+  /// Called when a prefix widget (bullet, checkbox, etc.) is tapped.
+  /// Override or set [onPrefixTap] to customize behavior.
+  ///
+  /// Default: toggles checked state for task items, no-op for other types.
+  spans.PrefixTapCallback? onPrefixTap;
+
+  void _defaultPrefixTap(int flatIndex, TextBlock block) {
+    if (block.blockType == BlockType.taskItem) {
+      toggleTaskCheckedAt(flatIndex);
+    }
+  }
+
   @override
   TextSpan buildTextSpan({
     required BuildContext context,
@@ -921,6 +948,7 @@ class EditorController extends TextEditingController {
       _document,
       style,
       _schema,
+      onPrefixTap: onPrefixTap ?? _defaultPrefixTap,
     );
   }
 
