@@ -254,6 +254,8 @@ void main() {
   });
 
   group('H2/H3 policies', () {
+    final policies = EditorSchema.standard().policies;
+
     test('h2 cannot be indented (canBeChild: false)', () {
       final doc = Document([
         TextBlock(
@@ -267,7 +269,7 @@ void main() {
           segments: [const StyledSegment('heading')],
         ),
       ]);
-      final result = IndentBlock(1).apply(doc);
+      final result = IndentBlock(1, policies: policies).apply(doc);
       // Should be no-op — h2 stays at root.
       expect(result.blocks.length, 2);
       expect(result.blocks[1].blockType, BlockType.h2);
@@ -288,7 +290,8 @@ void main() {
           ],
         ),
       ]);
-      final result = ChangeBlockType(1, BlockType.h3).apply(doc);
+      final result =
+          ChangeBlockType(1, BlockType.h3, policies: policies).apply(doc);
       // Should be no-op — nested block can't become h3.
       expect(result.allBlocks[1].blockType, BlockType.paragraph);
     });

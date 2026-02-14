@@ -1,5 +1,3 @@
-import 'block.dart';
-
 /// Structural rules for a block type.
 ///
 /// Enforced by operations (IndentBlock, ChangeBlockType, etc.) — transactions
@@ -27,28 +25,3 @@ class BlockPolicies {
   /// Maximum nesting depth for this block type. null = unlimited.
   final int? maxDepth;
 }
-
-/// Default policies for built-in block types.
-///
-/// Operations import this directly. Becomes configurable in Phase 7 (schema).
-const defaultPolicies = <BlockType, BlockPolicies>{
-  BlockType.paragraph: BlockPolicies(canBeChild: true, canHaveChildren: false),
-  BlockType.h1: BlockPolicies(canBeChild: false, canHaveChildren: false),
-  BlockType.h2: BlockPolicies(canBeChild: false, canHaveChildren: false),
-  BlockType.h3: BlockPolicies(canBeChild: false, canHaveChildren: false),
-  BlockType.listItem: BlockPolicies(
-    canBeChild: true,
-    canHaveChildren: true,
-    maxDepth: 6,
-  ),
-  BlockType.numberedList: BlockPolicies(
-    canBeChild: true,
-    canHaveChildren: true,
-    maxDepth: 6,
-  ),
-  BlockType.taskItem: BlockPolicies(
-    canBeChild: true,
-    canHaveChildren: true,
-    maxDepth: 6,
-  ),
-};

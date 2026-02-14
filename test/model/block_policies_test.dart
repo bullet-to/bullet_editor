@@ -2,6 +2,8 @@ import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  final policies = EditorSchema.standard().policies;
+
   // Reset ID counter before each test for deterministic IDs.
   setUp(() {
     // We can't reset _idCounter directly, but tests don't depend on specific IDs.
@@ -24,7 +26,7 @@ void main() {
       ]);
 
       // Heading is flat index 1, previous sibling is paragraph at index 0.
-      final result = IndentBlock(1).apply(doc);
+      final result = IndentBlock(1, policies: policies).apply(doc);
 
       // Should be unchanged — heading can't be a child.
       expect(result.allBlocks.length, 2);
@@ -49,7 +51,7 @@ void main() {
           ),
         ]);
 
-        final result = IndentBlock(1).apply(doc);
+        final result = IndentBlock(1, policies: policies).apply(doc);
 
         // Should be unchanged — paragraph can't have children.
         expect(result.allBlocks.length, 2);
@@ -110,7 +112,7 @@ void main() {
       expect(siblingIdx, greaterThan(0));
       expect(doc.depthOf(siblingIdx), 6);
 
-      final result = IndentBlock(siblingIdx).apply(doc);
+      final result = IndentBlock(siblingIdx, policies: policies).apply(doc);
 
       // Should be unchanged — maxDepth exceeded.
       expect(result.allBlocks.length, flat.length);
@@ -136,7 +138,7 @@ void main() {
         ),
       ]);
 
-      final result = IndentBlock(1).apply(doc);
+      final result = IndentBlock(1, policies: policies).apply(doc);
 
       // li2 should now be a child of li1.
       expect(result.allBlocks.length, 2);
@@ -166,7 +168,8 @@ void main() {
         ]);
 
         // li2 is flat index 1, nested at depth 1.
-        final result = ChangeBlockType(1, BlockType.h1).apply(doc);
+        final result =
+            ChangeBlockType(1, BlockType.h1, policies: policies).apply(doc);
 
         // Should be unchanged — h1 can't be a child.
         expect(result.allBlocks[1].blockType, BlockType.listItem);
@@ -182,7 +185,8 @@ void main() {
         ),
       ]);
 
-      final result = ChangeBlockType(0, BlockType.h1).apply(doc);
+      final result =
+          ChangeBlockType(0, BlockType.h1, policies: policies).apply(doc);
 
       expect(result.allBlocks[0].blockType, BlockType.h1);
     });

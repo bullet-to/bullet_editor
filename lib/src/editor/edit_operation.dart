@@ -238,14 +238,17 @@ class ChangeBlockType extends EditOperation {
   final int blockIndex;
   final BlockType newType;
 
-  /// Optional policies map. Falls back to [defaultPolicies] if not provided.
+  /// Policies map from the schema. When provided, structural rules are
+  /// enforced (e.g. headings can't be children). When null, the type change
+  /// is applied unconditionally — used by input rules that fire in valid
+  /// contexts and don't have access to the schema.
   final Map<Object, BlockPolicies>? policies;
 
   @override
   Document apply(Document doc) {
-    final policyMap = policies ?? defaultPolicies;
+    final policyMap = policies;
     // Policy: if the new type can't be a child and the block is nested, reject.
-    final newPolicy = policyMap[newType];
+    final newPolicy = policyMap?[newType];
     if (newPolicy != null &&
         !newPolicy.canBeChild &&
         doc.depthOf(blockIndex) > 0) {
@@ -487,26 +490,26 @@ class IndentBlock extends EditOperation {
   IndentBlock(this.flatIndex, {this.policies});
   final int flatIndex;
 
-  /// Optional policies map. Falls back to [defaultPolicies] if not provided.
+  /// Policies map from the schema. When provided, structural rules are
+  /// enforced (nesting depth, canBeChild, canHaveChildren). When null,
+  /// indent is applied unconditionally.
   final Map<Object, BlockPolicies>? policies;
 
   @override
   Document apply(Document doc) {
-    final policyMap = policies ?? defaultPolicies;
+    final policyMap = policies;
     final prevSibling = doc.previousSibling(flatIndex);
     if (prevSibling == null) return doc; // No previous sibling — can't indent.
 
     final block = doc.allBlocks[flatIndex];
 
-    // Policy: block must be allowed to be a child.
-    final blockPolicy = policyMap[block.blockType];
+    // Policy checks (skipped when no policies provided).
+    final blockPolicy = policyMap?[block.blockType];
     if (blockPolicy != null && !blockPolicy.canBeChild) return doc;
 
-    // Policy: target parent must accept children.
-    final parentPolicy = policyMap[prevSibling.blockType];
+    final parentPolicy = policyMap?[prevSibling.blockType];
     if (parentPolicy != null && !parentPolicy.canHaveChildren) return doc;
 
-    // Policy: respect maxDepth.
     if (blockPolicy?.maxDepth != null) {
       final newDepth = doc.depthOf(flatIndex) + 1;
       if (newDepth > blockPolicy!.maxDepth!) return doc;
