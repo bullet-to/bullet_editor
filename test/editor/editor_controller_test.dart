@@ -2247,6 +2247,193 @@ void main() {
       });
     });
 
+    group('First block prefix delete', () {
+      test('backspace on first list item prefix converts to paragraph', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('item')]),
+          ]),
+        );
+
+        // Display: "\uFFFCitem". Backspace at position 0 deletes the prefix.
+        // Simulate: delete the prefix char \uFFFC.
+        controller.value = controller.value.copyWith(
+          text: 'item',
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks.first.plainText, 'item');
+      });
+
+      test('backspace on first list item with children outdents children', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('parent')],
+              children: [
+                TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+              ],
+            ),
+          ]),
+        );
+
+        // Backspace on the prefix of "parent".
+        controller.value = controller.value.copyWith(
+          text: controller.text.replaceFirst('\uFFFC', ''),
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+
+        // "parent" should be a paragraph, "child" should be a root sibling.
+        expect(controller.document.blocks.length, 2);
+        expect(controller.document.blocks[0].blockType, BlockType.paragraph);
+        expect(controller.document.blocks[0].plainText, 'parent');
+        expect(controller.document.blocks[0].children, isEmpty);
+        expect(controller.document.blocks[1].blockType, BlockType.listItem);
+        expect(controller.document.blocks[1].plainText, 'child');
+      });
+
+      test('backspace on first paragraph prefix is no-op', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('text')]),
+          ]),
+        );
+
+        final textBefore = controller.text;
+        // There's no prefix on a paragraph, so this just re-syncs.
+        // Ensure nothing breaks.
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.text, textBefore);
+      });
+    });
+
+    group('Delete/Enter regressions', () {
+      test('delete across block boundary preserves list item type', () {
+        // "hello" paragraph + "item" list item. Select across both and
+        // delete. Cross-block delete must NOT trigger the cut-from-start rule.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('hello')]),
+            TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('world')]),
+          ]),
+        );
+
+        // Display: "\uFFFChello\n\uFFFCworld"
+        // Select "lo\n\uFFFCwor" (from offset 4 to 10) and delete.
+        // Result: "\uFFFChelld" — merged into one block.
+        controller.value = const TextEditingValue(
+          text: '\uFFFChelld',
+          selection: TextSelection.collapsed(offset: 4),
+        );
+
+        expect(controller.document.allBlocks.length, 1);
+        expect(controller.document.allBlocks.first.plainText, 'helld');
+        // Key: type should be preserved (listItem), not reset to paragraph.
+        expect(controller.document.allBlocks.first.blockType, BlockType.listItem);
+      });
+
+      test('cut from start of heading resets to paragraph (within-block)', () {
+        // This verifies the cut-from-start rule still works for same-block deletes.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h1, segments: [const StyledSegment('Title')]),
+          ]),
+        );
+
+        // Select "Titl" from the start.
+        final tStart = controller.text.indexOf('T');
+        final lEnd = controller.text.indexOf('l') + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(baseOffset: tStart, extentOffset: lEnd),
+        );
+
+        controller.value = controller.value.copyWith(
+          text: controller.text.substring(0, tStart) + controller.text.substring(lEnd),
+          selection: TextSelection.collapsed(offset: tStart),
+        );
+
+        expect(controller.document.allBlocks.first.blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks.first.plainText, 'e');
+      });
+
+      test('Enter at end of text moves cursor to new line', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+          ]),
+        );
+
+        // Place cursor at end of "hello".
+        final endPos = controller.text.indexOf('hello') + 5;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: endPos),
+        );
+
+        // Simulate Enter: insert \n.
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, endPos) + '\n' + before.substring(endPos),
+          selection: TextSelection.collapsed(offset: endPos + 1),
+        );
+
+        expect(controller.document.allBlocks.length, 2);
+        expect(controller.document.allBlocks[0].plainText, 'hello');
+        expect(controller.document.allBlocks[1].plainText, '');
+
+        // Cursor should be on the new (second) block, not stuck on the first.
+        final modelCursor = controller.displayToModel(controller.value.selection.baseOffset);
+        final cursorPos = controller.document.blockAt(modelCursor);
+        expect(cursorPos.blockIndex, 1, reason: 'cursor should be on the new block');
+      });
+
+      test('repeated Enter advances cursor each time', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+          ]),
+        );
+
+        // Place cursor at end of "hello".
+        var endPos = controller.text.indexOf('hello') + 5;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: endPos),
+        );
+
+        // First Enter.
+        var before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, endPos) + '\n' + before.substring(endPos),
+          selection: TextSelection.collapsed(offset: endPos + 1),
+        );
+        expect(controller.document.allBlocks.length, 2);
+        final afterFirst = controller.value.selection.baseOffset;
+
+        // Second Enter at current cursor position.
+        endPos = controller.value.selection.baseOffset;
+        before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, endPos) + '\n' + before.substring(endPos),
+          selection: TextSelection.collapsed(offset: endPos + 1),
+        );
+        expect(controller.document.allBlocks.length, 3);
+        final afterSecond = controller.value.selection.baseOffset;
+
+        // Cursor must advance after each Enter.
+        expect(afterSecond, greaterThan(afterFirst),
+            reason: 'cursor should advance after second Enter');
+      });
+    });
+
     group('Paste cursor', () {
       test('cursor lands at end of pasted markdown content', () {
         final controller = EditorController(

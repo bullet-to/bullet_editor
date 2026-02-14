@@ -194,7 +194,7 @@ class PrefixBlockRule extends InputRule {
       operations: [
         ...pending.operations,
         DeleteText(i, 0, fullPrefix.length),
-        ChangeBlockType(i, targetType),
+        ChangeBlockType(i, targetType, policies: schema.policies),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
         baseOffset: blockStart,
@@ -226,7 +226,8 @@ class HeadingBackspaceRule extends InputRule {
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType),
+        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType,
+            policies: schema.policies),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -296,7 +297,7 @@ class TaskItemRule extends InputRule {
       operations: [
         ...pending.operations,
         DeleteText(i, 0, prefixLen),
-        ChangeBlockType(i, BlockType.taskItem),
+        ChangeBlockType(i, BlockType.taskItem, policies: schema.policies),
         SetBlockMetadata(i, kCheckedKey, checked),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
@@ -325,7 +326,8 @@ class EmptyListItemRule extends InputRule {
     // Replace the split with a type change to the default block type.
     return Transaction(
       operations: [
-        ChangeBlockType(splitOp.blockIndex, schema.defaultBlockType),
+        ChangeBlockType(splitOp.blockIndex, schema.defaultBlockType,
+            policies: schema.policies),
       ],
       selectionAfter: pending.selectionAfter,
     );
@@ -356,7 +358,8 @@ class ListItemBackspaceRule extends InputRule {
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType),
+        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType,
+            policies: schema.policies),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -420,7 +423,7 @@ class DividerRule extends InputRule {
       operations: [
         ...pending.operations,
         DeleteText(i, 0, 3),
-        ChangeBlockType(i, BlockType.divider),
+        ChangeBlockType(i, BlockType.divider, policies: schema.policies),
         // Create a new block after the divider for the cursor.
         SplitBlock(i, 0, defaultBlockType: schema.defaultBlockType),
       ],

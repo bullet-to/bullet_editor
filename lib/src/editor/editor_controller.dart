@@ -652,6 +652,25 @@ class EditorController<B extends Object, S extends Object>
       );
       _commitTransaction(tx, cursorOverride: cursorAfter);
       return;
+    } else if (pos.blockIndex == 0 && pos.localOffset == 0) {
+      // First block: can't merge, but convert to default type.
+      // ChangeBlockType handles outdenting children if the new type
+      // doesn't allow them (via policies).
+      final block = _document.allBlocks[0];
+      if (block.blockType != _schema.defaultBlockType) {
+        final tx = Transaction(
+          operations: [
+            ChangeBlockType(0, _schema.defaultBlockType,
+                policies: _schema.policies),
+          ],
+          selectionAfter: const TextSelection.collapsed(offset: 0),
+        );
+        _commitTransaction(
+          tx,
+          cursorOverride: const TextSelection.collapsed(offset: 0),
+        );
+        return;
+      }
     }
 
     // Prefix deleted but not at block start — just re-sync to restore it.
@@ -765,6 +784,19 @@ class EditorController<B extends Object, S extends Object>
     // Pure newline insert → split (no delete involved).
     if (diff.insertedText == '\n' && diff.deletedLength == 0) {
       final pos = _document.blockAt(diff.start);
+      // After split, cursor goes to the start of the new block (index + 1).
+      // Compute the model offset: everything before the split point, plus the
+      // separator (\n) between the two blocks = diff.start + 1 char past
+      // the split point... but actually it's simpler: the new block starts
+      // at model offset = (text before split point) + 1 (block separator).
+      // That's diff.start + 1 if splitting at end, or the global offset of
+      // the new block at local 0. We compute it post-apply via cursorOverride.
+      final splitOffset = diff.start;
+      // Model cursor after split = start of new block = splitOffset + 1
+      // (the +1 accounts for the block separator \n in model text).
+      final cursorAfter = TextSelection.collapsed(
+        offset: splitOffset + 1,
+      );
       return (
         Transaction(
           operations: [
@@ -777,7 +809,7 @@ class EditorController<B extends Object, S extends Object>
           ],
           selectionAfter: selection,
         ),
-        null,
+        cursorAfter,
       );
     }
 
@@ -827,14 +859,19 @@ class EditorController<B extends Object, S extends Object>
         );
       }
 
-      // Cut/delete from position 0 of a non-default block → reset to default.
-      // Mirrors backspace behavior: removing content starting at the prefix
-      // should strip the block formatting (headings, list items, etc.).
-      if (startPos.localOffset == 0 && diff.insertedText.isEmpty) {
+      // Cut/delete from position 0 within a single block → reset to default.
+      // Only fires for within-block deletes (e.g. selecting text from the
+      // start of a heading and cutting). Does NOT fire on cross-block merges
+      // (forward-delete across a boundary), which should preserve the
+      // surviving block's type.
+      if (startPos.localOffset == 0 &&
+          diff.insertedText.isEmpty &&
+          startPos.blockIndex == endPos.blockIndex) {
         final blockType = _document.allBlocks[startPos.blockIndex].blockType;
         if (blockType != _schema.defaultBlockType) {
           ops.add(
-            ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType),
+            ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType,
+                policies: _schema.policies),
           );
         }
       }

@@ -262,6 +262,13 @@ class Document<B> {
   Document<B> removeBlock(int flatIndex) =>
       removeBlockByFlatIndex(flatIndex);
 
+  /// Remove a block but promote its children to become siblings at the
+  /// same level. Used by DeleteRange to avoid silently discarding subtrees.
+  Document<B> removeBlockPromoteChildren(int flatIndex) {
+    final targetId = allBlocks[flatIndex].id;
+    return Document(_removePromoteChildren(blocks, targetId));
+  }
+
   int indexOfBlock(String blockId) =>
       allBlocks.indexWhere((b) => b.id == blockId);
 
@@ -310,6 +317,11 @@ List<TextBlock<B>> _replaceInTree<B>(
 
 List<TextBlock<B>> _removeFromTree<B>(List<TextBlock<B>> nodes, String targetId) {
   return _visitTree(nodes, targetId, (_) => <TextBlock<B>>[]).$1;
+}
+
+List<TextBlock<B>> _removePromoteChildren<B>(
+    List<TextBlock<B>> nodes, String targetId) {
+  return _visitTree(nodes, targetId, (node) => node.children).$1;
 }
 
 List<TextBlock<B>> _insertAfterInTree<B>(

@@ -179,7 +179,8 @@ void main() {
       final doc = Document([
         TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
       ]);
-      final result = ChangeBlockType(0, BlockType.h1).apply(doc);
+      final result = ChangeBlockType(0, BlockType.h1,
+          policies: EditorSchema.standard().policies).apply(doc);
       expect(result.blocks[0].blockType, BlockType.h1);
       expect(result.blocks[0].plainText, 'hello');
     });
@@ -686,6 +687,86 @@ void main() {
       final result = DeleteRange(0, 0, 2, 5).apply(doc);
       // Should not crash, should leave at least one block
       expect(result.allBlocks.isNotEmpty, isTrue);
+    });
+  });
+
+  group('Tree-preserving delete and merge', () {
+    test('DeleteRange across root into nested child promotes surviving children', () {
+      // H3 heading, then a list item with two children.
+      // Select from mid-heading to end of first child → delete.
+      // The second child (sibling of the deleted one) must survive.
+      final doc = Document([
+        TextBlock(id: 'h', blockType: BlockType.h1, segments: [const StyledSegment('Heading')]),
+        TextBlock(
+          id: 'parent',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent')],
+          children: [
+            TextBlock(id: 'c1', blockType: BlockType.listItem, segments: [const StyledSegment('Child1')]),
+            TextBlock(id: 'c2', blockType: BlockType.listItem, segments: [const StyledSegment('Child2')]),
+          ],
+        ),
+      ]);
+
+      // Flat: [0]=Heading, [1]=Parent, [2]=Child1, [3]=Child2
+      // Delete from offset 3 in Heading (block 0) to end of Child1 (block 2, offset 6).
+      // This removes blocks 1 (Parent) and 2 (Child1) as middle/end blocks.
+      final result = DeleteRange(0, 3, 2, 6).apply(doc);
+
+      // "Heading" truncated to "Hea", Child2 should survive.
+      expect(result.allBlocks.any((b) => b.id == 'c2'), isTrue,
+          reason: 'Child2 must not be silently deleted');
+      expect(result.allBlocks.firstWhere((b) => b.id == 'c2').plainText, 'Child2');
+    });
+
+    test('MergeBlocks promotes children of the removed block', () {
+      // Two root list items, second has a child.
+      // Backspace at start of second → merge into first.
+      // The child should survive as a sibling.
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('second')],
+          children: [
+            TextBlock(id: 'c', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+          ],
+        ),
+      ]);
+
+      final result = MergeBlocks(1).apply(doc);
+
+      // "first" + "second" merged. "child" promoted to root sibling.
+      expect(result.allBlocks.length, 2);
+      expect(result.allBlocks[0].plainText, 'firstsecond');
+      expect(result.allBlocks[1].plainText, 'child');
+    });
+
+    test('full scenario: heading + parent with children, select across', () {
+      // Exact scenario from the user's bug report.
+      final doc = Document([
+        TextBlock(id: 'h3', blockType: BlockType.h3, segments: [const StyledSegment('Heading 3 example')]),
+        TextBlock(
+          id: 'parent',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('Parent item')],
+          children: [
+            TextBlock(id: 'nested', blockType: BlockType.listItem, segments: [const StyledSegment('Nested child')]),
+            TextBlock(id: 'tab', blockType: BlockType.listItem, segments: [const StyledSegment('Tab to indent')]),
+          ],
+        ),
+      ]);
+
+      // Flat: [0]=H3, [1]=Parent, [2]=Nested, [3]=Tab
+      // Select from mid-heading to end of "Nested child".
+      final result = DeleteRange(0, 7, 2, 12).apply(doc);
+
+      // "Heading" truncated. "Tab to indent" must survive.
+      expect(result.allBlocks.any((b) => b.id == 'tab'), isTrue,
+          reason: 'Tab to indent must not be deleted');
+      expect(result.allBlocks.firstWhere((b) => b.id == 'tab').plainText,
+          'Tab to indent');
     });
   });
 }

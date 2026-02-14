@@ -237,7 +237,9 @@ class MergeBlocks extends EditOperation {
     final mergedBlock = first.copyWith(segments: mergedSegments);
 
     var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
-    result = result.removeBlock(secondBlockIndex);
+    // Promote the second block's children before removing it, so they
+    // become siblings at the level where the second block was.
+    result = result.removeBlockPromoteChildren(secondBlockIndex);
     return result;
   }
 
@@ -247,22 +249,19 @@ class MergeBlocks extends EditOperation {
 
 /// Change the block type of the block at [blockIndex].
 class ChangeBlockType extends EditOperation {
-  ChangeBlockType(this.blockIndex, this.newType, {this.policies});
+  ChangeBlockType(this.blockIndex, this.newType, {required this.policies});
 
   final int blockIndex;
   final Object newType;
 
-  /// Policies map from the schema. When provided, structural rules are
-  /// enforced (e.g. headings can't be children). When null, the type change
-  /// is applied unconditionally — used by input rules that fire in valid
-  /// contexts and don't have access to the schema.
-  final Map<Object, BlockPolicies>? policies;
+  /// Policies map from the schema. Enforces structural rules (e.g. headings
+  /// can't be children, paragraphs can't have children → auto-outdent).
+  final Map<Object, BlockPolicies> policies;
 
   @override
   Document<B> apply<B>(Document<B> doc) {
-    final policyMap = policies;
     // Policy: if the new type can't be a child and the block is nested, reject.
-    final newPolicy = policyMap?[newType];
+    final newPolicy = policies[newType];
     if (newPolicy != null &&
         !newPolicy.canBeChild &&
         doc.depthOf(blockIndex) > 0) {
@@ -271,11 +270,30 @@ class ChangeBlockType extends EditOperation {
 
     final block = doc.allBlocks[blockIndex];
     if (block.blockType == newType) return doc;
+
+    var result = doc;
+
+    // If the new type can't have children, outdent existing children first.
+    if (newPolicy != null && !newPolicy.canHaveChildren && block.children.isNotEmpty) {
+      // Outdent children in reverse order so flat indices stay valid.
+      for (var i = block.children.length; i > 0; i--) {
+        final childFlatIndex = result.indexOfBlock(block.children[i - 1].id);
+        if (childFlatIndex >= 0) {
+          result = OutdentBlock(childFlatIndex).apply(result);
+        }
+      }
+    }
+
+    // Re-fetch the block after potential outdenting (index may have shifted).
+    final updatedIndex = result.indexOfBlock(block.id);
+    if (updatedIndex < 0) return doc; // Safety check.
+    final updatedBlock = result.allBlocks[updatedIndex];
+
     // Clear metadata when changing type — stale metadata from the old type
     // (e.g. task 'checked' state) shouldn't carry over.
-    return doc.replaceBlock(
-      blockIndex,
-      block.copyWith(blockType: newType as B, metadata: const {}),
+    return result.replaceBlock(
+      updatedIndex,
+      updatedBlock.copyWith(blockType: newType as B, metadata: const {}),
     );
   }
 
@@ -330,11 +348,13 @@ class DeleteRange extends EditOperation {
     final mergedBlock = startBlock.copyWith(segments: mergedSegments);
 
     // 4. Apply: replace start block, then remove end block and all middle blocks.
+    //    Use removeBlockPromoteChildren so that children of deleted blocks
+    //    (that were outside the selection range) are promoted instead of lost.
     //    Remove from high index to low to avoid index shifting.
     var result = doc.replaceBlock(startBlockIndex, mergedBlock);
     for (var i = endBlockIndex; i > startBlockIndex; i--) {
       if (i < result.allBlocks.length) {
-        result = result.removeBlock(i);
+        result = result.removeBlockPromoteChildren(i);
       }
     }
 
