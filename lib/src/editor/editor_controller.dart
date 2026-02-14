@@ -634,19 +634,17 @@ class EditorController extends TextEditingController {
     }
 
     // Translate diff from display to model space.
-    // Strip display-only characters (prefix chars and empty block placeholders).
+    // Strip display-only characters (prefix chars, spacer sequences, and
+    // empty block placeholders).
     final cleanInserted = diff.insertedText
-        .replaceAll(mapper.prefixChar, '')
+        .replaceAll('${mapper.spacerChar}\n', '') // spacer \u200C\n
+        .replaceAll(mapper.spacerChar, '') // lone spacer char
+        .replaceAll(mapper.prefixChar, '') // prefix \uFFFC
         .replaceAll(mapper.emptyBlockChar, '');
     final modelStart = displayToModel(diff.start);
-    final deletedText = _previousValue.text.substring(
-      diff.start,
-      diff.start + diff.deletedLength,
-    );
-    final displayOnlyDeleted =
-        mapper.prefixChar.allMatches(deletedText).length +
-        mapper.emptyBlockChar.allMatches(deletedText).length;
-    final modelDeletedLength = diff.deletedLength - displayOnlyDeleted;
+    final modelEnd = displayToModel(diff.start + diff.deletedLength);
+    final modelDeletedLength = modelEnd - modelStart;
+    final displayOnlyDeleted = diff.deletedLength - modelDeletedLength;
 
     // 2. Only display-only chars deleted (backspace over bullet / empty placeholder).
     if (modelDeletedLength == 0 &&

@@ -171,11 +171,11 @@ void main() {
         ]),
       );
 
-      // paragraph spacingAfter → spacer \uFFFC before next block.
-      expect(controller.text, 'hello\n\uFFFCworld');
+      // No spacer — paragraph has spacingBefore: 0.
+      expect(controller.text, 'hello\nworld');
 
-      // Cursor at start of "world" (display offset 7), press backspace.
-      // Flutter removes the \n, producing "hello\uFFFCworld". But the
+      // Cursor at start of "world" (display offset 6), press backspace.
+      // Flutter removes the \n, producing "helloworld". The
       // controller sees the diff and merges the blocks.
       controller.value = const TextEditingValue(
         text: 'helloworld',
@@ -320,17 +320,17 @@ void main() {
         // Rules come from schema.
       );
 
-      // H1 has spacingAfter → spacer \uFFFC before next block.
-      expect(controller.text, 'Title\n\uFFFCparagraph');
+      // No spacer — paragraph has spacingBefore: 0.
+      expect(controller.text, 'Title\nparagraph');
 
       controller.value = const TextEditingValue(
-        text: 'Title\n\uFFFCparagraph',
+        text: 'Title\nparagraph',
         selection: TextSelection.collapsed(offset: 5),
       );
 
       // Type space at end of H1.
       controller.value = const TextEditingValue(
-        text: 'Title \n\uFFFCparagraph',
+        text: 'Title \nparagraph',
         selection: TextSelection.collapsed(offset: 6),
       );
 
@@ -342,7 +342,7 @@ void main() {
       expect(controller.value.selection.baseOffset, 6);
 
       // Controller text should reflect the model.
-      expect(controller.text, 'Title \n\uFFFCparagraph');
+      expect(controller.text, 'Title \nparagraph');
     });
 
     test('Enter on heading creates paragraph block', () {
@@ -457,12 +457,12 @@ void main() {
         ]),
       );
 
-      // Display: "above\n\uFFFC\uFFFC" — paragraph spacingAfter + empty list item prefix.
-      expect(controller.text, 'above\n\uFFFC\uFFFC');
+      // Display: "above\n\uFFFC" — no spacer (listItem has spacingBefore: 0) + empty list item prefix.
+      expect(controller.text, 'above\n\uFFFC');
 
       controller.value = const TextEditingValue(
-        text: 'above\n\uFFFC\uFFFC',
-        selection: TextSelection.collapsed(offset: 8),
+        text: 'above\n\uFFFC',
+        selection: TextSelection.collapsed(offset: 7),
       );
 
       // Backspace removes the block — Flutter sends "above" with cursor at 5.
@@ -585,7 +585,7 @@ void main() {
 
       // Block 0 text: "Hello bold world! This is the POC." (34 chars)
       // Block 1 text: "...to **trigger* bold."
-      // Full text: block0 + \n\n + block1 (paragraph has spacingAfter)
+      // Full text: block0 + \n + block1 (no spacer — paragraph has spacingBefore: 0)
       final block0Len = controller.document.blocks[0].plainText.length;
       final block1Text = controller.document.blocks[1].plainText;
 
@@ -594,12 +594,12 @@ void main() {
       // closingStarLocal points to the * before " bold"
       // User types another * right after it
       final insertLocalOffset = closingStarLocal + 1;
-      final insertGlobalOffset = block0Len + 2 + insertLocalOffset; // +2 for \n + spacer \uFFFC
+      final insertGlobalOffset = block0Len + 1 + insertLocalOffset; // +1 for \n
 
       final newBlock1Text =
           '${block1Text.substring(0, insertLocalOffset)}*${block1Text.substring(insertLocalOffset)}';
       final newFullText =
-          '${controller.document.blocks[0].plainText}\n\uFFFC$newBlock1Text';
+          '${controller.document.blocks[0].plainText}\n$newBlock1Text';
 
       controller.value = TextEditingValue(
         text: newFullText,
@@ -656,9 +656,9 @@ void main() {
         undoGrouping: (_, __) => false,
       );
 
-      // Initial display text: 'hello\nworld' (no prefixes — paragraphs).
+      // Initial display text: 'hello\nworld' (no spacer — paragraph has spacingBefore: 0).
       // Select from offset 3 ('hel|lo') to offset 8 ('wor|ld') and delete.
-      // Deleted: 'lo\nwor' (6 chars), result: 'helld'.
+      // Deleted: 'lo\nwor' (5 chars), result: 'helld'.
       controller.value = const TextEditingValue(
         text: 'helld',
         selection: TextSelection.collapsed(offset: 3),
@@ -924,16 +924,16 @@ void main() {
           ]),
         );
 
-        // Display: "hello\n\uFFFC\uFFFCitem" (spacer + prefix)
+        // Display: "hello\n\uFFFCitem" (no spacer — listItem has spacingBefore: 0, prefix \uFFFC)
         // Cursor at end of "hello" (display offset 5).
         final baseText = controller.text;
-        expect(baseText, 'hello\n\uFFFC\uFFFCitem');
+        expect(baseText, 'hello\n\uFFFCitem');
 
         // Step 1: User presses Option+E (dead key).
         // Flutter inserts composing placeholder — e.g. accent mark.
-        // Text becomes "hello´\n\uFFFC\uFFFCitem", composing range covers the ´.
+        // Text becomes "hello´\n\uFFFCitem", composing range covers the ´.
         controller.value = TextEditingValue(
-          text: 'hello\u0301\n\uFFFC\uFFFCitem',
+          text: 'hello\u0301\n\uFFFCitem',
           selection: const TextSelection.collapsed(offset: 6),
           composing: const TextRange(start: 5, end: 6),
         );
@@ -949,7 +949,7 @@ void main() {
         // Step 2: User presses E to complete the diacritic.
         // Flutter resolves composing: replaces the ´ with é.
         controller.value = TextEditingValue(
-          text: 'helloé\n\uFFFC\uFFFCitem',
+          text: 'helloé\n\uFFFCitem',
           selection: const TextSelection.collapsed(offset: 6),
           composing: TextRange.empty,
         );
@@ -1349,7 +1349,7 @@ void main() {
             ),
           ]),
         );
-        // Select all: "Title\n\uFFFCBody" = 11 chars (spacer before 2nd block).
+        // Select all: "Title\nBody" = 10 chars (no spacer — paragraph has spacingBefore: 0).
         controller.value = controller.value.copyWith(
           selection: TextSelection(
             baseOffset: 0,

@@ -159,8 +159,9 @@ class _BulletEditorState extends State<BulletEditor> {
 
     final modelOffset = widget.controller.displayToModel(sel.baseOffset);
     final seg = widget.controller.segmentAtOffset(modelOffset);
-    final prevSeg =
-        modelOffset > 0 ? widget.controller.segmentAtOffset(modelOffset - 1) : null;
+    final prevSeg = modelOffset > 0
+        ? widget.controller.segmentAtOffset(modelOffset - 1)
+        : null;
 
     // Primary segment matches the editor's active formatting: at a boundary,
     // prefer the preceding segment (the one the cursor "came from").
@@ -168,11 +169,13 @@ class _BulletEditorState extends State<BulletEditor> {
     final secondary = (primary == prevSeg) ? seg : prevSeg;
 
     if (widget.onTap != null) {
-      widget.onTap!(EditorTapDetails(
-        globalPosition: Offset.zero,
-        segment: primary,
-        precedingSegment: secondary,
-      ));
+      widget.onTap!(
+        EditorTapDetails(
+          globalPosition: Offset.zero,
+          segment: primary,
+          precedingSegment: secondary,
+        ),
+      );
     }
 
     if (widget.onLinkTap != null) {
@@ -182,12 +185,10 @@ class _BulletEditorState extends State<BulletEditor> {
   }
 
   /// Derive the default text style from the host app's TextTheme.
-  /// Falls back to fontSize 16, height 1.6 when no theme is available.
+  /// Falls back when no theme is available.
   static TextStyle _defaultStyle(BuildContext context) {
     final base = Theme.of(context).textTheme.bodyLarge;
-    return (base ?? const TextStyle(fontSize: 16)).copyWith(
-      height: 1.6,
-    );
+    return (base ?? const TextStyle(fontSize: 16)).copyWith(height: 1.8);
   }
 
   static String? _linkFrom(StyledSegment? seg) {
@@ -215,10 +216,14 @@ class _BulletEditorState extends State<BulletEditor> {
         stylusHandwritingEnabled: false,
         textAlignVertical: TextAlignVertical.top,
         style: widget.style ?? _defaultStyle(context),
-        decoration: widget.decoration ??
+        decoration:
+            widget.decoration ??
             const InputDecoration(
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 16,
+              ),
             ),
         onTap: _onTap,
       ),

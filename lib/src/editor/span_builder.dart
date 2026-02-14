@@ -6,7 +6,7 @@ import '../model/inline_style.dart';
 import '../schema/default_schema.dart'
     show indentPerDepth, kFallbackFontSize, prefixWidth;
 import '../schema/editor_schema.dart';
-import 'offset_mapper.dart' show hasPrefix, hasSpacerBefore;
+import 'offset_mapper.dart' show hasPrefix, hasSpacerBefore, spacerChar;
 
 /// Callback when a prefix widget (bullet, checkbox, etc.) is tapped.
 typedef PrefixTapCallback = void Function(int flatIndex, TextBlock block);
@@ -54,14 +54,18 @@ TextSpan buildDocumentSpan(
       children.add(TextSpan(text: '\n', style: prevStyle));
     }
 
-    // Spacer WidgetSpan: creates vertical gap between blocks.
+    // Spacer: a \u200C marker + styled \n that creates an empty line.
+    // The spacerChar is distinct from prefixChar (\uFFFC) so cursor-skip
+    // logic doesn't confuse a block separator \n after a prefix with
+    // a spacer line break.
     if (hasSpacerBefore(doc, i, schema)) {
-      final prevBlock = flat[i - 1];
-      final spacingEm = schema.blockDef(prevBlock.blockType).spacingAfter;
+      final block = flat[i];
+      final spacingEm = schema.blockDef(block.blockType).spacingBefore;
       final baseFontSize = style?.fontSize ?? kFallbackFontSize;
-      final spacerHeight = baseFontSize * spacingEm;
-      children.add(WidgetSpan(
-        child: SizedBox(height: spacerHeight, width: 0),
+      final gapPx = baseFontSize * spacingEm;
+      children.add(TextSpan(
+        text: '$spacerChar\n',
+        style: TextStyle(fontSize: gapPx, height: 1.0),
       ));
     }
 
@@ -73,8 +77,12 @@ TextSpan buildDocumentSpan(
     // Void blocks (e.g. divider): the WidgetSpan IS the entire visual content.
     // No text spans are emitted — the prefix occupies the full line.
     if (def.isVoid && hasPrefix(doc, i, schema)) {
-      final prefixWidget =
-          def.prefixBuilder?.call(doc, i, block, bStyle ?? const TextStyle());
+      final prefixWidget = def.prefixBuilder?.call(
+        doc,
+        i,
+        block,
+        bStyle ?? const TextStyle(),
+      );
       children.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
@@ -95,7 +103,10 @@ TextSpan buildDocumentSpan(
       final isNested = depth > 0;
       final isLL = schema.isListLike(block.blockType);
       final prefixWidget = def.prefixBuilder?.call(
-        doc, i, block, bStyle ?? const TextStyle(),
+        doc,
+        i,
+        block,
+        bStyle ?? const TextStyle(),
       );
 
       // Derive indent spacing from the base font size (style param, not bStyle,

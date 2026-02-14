@@ -16,9 +16,9 @@ void main() {
         ]),
       );
 
-      // Display: "hello\n\uFFFC\uFFFCitem"
-      // (paragraph spacingAfter → spacer \uFFFC, then prefix \uFFFC)
-      expect(controller.text, 'hello\n\uFFFC\uFFFCitem');
+      // Display: "hello\n\uFFFCitem"
+      // (no spacer — listItem has spacingBefore: 0, then prefix \uFFFC)
+      expect(controller.text, 'hello\n\uFFFCitem');
       // Model: "hello\nitem"
       expect(controller.document.plainText, 'hello\nitem');
     });
@@ -41,7 +41,7 @@ void main() {
         ]),
       );
 
-      // List items have spacingAfter 0 → no spacer between them.
+      // List items have spacingBefore 0 → no spacer between them.
       // Display: "\uFFFCparent\n\uFFFCchild"
       expect(controller.text, '\uFFFCparent\n\uFFFCchild');
     });
@@ -90,10 +90,10 @@ void main() {
         ]),
       );
 
-      // Display: "abc\n\uFFFC\uFFFCdef"
-      // (spacer + prefix, both \uFFFC)
+      // Display: "abc\n\uFFFCdef"
+      // (no spacer — listItem has spacingBefore: 0, prefix \uFFFC)
       final displayText = controller.text;
-      expect(displayText, 'abc\n\uFFFC\uFFFCdef');
+      expect(displayText, 'abc\n\uFFFCdef');
 
       // Position at end of "abc" (offset 3).
       controller.value = TextEditingValue(
@@ -101,14 +101,14 @@ void main() {
         selection: const TextSelection.collapsed(offset: 3),
       );
 
-      // Arrow right → Flutter puts cursor at 4 (first \uFFFC = spacer).
-      // Controller should skip past both \uFFFC chars to 6 (start of "def").
+      // Arrow right → Flutter puts cursor at 4 (\uFFFC prefix).
+      // Controller should skip past prefix \uFFFC to 5.
       controller.value = TextEditingValue(
         text: displayText,
         selection: const TextSelection.collapsed(offset: 4),
       );
-      expect(controller.value.selection.baseOffset, 6,
-          reason: 'Cursor should skip over spacer and prefix to start of text');
+      expect(controller.value.selection.baseOffset, 5,
+          reason: 'Cursor should skip over prefix to start of text');
     });
 
     test('cursor skips over prefix and spacer char when arrowing left', () {
@@ -125,21 +125,21 @@ void main() {
 
       final displayText = controller.text;
 
-      // "abc\n\uFFFC\uFFFCdef" — "d" is at index 6.
-      // Position at start of "def" (offset 6).
-      controller.value = TextEditingValue(
-        text: displayText,
-        selection: const TextSelection.collapsed(offset: 6),
-      );
-
-      // Arrow left → Flutter puts cursor at 5 (second \uFFFC = prefix).
-      // Controller should skip back to 3 (end of "abc").
+      // "abc\n\uFFFCdef" — "d" is at index 5.
+      // Position at start of "def" (offset 5).
       controller.value = TextEditingValue(
         text: displayText,
         selection: const TextSelection.collapsed(offset: 5),
       );
+
+      // Arrow left → Flutter puts cursor at 4 (\uFFFC prefix).
+      // Controller should skip back to 3 (end of "abc").
+      controller.value = TextEditingValue(
+        text: displayText,
+        selection: const TextSelection.collapsed(offset: 4),
+      );
       expect(controller.value.selection.baseOffset, 3,
-          reason: 'Cursor should skip back over prefix and spacer');
+          reason: 'Cursor should skip back over prefix');
     });
 
     test('mixed blocks: paragraph then list item', () {
@@ -155,17 +155,17 @@ void main() {
         ]),
       );
 
-      // paragraph(spacingAfter) → spacer + list prefix, list(no spacingAfter) → no spacer
-      expect(controller.text, 'abc\n\uFFFC\uFFFCdef\nghi');
+      // No spacer — listItem and paragraph both have spacingBefore: 0.
+      expect(controller.text, 'abc\n\uFFFCdef\nghi');
 
       // Type in the paragraph (no prefix) — offset 1 in display = offset 1 in model.
       controller.value = const TextEditingValue(
-        text: 'aXbc\n\uFFFC\uFFFCdef\nghi',
+        text: 'aXbc\n\uFFFCdef\nghi',
         selection: TextSelection.collapsed(offset: 2),
       );
       expect(controller.document.allBlocks[0].plainText, 'aXbc');
 
-      // Type in the list item — display offset 7 (after both \uFFFC) = model offset 5.
+      // Type in the list item — display offset 6 (after prefix) = model offset 5.
       // Reset first.
     });
   });
@@ -179,8 +179,8 @@ void main() {
         ]),
       );
 
-      // paragraph spacingAfter → spacer \uFFFC before empty paragraph.
-      expect(controller.text, 'hello\n\uFFFC\u200B');
+      // No spacer — paragraph has spacingBefore: 0.
+      expect(controller.text, 'hello\n\u200B');
       // Model: "hello\n"
       expect(controller.document.plainText, 'hello\n');
     });
@@ -218,12 +218,12 @@ void main() {
         TextBlock(id: 'b'), // empty paragraph
       ]);
 
-      // Display: "hi\n\uFFFC\u200B"
-      // Positions: h(0) i(1) \n(2) \uFFFC(3=spacer) \u200B(4)
+      // Display: "hi\n\u200B"
+      // Positions: h(0) i(1) \n(2) \u200B(3)
       // Block 1 start in model = 2 (hi) + 1 (\n) = 3
+      expect(displayToModel(doc, 3, schema), 3);
+      // After \u200B (position 4, end of text)
       expect(displayToModel(doc, 4, schema), 3);
-      // After \u200B (position 5, end of text)
-      expect(displayToModel(doc, 5, schema), 3);
     });
 
     test('modelToDisplay maps block start to after spacer', () {
@@ -233,8 +233,8 @@ void main() {
         TextBlock(id: 'b'), // empty paragraph
       ]);
 
-      // Model offset 3 = start of empty block → display position 4 (\u200B)
-      expect(modelToDisplay(doc, 3, schema), 4);
+      // Model offset 3 = start of empty block → display position 3 (\u200B)
+      expect(modelToDisplay(doc, 3, schema), 3);
     });
 
     test('divider then empty paragraph: display text is correct', () {
@@ -245,8 +245,8 @@ void main() {
       ]);
 
       final display = buildDisplayText(doc, schema);
-      // \uFFFC (divider prefix) \n \uFFFC (spacer) \u200B (empty para)
-      expect(display, '\uFFFC\n\uFFFC\u200B');
+      // \uFFFC (divider prefix) \n \u200B (empty para, no spacer — paragraph has spacingBefore: 0)
+      expect(display, '\uFFFC\n\u200B');
     });
 
     test('divider then empty paragraph: offset mapping round-trips', () {
@@ -270,12 +270,12 @@ void main() {
       );
 
       final displayText = controller.text;
-      expect(displayText, '\uFFFC\n\uFFFC\u200B');
+      expect(displayText, '\uFFFC\n\u200B');
 
-      // Simulate typing 'H' at position 3 (the \u200B position).
+      // Simulate typing 'H' at position 2 (the \u200B position).
       controller.value = TextEditingValue(
-        text: '\uFFFC\n\uFFFCH\u200B',
-        selection: const TextSelection.collapsed(offset: 4),
+        text: '\uFFFC\nH\u200B',
+        selection: const TextSelection.collapsed(offset: 3),
       );
 
       expect(controller.document.allBlocks[1].plainText, 'H');
@@ -290,8 +290,8 @@ void main() {
         ]),
       );
 
-      // Each paragraph has spacingAfter → spacer before next block.
-      expect(controller.text, '\u200B\n\uFFFC\u200B\n\uFFFC\u200B');
+      // No spacers — paragraphs have spacingBefore: 0.
+      expect(controller.text, '\u200B\n\u200B\n\u200B');
     });
   });
 }

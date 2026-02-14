@@ -7,6 +7,11 @@ import '../schema/editor_schema.dart';
 /// Occupies exactly 1 offset position in the display text.
 const prefixChar = '\uFFFC';
 
+/// Zero-width non-joiner used as the spacer marker in the display text.
+/// Distinct from [prefixChar] so cursor-skipping logic doesn't confuse
+/// a block separator \n after a prefix with a spacer line break.
+const spacerChar = '\u200C';
+
 /// Zero-width space used as a placeholder for empty blocks so they occupy
 /// a visual line and the cursor has somewhere to render. Display-only — does
 /// not exist in the model.
@@ -23,12 +28,13 @@ bool hasPrefix(Document doc, int flatIndex, EditorSchema schema) {
       doc.depthOf(flatIndex) > 0;
 }
 
-/// Whether a block has a vertical spacer WidgetSpan before it (display-only).
-/// True when the previous block has `spacingAfter > 0`.
+/// Whether a block has a spacer line before it (display-only `\n` that
+/// creates an empty line whose height is controlled by the current block's
+/// `spacingBefore` value). Always false for the first block.
 bool hasSpacerBefore(Document doc, int flatIndex, EditorSchema schema) {
   if (flatIndex <= 0) return false;
-  final prevBlock = doc.allBlocks[flatIndex - 1];
-  return schema.blockDef(prevBlock.blockType).spacingAfter > 0;
+  final block = doc.allBlocks[flatIndex];
+  return schema.blockDef(block.blockType).spacingBefore > 0;
 }
 
 /// Convert a display offset (TextField) to a model offset (Document).
@@ -45,10 +51,10 @@ int displayToModel(Document doc, int displayOffset, EditorSchema schema) {
       modelPos++;
     }
 
-    // Spacer WidgetSpan (\uFFFC) — display only, before the block content.
+    // Spacer: \uFFFC + \n — both display only (2 chars).
     if (hasSpacerBefore(doc, i, schema)) {
       if (displayOffset <= displayPos) return modelPos;
-      displayPos++;
+      displayPos += 2;
     }
 
     if (hasPrefix(doc, i, schema)) {
@@ -88,9 +94,9 @@ int modelToDisplay(Document doc, int modelOffset, EditorSchema schema) {
       modelPos++;
     }
 
-    // Spacer WidgetSpan — display only.
+    // Spacer: \uFFFC + \n — both display only (2 chars).
     if (hasSpacerBefore(doc, i, schema)) {
-      displayPos++;
+      displayPos += 2;
     }
 
     if (hasPrefix(doc, i, schema)) {
@@ -132,8 +138,20 @@ TextSelection selectionToDisplay(
   );
 }
 
-/// If the cursor is sitting on a prefix/spacer char (\uFFFC), nudge it past
-/// all consecutive \uFFFC chars in the direction of movement.
+/// Whether [idx] in [displayText] is a display-only character the cursor
+/// should skip: a prefix \uFFFC, a spacer \u200C, or the \n that follows
+/// a spacer \u200C (the spacer line break).
+bool _isSkipChar(String displayText, int idx) {
+  final ch = displayText[idx];
+  if (ch == prefixChar) return true;
+  if (ch == spacerChar) return true;
+  // Spacer line-break \n: immediately follows a spacerChar.
+  if (ch == '\n' && idx > 0 && displayText[idx - 1] == spacerChar) return true;
+  return false;
+}
+
+/// If the cursor is sitting on a display-only char (prefix \uFFFC or spacer
+/// \n), nudge it past all consecutive skip-chars in the direction of movement.
 /// Returns null if no adjustment needed.
 TextSelection? skipPrefixChars(
   String displayText,
@@ -143,21 +161,22 @@ TextSelection? skipPrefixChars(
   if (!sel.isValid || !sel.isCollapsed) return null;
   final offset = sel.baseOffset;
   if (offset < 0 || offset >= displayText.length) return null;
-  if (displayText[offset] != prefixChar) return null;
+  if (!_isSkipChar(displayText, offset)) return null;
 
   // Determine direction from previous cursor position.
   final prevOffset = previousSel.baseOffset;
   if (offset > prevOffset) {
-    // Moving right — skip past all consecutive prefix chars.
+    // Moving right — skip past all consecutive skip-chars.
     var target = offset;
-    while (target < displayText.length && displayText[target] == prefixChar) {
+    while (
+        target < displayText.length && _isSkipChar(displayText, target)) {
       target++;
     }
     return TextSelection.collapsed(offset: target);
   } else if (offset < prevOffset) {
-    // Moving left — skip before all consecutive prefix chars.
+    // Moving left — skip before all consecutive skip-chars.
     var target = offset;
-    while (target > 0 && displayText[target - 1] == prefixChar) {
+    while (target > 0 && _isSkipCharLeft(displayText, target)) {
       target--;
     }
     return TextSelection.collapsed(offset: target > 0 ? target - 1 : 0);
@@ -165,12 +184,26 @@ TextSelection? skipPrefixChars(
 
   // Same position (e.g. click) — skip forward past all consecutive.
   var target = offset;
-  while (target < displayText.length && displayText[target] == prefixChar) {
+  while (target < displayText.length && _isSkipChar(displayText, target)) {
     target++;
   }
   return TextSelection.collapsed(
     offset: target.clamp(0, displayText.length),
   );
+}
+
+/// Check whether the character *before* [target] is a display-only char
+/// the cursor should skip when moving left.
+bool _isSkipCharLeft(String displayText, int target) {
+  if (target <= 0) return false;
+  final ch = displayText[target - 1];
+  if (ch == prefixChar) return true;
+  if (ch == spacerChar) return true;
+  // Spacer line-break \n: preceded by a spacerChar.
+  if (ch == '\n' && target >= 2 && displayText[target - 2] == spacerChar) {
+    return true;
+  }
+  return false;
 }
 
 /// Whether an empty block needs a zero-width placeholder to give it a visual
@@ -184,13 +217,16 @@ bool _needsEmptyPlaceholder(Document doc, int flatIndex, EditorSchema schema) {
 /// Build the display text: model text with prefix placeholder chars inserted
 /// before each block that has a visual prefix, zero-width spaces for empty
 /// non-prefixed blocks, and spacer WidgetSpan placeholders between blocks
-/// with spacingAfter.
+/// with spacingBefore.
 String buildDisplayText(Document doc, EditorSchema schema) {
   final flat = doc.allBlocks;
   final buf = StringBuffer();
   for (var i = 0; i < flat.length; i++) {
     if (i > 0) buf.write('\n');
-    if (hasSpacerBefore(doc, i, schema)) buf.write(prefixChar);
+    if (hasSpacerBefore(doc, i, schema)) {
+      buf.write(spacerChar); // \u200C — distinct from prefix \uFFFC
+      buf.write('\n'); // visual line break for the spacer line
+    }
     if (hasPrefix(doc, i, schema)) buf.write(prefixChar);
     buf.write(flat[i].plainText);
     if (_needsEmptyPlaceholder(doc, i, schema)) buf.write(emptyBlockChar);
