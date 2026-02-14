@@ -2509,7 +2509,7 @@ void main() {
             reason: 'cursor should advance after second Enter');
       });
 
-      test('Enter at start of block places cursor on new empty paragraph', () {
+      test('Enter at start of block keeps cursor on original block', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2536,25 +2536,50 @@ void main() {
         expect(controller.document.allBlocks[1].plainText, '');
         expect(controller.document.allBlocks[2].blockType, BlockType.h3);
 
-        // Cursor should be on the new empty paragraph [1], not the H3 [2].
+        // Cursor should stay on the H3 (the original block, now at [2]).
+        final modelCursor = controller.displayToModel(
+          controller.value.selection.baseOffset,
+        );
+        final cursorBlock = controller.document.blockAt(modelCursor);
+        expect(cursorBlock.blockIndex, 2,
+            reason: 'cursor should stay on the H3');
+      });
+
+      test('click on empty paragraph then type stays on that paragraph', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h2, segments: [const StyledSegment('Above')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+            TextBlock(id: 'c', blockType: BlockType.h3, segments: [const StyledSegment('Heading')]),
+          ]),
+        );
+
+        // Click on the empty paragraph (find \u200B).
+        final emptyPos = controller.text.indexOf('\u200B');
+        expect(emptyPos, greaterThanOrEqualTo(0));
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: emptyPos),
+        );
+
+        // Type a character.
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: before.substring(0, emptyPos) + 'X' + before.substring(emptyPos),
+          selection: TextSelection.collapsed(offset: emptyPos + 1),
+        );
+
+        // "X" should be in the empty paragraph [1], not the H3 [2].
+        expect(controller.document.allBlocks[1].plainText, 'X');
+        expect(controller.document.allBlocks[2].plainText, 'Heading');
+
+        // Cursor should still be on block [1].
         final modelCursor = controller.displayToModel(
           controller.value.selection.baseOffset,
         );
         final cursorBlock = controller.document.blockAt(modelCursor);
         expect(cursorBlock.blockIndex, 1,
-            reason: 'cursor should be on the new empty paragraph, not the H3');
-
-        // Typing should go into the empty paragraph.
-        final cursorPos = controller.value.selection.baseOffset;
-        final text2 = controller.text;
-        controller.value = controller.value.copyWith(
-          text: text2.substring(0, cursorPos) + 'X' + text2.substring(cursorPos),
-          selection: TextSelection.collapsed(offset: cursorPos + 1),
-        );
-
-        // The "X" should be in block [1], not in the H3.
-        expect(controller.document.allBlocks[1].plainText, 'X');
-        expect(controller.document.allBlocks[2].plainText, 'Heading');
+            reason: 'cursor should stay on the paragraph where we typed');
       });
 
       test('MergeBlocks on empty paragraph preserves H2 type below', () {

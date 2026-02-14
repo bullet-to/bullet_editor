@@ -807,14 +807,12 @@ class EditorController<B extends Object, S extends Object>
       // the new block at local 0. We compute it post-apply via cursorOverride.
       final splitOffset = diff.start;
       // When splitting at offset 0 of a non-empty block, the new empty
-      // block is inserted BEFORE, so the cursor should stay at splitOffset
-      // (the new block). Otherwise, cursor goes to splitOffset + 1 (the
-      // new block after the split point).
-      final cursorModelOffset =
-          pos.localOffset == 0 && _document.allBlocks[pos.blockIndex].plainText.isNotEmpty
-              ? splitOffset
-              : splitOffset + 1;
-      final cursorAfter = TextSelection.collapsed(offset: cursorModelOffset);
+      // block is inserted BEFORE. The cursor stays on the original block
+      // (now at splitOffset + 1) — the user pressed Enter to push their
+      // line down, so the cursor follows the content.
+      final cursorAfter = TextSelection.collapsed(
+        offset: splitOffset + 1,
+      );
       return (
         Transaction(
           operations: [
