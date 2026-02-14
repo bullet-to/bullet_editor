@@ -29,11 +29,14 @@ EditorSchema buildStandardSchema() {
           canBeChild: false,
           canHaveChildren: false,
         ),
-        baseStyle: (base) => (base ?? const TextStyle()).copyWith(
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
-          height: 1.3,
-        ),
+        baseStyle: (base) {
+          final size = (base?.fontSize ?? kFallbackFontSize) * 1.125;
+          return (base ?? const TextStyle()).copyWith(
+            fontSize: size,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          );
+        },
         codecs: {
           Format.markdown: BlockCodec(
             encode: (block, ctx) => '${ctx.indent}### ${ctx.content}',
@@ -51,11 +54,14 @@ EditorSchema buildStandardSchema() {
           canBeChild: false,
           canHaveChildren: false,
         ),
-        baseStyle: (base) => (base ?? const TextStyle()).copyWith(
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-          height: 1.3,
-        ),
+        baseStyle: (base) {
+          final size = (base?.fontSize ?? kFallbackFontSize) * 1.375;
+          return (base ?? const TextStyle()).copyWith(
+            fontSize: size,
+            fontWeight: FontWeight.bold,
+            height: 1.4,
+          );
+        },
         codecs: {
           Format.markdown: BlockCodec(
             encode: (block, ctx) => '${ctx.indent}## ${ctx.content}',
@@ -73,11 +79,14 @@ EditorSchema buildStandardSchema() {
           canBeChild: false,
           canHaveChildren: false,
         ),
-        baseStyle: (base) => (base ?? const TextStyle()).copyWith(
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-          height: 1.3,
-        ),
+        baseStyle: (base) {
+          final size = (base?.fontSize ?? kFallbackFontSize) * 1.75;
+          return (base ?? const TextStyle()).copyWith(
+            fontSize: size,
+            fontWeight: FontWeight.bold,
+            height: 1.4,
+          );
+        },
         codecs: {
           Format.markdown: BlockCodec(
             encode: (block, ctx) => '${ctx.indent}# ${ctx.content}',

@@ -80,7 +80,7 @@ void main() {
       final schema = EditorSchema.standard();
       const base = TextStyle(fontSize: 14);
       final h1Style = schema.blockDef(BlockType.h1).baseStyle!(base);
-      expect(h1Style!.fontSize, 24);
+      expect(h1Style!.fontSize, 14 * 1.75); // ratio-based
       expect(h1Style.fontWeight, FontWeight.bold);
     });
 
@@ -88,7 +88,7 @@ void main() {
       final schema = EditorSchema.standard();
       const base = TextStyle(fontSize: 14);
       final h2Style = schema.blockDef(BlockType.h2).baseStyle!(base);
-      expect(h2Style!.fontSize, 20);
+      expect(h2Style!.fontSize, 14 * 1.375); // ratio-based
       expect(h2Style.fontWeight, FontWeight.bold);
     });
 
@@ -96,7 +96,7 @@ void main() {
       final schema = EditorSchema.standard();
       const base = TextStyle(fontSize: 14);
       final h3Style = schema.blockDef(BlockType.h3).baseStyle!(base);
-      expect(h3Style!.fontSize, 17);
+      expect(h3Style!.fontSize, 14 * 1.125); // ratio-based
       expect(h3Style.fontWeight, FontWeight.w600);
     });
 

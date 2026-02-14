@@ -181,6 +181,15 @@ class _BulletEditorState extends State<BulletEditor> {
     }
   }
 
+  /// Derive the default text style from the host app's TextTheme.
+  /// Falls back to fontSize 16, height 1.6 when no theme is available.
+  static TextStyle _defaultStyle(BuildContext context) {
+    final base = Theme.of(context).textTheme.bodyLarge;
+    return (base ?? const TextStyle(fontSize: 16)).copyWith(
+      height: 1.6,
+    );
+  }
+
   static String? _linkFrom(StyledSegment? seg) {
     if (seg != null &&
         seg.styles.contains(InlineStyle.link) &&
@@ -205,11 +214,11 @@ class _BulletEditorState extends State<BulletEditor> {
         enableInteractiveSelection: true,
         stylusHandwritingEnabled: false,
         textAlignVertical: TextAlignVertical.top,
-        style: widget.style ?? const TextStyle(fontSize: 16, height: 1.5),
+        style: widget.style ?? _defaultStyle(context),
         decoration: widget.decoration ??
             const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.all(12),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             ),
         onTap: _onTap,
       ),
