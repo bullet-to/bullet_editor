@@ -78,7 +78,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [PrefixBlockRule('###', BlockType.h3)],
+      inputRules: [PrefixBlockRule('###', BlockType.h3), HeadingBackspaceRule()],
     );
   }
 
@@ -106,7 +106,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [PrefixBlockRule('##', BlockType.h2)],
+      inputRules: [PrefixBlockRule('##', BlockType.h2), HeadingBackspaceRule()],
     );
   }
 
@@ -134,7 +134,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [HeadingRule()],
+      inputRules: [HeadingRule(), HeadingBackspaceRule()],
     );
   }
 
@@ -229,8 +229,7 @@ abstract final class Blocks {
           _numberedPrefix(doc, i, block, style, prefixWidthFactor),
       codecs: {
         Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
+          encode: (block, ctx) => '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
           decode: (line) {
             final match = RegExp(r'^\d+\. ').firstMatch(line);
             if (match == null) return null;
@@ -243,14 +242,10 @@ abstract final class Blocks {
   }
 
   /// Horizontal divider (void block).
-  static BlockDef divider({
-    Color? color,
-    double spacingBefore = 0.4,
-  }) {
+  static BlockDef divider({Color? color}) {
     return BlockDef(
       label: 'Divider',
       isVoid: true,
-      spacingBefore: spacingBefore,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
       prefixBuilder: (doc, i, block, style) =>
           _dividerPrefix(doc, i, block, style, color),
@@ -310,8 +305,9 @@ abstract final class Inlines {
         } else {
           final baseColor = base.color ?? const Color(0xFF000000);
           final isDark = baseColor.computeLuminance() > 0.5;
-          resolvedLink =
-              isDark ? const Color(0xFF6CB4EE) : const Color(0xFF1A73E8);
+          resolvedLink = isDark
+              ? const Color(0xFF6CB4EE)
+              : const Color(0xFF1A73E8);
         }
         return base.copyWith(
           color: resolvedLink,
@@ -326,8 +322,7 @@ abstract final class Inlines {
             return '[$text]($url)';
           },
           decode: (text) {
-            final match =
-                RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
+            final match = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
             if (match == null) return null;
             return InlineDecodeMatch(
               text: match.group(1)!,
@@ -406,7 +401,6 @@ EditorSchema buildStandardSchema({
   Color? accentColor,
   Color? dividerColor,
   // Spacing & layout.
-  double? dividerSpacingBefore,
   double? prefixWidthFactor,
   double? indentPerDepthFactor,
   String? bulletChar,
@@ -424,17 +418,16 @@ EditorSchema buildStandardSchema({
       BlockType.h3: Blocks.h3(style: h3, prefixWidthFactor: pwf),
       BlockType.h2: Blocks.h2(style: h2, prefixWidthFactor: pwf),
       BlockType.h1: Blocks.h1(style: h1, prefixWidthFactor: pwf),
-      BlockType.taskItem:
-          Blocks.taskItem(accentColor: accentColor, prefixWidthFactor: pwf),
+      BlockType.taskItem: Blocks.taskItem(
+        accentColor: accentColor,
+        prefixWidthFactor: pwf,
+      ),
       BlockType.listItem: Blocks.listItem(
         bulletChar: bulletChar ?? '•',
         prefixWidthFactor: pwf,
       ),
       BlockType.numberedList: Blocks.numberedList(prefixWidthFactor: pwf),
-      BlockType.divider: Blocks.divider(
-        color: dividerColor,
-        spacingBefore: dividerSpacingBefore ?? 0.4,
-      ),
+      BlockType.divider: Blocks.divider(color: dividerColor),
       BlockType.paragraph: Blocks.paragraph(),
       if (additionalBlocks != null) ...additionalBlocks,
     },

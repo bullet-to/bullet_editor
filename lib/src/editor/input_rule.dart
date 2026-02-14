@@ -201,6 +201,33 @@ class HeadingRule extends PrefixBlockRule {
   HeadingRule() : super('#', BlockType.h1);
 }
 
+/// Backspace at the start of a heading converts it to a paragraph.
+class HeadingBackspaceRule extends InputRule {
+  @override
+  Transaction? tryTransform(Transaction pending, Document doc) {
+    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
+    if (mergeOp == null) return null;
+
+    final flat = doc.allBlocks;
+    if (mergeOp.secondBlockIndex >= flat.length) return null;
+
+    final block = flat[mergeOp.secondBlockIndex];
+    if (block.blockType != BlockType.h1 &&
+        block.blockType != BlockType.h2 &&
+        block.blockType != BlockType.h3) {
+      return null;
+    }
+
+    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
+    return Transaction(
+      operations: [
+        ChangeBlockType(mergeOp.secondBlockIndex, BlockType.paragraph),
+      ],
+      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    );
+  }
+}
+
 class ListItemRule extends PrefixBlockRule {
   ListItemRule() : super('-', BlockType.listItem);
 }

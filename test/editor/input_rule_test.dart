@@ -214,6 +214,56 @@ void main() {
     });
   });
 
+  group('HeadingBackspaceRule', () {
+    test('backspace at start of H3 converts to paragraph', () {
+      final rule = HeadingBackspaceRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.h3,
+          segments: [const StyledSegment('title')],
+        ),
+      ]);
+
+      final pending = Transaction(operations: [MergeBlocks(1)]);
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final newDoc = result!.apply(doc);
+      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
+      expect(newDoc.allBlocks[1].plainText, 'title');
+    });
+
+    test('backspace at start of H1 converts to paragraph', () {
+      final rule = HeadingBackspaceRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.h1,
+          segments: [const StyledSegment('title')],
+        ),
+      ]);
+
+      final pending = Transaction(operations: [MergeBlocks(1)]);
+      final result = rule.tryTransform(pending, doc);
+      expect(result, isNotNull);
+      final newDoc = result!.apply(doc);
+      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
+    });
+
+    test('does not fire on paragraph', () {
+      final rule = HeadingBackspaceRule();
+      final doc = Document([
+        TextBlock(id: 'a', segments: [const StyledSegment('above')]),
+        TextBlock(id: 'b', segments: [const StyledSegment('below')]),
+      ]);
+
+      final pending = Transaction(operations: [MergeBlocks(1)]);
+      expect(rule.tryTransform(pending, doc), isNull);
+    });
+  });
+
   group('ListItemRule', () {
     test('- followed by space converts to list item', () {
       final rule = ListItemRule();
