@@ -119,12 +119,7 @@ class _EditorScreenState extends State<EditorScreen> {
         segments: [const StyledSegment('void main() {\n  print("Hello!");\n}')],
         metadata: {'language': 'dart'},
       ),
-      TextBlock(
-        id: 'bimg',
-        blockType: BlockType.image,
-        segments: [const StyledSegment('Flutter logo')],
-        metadata: {'url': 'https://storage.googleapis.com/cms-storage-bucket/6e19fee6b47b36ca613f.png'},
-      ),
+      // Image disabled — needs multi-widget architecture for proper rendering.
       TextBlock(
         id: 'b3',
         blockType: BlockType.listItem,

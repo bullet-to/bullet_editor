@@ -6,7 +6,10 @@ void main() {
   group('EditorSchema', () {
     test('standard() contains all built-in block types', () {
       final schema = EditorSchema.standard();
+      // image is disabled pending multi-widget architecture.
+      const disabled = {BlockType.image};
       for (final type in BlockType.values) {
+        if (disabled.contains(type)) continue;
         expect(
           schema.blocks.containsKey(type),
           isTrue,

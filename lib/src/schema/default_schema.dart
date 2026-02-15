@@ -522,14 +522,37 @@ abstract final class Blocks {
       prefixBuilder: (doc, i, block, style) {
         final url = block.metadata['url'] ?? '';
         final alt = block.plainText;
-        return SizedBox(
+        final label = alt.isNotEmpty ? alt : url;
+        final fontSize = style.fontSize ?? kFallbackFontSize;
+        return Container(
           width: double.infinity,
-          height: 100,
-          child: Center(
-            child: Text(
-              alt.isNotEmpty ? '[$alt]' : '[Image: $url]',
-              style: TextStyle(color: style.color?.withValues(alpha: 0.5)),
-            ),
+          height: fontSize * 1.4,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: const Color(0x15808080),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: const Color(0x30808080)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                const IconData(0xe3f4, fontFamily: 'MaterialIcons'),
+                size: fontSize,
+                color: style.color?.withValues(alpha: 0.35),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: fontSize * 0.8,
+                    color: style.color?.withValues(alpha: 0.5),
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -785,7 +808,7 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
       BlockType.blockQuote: Blocks.blockQuote(),
       BlockType.codeBlock: Blocks.codeBlock(),
       BlockType.divider: Blocks.divider(color: dividerColor),
-      BlockType.image: Blocks.image(),
+      // BlockType.image: Blocks.image(), // disabled — needs multi-widget arch
       BlockType.paragraph: Blocks.paragraph(),
       if (additionalBlocks != null) ...additionalBlocks,
     },

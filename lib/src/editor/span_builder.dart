@@ -96,7 +96,7 @@ TextSpan buildDocumentSpan(
       );
       children.add(
         WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
+          alignment: PlaceholderAlignment.bottom,
           child: _wrapPrefixTap(
             prefixWidget ?? const SizedBox.shrink(),
             onPrefixTap,

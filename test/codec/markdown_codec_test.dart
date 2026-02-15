@@ -871,27 +871,7 @@ void main() {
       expect(encoded, '[https://example.com](https://example.com)');
     });
 
-    // --- Images ---
-
-    test('decode image block', () {
-      final doc = codec.decode('![alt text](image.png)');
-      expect(doc.blocks[0].blockType, BlockType.image);
-      expect(doc.blocks[0].plainText, 'alt text');
-      expect(doc.blocks[0].metadata['url'], 'image.png');
-    });
-
-    test('encode image round-trip', () {
-      final doc = codec.decode('![photo](https://example.com/img.jpg)');
-      final encoded = codec.encode(doc);
-      expect(encoded, '![photo](https://example.com/img.jpg)');
-    });
-
-    test('image with empty alt text', () {
-      final doc = codec.decode('![](url.png)');
-      expect(doc.blocks[0].blockType, BlockType.image);
-      expect(doc.blocks[0].plainText, '');
-      expect(doc.blocks[0].metadata['url'], 'url.png');
-    });
+    // --- Images (disabled in standard schema — needs multi-widget arch) ---
 
     test('mixed text with image syntax stays paragraph', () {
       final doc = codec.decode('before ![img](url) after');
