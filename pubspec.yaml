@@ -1,6 +1,18 @@
 name: bullet_editor
-description: A markdown-based rich text editor built on TextField.
-version: 0.0.1
+description: >-
+  A structured rich text editor for Flutter built on a single TextField.
+  Supports headings, lists, tasks, code blocks, block quotes, and
+  full markdown round-trip serialization.
+version: 0.1.0
+homepage: https://github.com/bullet-to/bullet_editor
+repository: https://github.com/bullet-to/bullet_editor
+issue_tracker: https://github.com/bullet-to/bullet_editor/issues
+topics:
+  - editor
+  - markdown
+  - rich-text
+  - wysiwyg
+  - flutter
 
 environment:
   sdk: ^3.10.4
