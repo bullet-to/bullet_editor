@@ -1392,6 +1392,103 @@ void main() {
         );
         expect(controller.document.blocks[0].plainText, 'abZ');
       });
+
+      test('Safari Web: dead key appended instead of replaced', () {
+        // Safari on Web appends the resolved character after the dead key
+        // instead of replacing it (sends "hello´é" instead of "helloé").
+        // The composing range still covers only the dead key.
+        // Simulates the exact Safari sequence from real debug output.
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+
+        // Step 1: Dead key — ´ (U+00B4) inserted, composing (5,6).
+        controller.value = const TextEditingValue(
+          text: 'hello\u00B4',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange(start: 5, end: 6),
+        );
+        expect(controller.document.blocks[0].plainText, 'hello\u00B4');
+
+        // Step 2: Safari appends é AFTER ´ instead of replacing it.
+        // Composing range still (5,6), covering only ´.
+        controller.value = const TextEditingValue(
+          text: 'hello\u00B4é',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange(start: 5, end: 6),
+        );
+
+        // The diff adjustment rewrites the insert as a replace in the model.
+        expect(
+          controller.document.blocks[0].plainText,
+          'helloé',
+          reason: 'dead key must be replaced, not kept alongside resolved char',
+        );
+
+        // Step 3: Safari resolves composing — sends the same broken text
+        // (no text change). _finalizeComposing syncs model → display.
+        controller.value = const TextEditingValue(
+          text: 'hello\u00B4é',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange.empty,
+        );
+
+        // After finalize, the display is synced from the corrected model.
+        expect(controller.document.blocks[0].plainText, 'helloé');
+        expect(controller.text, 'helloé');
+      });
+
+      test('Safari Web: dead key on prefixed block (list item)', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('cafe')],
+            ),
+          ]),
+        );
+
+        expect(controller.text, '\uFFFCcafe');
+
+        // Step 1: Dead key at end of "cafe".
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafe\u00B4',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange(start: 5, end: 6),
+        );
+
+        // Step 2: Safari appends é after ´.
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafe\u00B4é',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange(start: 5, end: 6),
+        );
+
+        expect(
+          controller.document.allBlocks[0].plainText,
+          'cafeé',
+          reason: 'dead key replaced on prefixed block',
+        );
+
+        // Step 3: Composing resolves.
+        controller.value = const TextEditingValue(
+          text: '\uFFFCcafe\u00B4é',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange.empty,
+        );
+
+        expect(controller.document.allBlocks[0].plainText, 'cafeé');
+        expect(controller.text, '\uFFFCcafeé');
+      });
     });
 
     group('Link support', () {

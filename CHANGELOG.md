@@ -1,3 +1,12 @@
+## 0.1.7
+
+### Bug fixes
+- Fix diacritics (dead keys) on Safari Web. Safari appends the resolved
+  character instead of replacing the dead key during composing. The
+  controller now avoids syncing back to the platform during active
+  composing and rewrites the diff when an insert lands outside the
+  composing range.
+
 ## 0.1.6
 
 ### Bug fixes

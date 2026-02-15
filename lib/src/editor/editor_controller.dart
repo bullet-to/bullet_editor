@@ -72,6 +72,12 @@ class EditorController<B extends Object, S extends Object>
   /// Snapshot of the value BEFORE composing started.
   /// Set on the first composing frame; used to diff when composing resolves.
   TextEditingValue? _preComposingValue;
+
+  /// Model cursor after the last composing edit. Used to position the cursor
+  /// when syncing on composing resolve (when the platform text may differ
+  /// from the model text, e.g. Safari dead key fix).
+  int? _composingModelCursor;
+
   Set<Object> _activeStyles = {};
 
   Document<B> get document => _document;
@@ -859,9 +865,6 @@ class EditorController<B extends Object, S extends Object>
       _pushUndo();
     }
 
-    // Incremental diff — always between previous frame and current frame.
-    // This keeps the model in sync with the display text during composing,
-    // so buildTextSpan renders correctly with full styling.
     final cursor = value.selection.isValid ? value.selection.baseOffset : null;
     final diff = diffTexts(_previousValue.text, text, cursorOffset: cursor);
 
@@ -869,45 +872,35 @@ class EditorController<B extends Object, S extends Object>
     if (diff == null) {
       _handleSelectionChange();
       if (!isComposing && _preComposingValue != null) {
-        _preComposingValue = null;
+        _finalizeComposing();
       }
       return;
     }
 
-    // Translate diff from display to model space.
-    // Strip display-only characters (prefix chars, spacer sequences, and
-    // empty block placeholders).
-    final cleanInserted = diff.insertedText
-        .replaceAll('${mapper.spacerChar}\n', '') // spacer \u200C\n
-        .replaceAll(mapper.spacerChar, '') // lone spacer char
-        .replaceAll(mapper.prefixChar, '') // prefix \uFFFC
-        .replaceAll(mapper.emptyBlockChar, '');
-    final modelStart = displayToModel(diff.start);
-    final modelEnd = displayToModel(diff.start + diff.deletedLength);
-    final modelDeletedLength = modelEnd - modelStart;
-    final displayOnlyDeleted = diff.deletedLength - modelDeletedLength;
+    // 2. Active composing — see [_handleComposingEdit].
+    if (isComposing) {
+      _handleComposingEdit(diff);
+      return;
+    }
 
-    // 2. Only display-only chars deleted (backspace over bullet / empty placeholder).
-    if (modelDeletedLength == 0 &&
+    // 3. Non-composing text edit.
+    final (modelDiff, displayOnlyDeleted) = _displayToModelDiff(diff);
+
+    // 3a. Only display-only chars deleted (backspace over bullet prefix).
+    if (modelDiff.deletedLength == 0 &&
         displayOnlyDeleted > 0 &&
-        cleanInserted.isEmpty) {
-      _handlePrefixDelete(modelStart);
-      if (!isComposing && _preComposingValue != null) {
-        _preComposingValue = null;
-      }
+        modelDiff.insertedText.isEmpty) {
+      _handlePrefixDelete(modelDiff.start);
+      if (_preComposingValue != null) _finalizeComposing();
       return;
     }
 
-    // 3. Normal text edit — build transaction and commit.
-    final modelDiff = TextDiff(modelStart, modelDeletedLength, cleanInserted);
+    // 3b. Build and commit the transaction.
     final modelSelection = _selectionToModel(value.selection);
-
     final (tx, pasteCursor) = _transactionFromDiff(modelDiff, modelSelection);
     if (tx == null) {
       _previousValue = value;
-      if (!isComposing && _preComposingValue != null) {
-        _preComposingValue = null;
-      }
+      if (_preComposingValue != null) _finalizeComposing();
       return;
     }
 
@@ -916,14 +909,91 @@ class EditorController<B extends Object, S extends Object>
     // stale display cursor through the new document, which breaks when
     // display-only chars (e.g. \u200B placeholder) appear or disappear.
     final modelCursor = pasteCursor ??
-        TextSelection.collapsed(offset: modelStart + cleanInserted.length);
+        TextSelection.collapsed(
+          offset: modelDiff.start + modelDiff.insertedText.length,
+        );
     _commitTransaction(tx, cursorOverride: modelCursor);
 
-    // Clear composing state AFTER processing the resolve frame so that
-    // _commitTransaction sees it and skips undo + input rules.
-    if (!isComposing && _preComposingValue != null) {
+    // Clear composing state AFTER the resolve frame so _commitTransaction
+    // sees isProvisional and skips undo + input rules.
+    if (_preComposingValue != null) {
       _preComposingValue = null;
+      _composingModelCursor = null;
     }
+  }
+
+  // -- Composing helpers --
+
+  /// Handle a text edit during active IME composing.
+  ///
+  /// Updates the document model so [buildTextSpan] renders composing text
+  /// with full styling, but does NOT sync back to the platform. On Safari
+  /// Web, pushing the value back via [_syncToTextField] during composing
+  /// disrupts the browser's IME, causing dead key characters to persist.
+  ///
+  /// Also works around a Safari Web bug where the browser appends the
+  /// resolved character AFTER the dead key instead of replacing it
+  /// (e.g. "hello´é" instead of "helloé"). When an insert lands at or
+  /// beyond the composing range end, the diff is rewritten to replace
+  /// the composing range content (the dead key) with the resolved char.
+  void _handleComposingEdit(TextDiff diff) {
+    var adjusted = diff;
+    if (diff.isInsert && value.composing.isValid) {
+      final compStart = value.composing.start;
+      final compEnd = value.composing.end;
+      if (compStart < compEnd && diff.start >= compEnd) {
+        adjusted = TextDiff(compStart, compEnd - compStart, diff.insertedText);
+      }
+    }
+
+    final (modelDiff, _) = _displayToModelDiff(adjusted);
+    final mSel = _selectionToModel(value.selection);
+    final (tx, _) = _transactionFromDiff(modelDiff, mSel);
+    if (tx != null) {
+      _document = tx.apply(_document);
+      _composingModelCursor = modelDiff.start + modelDiff.insertedText.length;
+    }
+    _previousValue = value;
+  }
+
+  /// End the composing lifecycle and sync model → display.
+  ///
+  /// On Safari Web the model may have been corrected during composing
+  /// (dead key replaced with resolved char) while the platform text still
+  /// has the uncorrected value. This sync reconciles the two.
+  void _finalizeComposing() {
+    _preComposingValue = null;
+    final modelCursor = _composingModelCursor ?? _document.plainText.length;
+    _composingModelCursor = null;
+    _syncToTextField(
+      modelSelection: TextSelection.collapsed(
+        offset: modelCursor.clamp(0, _document.plainText.length),
+      ),
+    );
+  }
+
+  /// Translate a display-space [TextDiff] to model space.
+  ///
+  /// Strips display-only characters (prefix \uFFFC, spacer \u200C,
+  /// empty block \u200B) from the inserted text and maps offsets
+  /// through [displayToModel].
+  ///
+  /// Returns the model-space diff and the count of display-only chars
+  /// that were deleted (used to detect prefix-only deletions).
+  (TextDiff, int) _displayToModelDiff(TextDiff diff) {
+    final cleanInserted = diff.insertedText
+        .replaceAll('${mapper.spacerChar}\n', '')
+        .replaceAll(mapper.spacerChar, '')
+        .replaceAll(mapper.prefixChar, '')
+        .replaceAll(mapper.emptyBlockChar, '');
+    final modelStart = displayToModel(diff.start);
+    final modelEnd = displayToModel(diff.start + diff.deletedLength);
+    final modelDeletedLength = modelEnd - modelStart;
+    final displayOnlyDeleted = diff.deletedLength - modelDeletedLength;
+    return (
+      TextDiff(modelStart, modelDeletedLength, cleanInserted),
+      displayOnlyDeleted,
+    );
   }
 
   // -- Transaction building (all in model space) --
