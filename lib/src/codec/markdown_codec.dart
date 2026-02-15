@@ -5,6 +5,26 @@ import 'block_codec.dart';
 import 'format.dart';
 import 'inline_codec.dart';
 
+/// ASCII punctuation characters that can be backslash-escaped in CommonMark.
+const _escapable = r'!"#$%&' "'" r'()*+,-./:;<=>?@[\]^_`{|}~';
+
+/// Regex matching a backslash followed by an ASCII punctuation character.
+final _backslashEscape = RegExp(r'\\([!"#$%&' "'" r'()*+,\-./:;<=>?@\[\\\]^_`{|}~])');
+
+/// Unescape CommonMark backslash escapes: `\*` → `*`, `\[` → `[`, etc.
+String unescapeMarkdown(String text) {
+  return text.replaceAllMapped(_backslashEscape, (m) => m.group(1)!);
+}
+
+/// Escape characters in plain text that would be mis-interpreted as markdown.
+/// Only escapes chars that our codec actually uses as syntax.
+String escapeMarkdown(String text) {
+  return text.replaceAllMapped(
+    RegExp(r'[\\*_~\[\]]'),
+    (m) => '\\${m.group(0)}',
+  );
+}
+
 /// Markdown codec: encode/decode documents using schema-driven block and
 /// inline codecs.
 ///
@@ -106,11 +126,22 @@ class MarkdownCodec {
       var text = seg.text;
 
       // Apply data-carrying style encoders (e.g. link → [text](url)).
+      var hasDataEncoder = false;
       for (final style in seg.styles) {
         final encodeFn = encodeMap[style];
         if (encodeFn != null) {
           text = encodeFn(text, seg.attributes);
+          hasDataEncoder = true;
         }
+      }
+
+      // Escape markdown-significant chars in plain text to prevent
+      // round-trip misinterpretation. Only escape segments that have no
+      // wrap styles (bold/italic/strikethrough) and no data encoder,
+      // because escaping inside delimiters creates parser ambiguity.
+      final hasWrapStyle = seg.styles.any((s) => wrapMap.containsKey(s));
+      if (!hasDataEncoder && !hasWrapStyle) {
+        text = escapeMarkdown(text);
       }
 
       // Desired stack for this segment, in nesting order.
@@ -206,13 +237,23 @@ class MarkdownCodec {
   /// specific one (the decoder that consumed the most prefix, i.e. whose
   /// DecodeMatch.content is shortest). Falls back to the default block type.
   TextBlock _decodeBlock(String text) {
+    // CommonMark allows up to 3 leading spaces on block-level constructs.
+    // Strip them before trying decoders (4+ spaces = indented code block,
+    // which we don't support, but we still avoid stripping those).
+    var stripped = text;
+    var leading = 0;
+    while (leading < 3 && leading < stripped.length && stripped[leading] == ' ') {
+      leading++;
+    }
+    if (leading > 0) stripped = text.substring(leading);
+
     Object? bestKey;
     DecodeMatch? bestMatch;
 
     for (final entry in _schema.blocks.entries) {
       final codec = entry.value.codecs?[Format.markdown];
       if (codec?.decode == null) continue;
-      final match = codec!.decode!(text);
+      final match = codec!.decode!(stripped);
       if (match == null) continue;
 
       // Pick the match that consumed the most prefix (shortest remaining
@@ -359,10 +400,24 @@ class MarkdownCodec {
         }
       }
 
-      // No match — consume one character as plain text.
-      // Collect consecutive plain characters for efficiency.
-      final plainStart = pos;
-      pos++;
+      // No match — consume plain text characters.
+      // Handle backslash escapes: `\*` → `*`, `\[` → `[`, etc.
+      final plainBuf = StringBuffer();
+      void consumePlain() {
+        // Backslash escape: if current char is `\` followed by ASCII punct,
+        // consume both and emit the literal punctuation character.
+        if (text[pos] == '\\' &&
+            pos + 1 < text.length &&
+            _escapable.contains(text[pos + 1])) {
+          plainBuf.write(text[pos + 1]);
+          pos += 2;
+          return;
+        }
+        plainBuf.write(text[pos]);
+        pos++;
+      }
+
+      consumePlain();
       while (pos < text.length) {
         // Check if any decoder matches here.
         final rem = text.substring(pos);
@@ -380,9 +435,9 @@ class MarkdownCodec {
             wrapPattern.matchAsPrefix(text, pos) != null) {
           break;
         }
-        pos++;
+        consumePlain();
       }
-      segments.add(StyledSegment(text.substring(plainStart, pos)));
+      segments.add(StyledSegment(plainBuf.toString()));
     }
 
     if (segments.isEmpty) {

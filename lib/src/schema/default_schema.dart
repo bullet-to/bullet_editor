@@ -56,7 +56,46 @@ class HeadingStyle {
 ///   ...
 /// );
 /// ```
+/// CommonMark thematic break pattern: 3+ of the same char (`-`, `*`, `_`),
+/// optionally interspersed with spaces/tabs, nothing else on the line.
+/// Leading spaces are already stripped by `_decodeBlock`.
+final _thematicBreakPattern = RegExp(r'^([-*_])[ \t]*(\1[ \t]*){2,}$');
+
 abstract final class Blocks {
+  /// Escape trailing `#` in heading content that `_stripTrailingHashes`
+  /// would strip on re-decode. E.g. content `foo ###` → `foo \###`.
+  static String _escapeTrailingHashes(String content) {
+    if (content.isEmpty) return content;
+    // Match trailing ` #+` that would be stripped.
+    final match = RegExp(r' (#+)\s*$').firstMatch(content);
+    if (match != null) {
+      return '${content.substring(0, match.start)} \\${match.group(1)}';
+    }
+    // Also handle content that is ALL hashes (would become empty heading).
+    if (RegExp(r'^#+$').hasMatch(content.trim())) {
+      return '\\$content';
+    }
+    return content;
+  }
+
+  /// Strip optional trailing `#` sequences from ATX heading content.
+  ///
+  /// Per CommonMark: trailing `#` preceded by a space (or the whole string is
+  /// `#`s) are stripped, along with any trailing spaces. `# foo#` keeps the `#`
+  /// but `# foo #` strips it.
+  static String _stripTrailingHashes(String content) {
+    var s = content.trimRight();
+    if (s.isEmpty) return '';
+    // If everything is `#`, it's an empty heading.
+    if (RegExp(r'^#+$').hasMatch(s)) return '';
+    // Strip trailing `#`s only when preceded by a space.
+    final match = RegExp(r' +#+\s*$').firstMatch(s);
+    if (match != null) {
+      s = s.substring(0, match.start);
+    }
+    return s;
+  }
+
   /// Heading 3.
   static BlockDef h3({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
     return BlockDef(
@@ -75,10 +114,14 @@ abstract final class Blocks {
       },
       codecs: {
         Format.markdown: BlockCodec(
-          encode: (block, ctx) => '${ctx.indent}### ${ctx.content}',
+          encode: (block, ctx) =>
+              '${ctx.indent}### ${_escapeTrailingHashes(ctx.content)}',
           decode: (line) {
-            if (!line.startsWith('### ')) return null;
-            return DecodeMatch(line.substring(4));
+            if (line == '###' || line.startsWith('### ')) {
+              final raw = line.length <= 4 ? '' : line.substring(4);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
           },
         ),
       },
@@ -104,10 +147,14 @@ abstract final class Blocks {
       },
       codecs: {
         Format.markdown: BlockCodec(
-          encode: (block, ctx) => '${ctx.indent}## ${ctx.content}',
+          encode: (block, ctx) =>
+              '${ctx.indent}## ${_escapeTrailingHashes(ctx.content)}',
           decode: (line) {
-            if (!line.startsWith('## ')) return null;
-            return DecodeMatch(line.substring(3));
+            if (line == '##' || line.startsWith('## ')) {
+              final raw = line.length <= 3 ? '' : line.substring(3);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
           },
         ),
       },
@@ -133,10 +180,14 @@ abstract final class Blocks {
       },
       codecs: {
         Format.markdown: BlockCodec(
-          encode: (block, ctx) => '${ctx.indent}# ${ctx.content}',
+          encode: (block, ctx) =>
+              '${ctx.indent}# ${_escapeTrailingHashes(ctx.content)}',
           decode: (line) {
-            if (!line.startsWith('# ')) return null;
-            return DecodeMatch(line.substring(2));
+            if (line == '#' || line.startsWith('# ')) {
+              final raw = line.length <= 2 ? '' : line.substring(2);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
           },
         ),
       },
@@ -259,7 +310,9 @@ abstract final class Blocks {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}---',
           decode: (line) {
-            if (line != '---') return null;
+            // CommonMark thematic breaks: 3+ of the same char (-, *, _),
+            // optionally interspersed with spaces/tabs.
+            if (!_thematicBreakPattern.hasMatch(line)) return null;
             return const DecodeMatch('');
           },
         ),
@@ -275,7 +328,14 @@ abstract final class Blocks {
       policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
       codecs: {
         Format.markdown: BlockCodec(
-          encode: (block, ctx) => '${ctx.indent}${ctx.content}',
+          encode: (block, ctx) {
+            var content = ctx.content;
+            // Escape leading `#` that would be re-decoded as ATX heading.
+            if (RegExp(r'^#{1,6}( |$)').hasMatch(content)) {
+              content = '\\$content';
+            }
+            return '${ctx.indent}$content';
+          },
         ),
       },
       inputRules: [NestedBackspaceRule()],

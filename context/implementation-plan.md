@@ -88,7 +88,7 @@ Handle non-collapsed selections: delete a range spanning multiple blocks, replac
 
 ---
 
-## Phase 7: IME / Composing Input Handling
+## Phase 7: IME / Composing Input Handling ✅
 
 Fix diacritics, accented characters, and other IME composing sequences (Option+E then E for é, CJK input, etc.).
 
@@ -112,14 +112,14 @@ Fix diacritics, accented characters, and other IME composing sequences (Option+E
 
 ---
 
-## Phase 9: Schema-as-Configuration (was Phase 7/8)
+## Phase 9: Schema-as-Configuration (was Phase 7/8) ✅
 
 Refactor toward the aspirational API:
 
 - **BlockDef / InlineStyleDef:** Bundle rendering, codecs, input rules, policies per type
 - **Generic keys:** `EditorSchema<B, I>` with enum keys
 - **Per-type codecs:** Multiple format support (markdown, HTML, JSON)
-- **Block-level keyActions:** Enter, backspace, tab behavior per block type
+- **Block-level keyActions:** Deferred to future enhancements (input rules handle this well enough)
 
 ---
 
@@ -179,6 +179,7 @@ Stress-test the markdown codec to guarantee lossless round-trips across all bloc
 - Block widget registry for third-party types
 - Mode 1 (raw markdown) as power-user option
 - Undo grouping (time-based, source-based)
+- Per-block keyActions (onEnter/onBackspace/onTab callbacks on BlockDef) — current input rule system handles this well enough; only worth formalizing if the rule file gets unwieldy
 
 ---
 

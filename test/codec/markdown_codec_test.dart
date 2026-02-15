@@ -530,5 +530,165 @@ void main() {
       expect(parentBlock.children.length, 1);
       expect(parentBlock.children[0].plainText, 'Child');
     });
+
+    // --- Tier 1: Trailing # on headings ---
+
+    test('decode H1 with trailing #', () {
+      final doc = codec.decode('# foo #');
+      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('decode H2 with multiple trailing ##', () {
+      final doc = codec.decode('## foo ##');
+      expect(doc.blocks[0].blockType, BlockType.h2);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('decode H3 trailing ### with extra spaces', () {
+      final doc = codec.decode('### bar    ###');
+      expect(doc.blocks[0].blockType, BlockType.h3);
+      expect(doc.blocks[0].plainText, 'bar');
+    });
+
+    test('trailing # without preceding space is kept', () {
+      final doc = codec.decode('# foo#');
+      expect(doc.blocks[0].plainText, 'foo#');
+    });
+
+    test('trailing ### b is not a closing sequence', () {
+      final doc = codec.decode('### foo ### b');
+      expect(doc.blocks[0].plainText, 'foo ### b');
+    });
+
+    // --- Tier 1: Empty headings ---
+
+    test('decode empty H2 (## alone)', () {
+      final doc = codec.decode('##');
+      expect(doc.blocks[0].blockType, BlockType.h2);
+      expect(doc.blocks[0].plainText, '');
+    });
+
+    test('decode empty H1 (# alone)', () {
+      final doc = codec.decode('#');
+      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].plainText, '');
+    });
+
+    test('decode ### ### as empty H3', () {
+      final doc = codec.decode('### ###');
+      expect(doc.blocks[0].blockType, BlockType.h3);
+      expect(doc.blocks[0].plainText, '');
+    });
+
+    // --- Tier 1: Leading spaces on headings ---
+
+    test('decode heading with 1-3 leading spaces', () {
+      final doc = codec.decode(' # foo');
+      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].plainText, 'foo');
+
+      final doc2 = codec.decode('  ## bar');
+      expect(doc2.blocks[0].blockType, BlockType.h2);
+      expect(doc2.blocks[0].plainText, 'bar');
+
+      final doc3 = codec.decode('   ### baz');
+      expect(doc3.blocks[0].blockType, BlockType.h3);
+      expect(doc3.blocks[0].plainText, 'baz');
+    });
+
+    // --- Tier 1: Thematic break variants ---
+
+    test('decode *** as divider', () {
+      final doc = codec.decode('***');
+      expect(doc.blocks[0].blockType, BlockType.divider);
+    });
+
+    test('decode ___ as divider', () {
+      final doc = codec.decode('___');
+      expect(doc.blocks[0].blockType, BlockType.divider);
+    });
+
+    test('decode spaced thematic breaks', () {
+      final doc = codec.decode('- - -');
+      expect(doc.blocks[0].blockType, BlockType.divider);
+
+      final doc2 = codec.decode('*  *  *  *  *');
+      expect(doc2.blocks[0].blockType, BlockType.divider);
+    });
+
+    test('decode long thematic break', () {
+      final doc = codec.decode('_____________________________________');
+      expect(doc.blocks[0].blockType, BlockType.divider);
+    });
+
+    test('encode divider always produces ---', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.divider,
+            segments: [const StyledSegment('')]),
+      ]);
+      expect(codec.encode(doc), '---');
+    });
+
+    // --- Tier 1: Backslash escapes ---
+
+    test('decode backslash-escaped * in plain text', () {
+      final doc = codec.decode(r'foo \*bar\* baz');
+      expect(doc.blocks[0].plainText, 'foo *bar* baz');
+      // Should NOT be italic.
+      expect(doc.blocks[0].segments.length, 1);
+      expect(doc.blocks[0].segments[0].styles, isEmpty);
+    });
+
+    test('decode backslash-escaped [ is literal', () {
+      final doc = codec.decode(r'not a \[link](url)');
+      expect(doc.blocks[0].plainText, 'not a [link](url)');
+    });
+
+    test('decode escaped # in heading content', () {
+      final doc = codec.decode(r'# foo \#');
+      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].plainText, 'foo #');
+    });
+
+    test('escaped ## does not create heading', () {
+      final doc = codec.decode(r'\## foo');
+      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].plainText, '## foo');
+    });
+
+    test('encode plain text escapes markdown chars', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.paragraph,
+            segments: [const StyledSegment('foo *bar* baz')]),
+      ]);
+      expect(codec.encode(doc), r'foo \*bar\* baz');
+    });
+
+    test('encode does not escape inside styled spans', () {
+      final doc = Document([
+        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
+          const StyledSegment('hello *world*', {InlineStyle.bold}),
+        ]),
+      ]);
+      // The * inside bold span should NOT be escaped.
+      expect(codec.encode(doc), '**hello *world***');
+    });
+
+    test('round-trip heading with trailing # preserved', () {
+      final doc = codec.decode('# foo #');
+      final encoded = codec.encode(doc);
+      final reDecoded = codec.decode(encoded);
+      expect(reDecoded.blocks[0].blockType, BlockType.h1);
+      expect(reDecoded.blocks[0].plainText, 'foo');
+    });
+
+    test('round-trip paragraph starting with ## preserved', () {
+      final doc = codec.decode(r'\## foo');
+      final encoded = codec.encode(doc);
+      final reDecoded = codec.decode(encoded);
+      expect(reDecoded.blocks[0].blockType, BlockType.paragraph);
+      expect(reDecoded.blocks[0].plainText, '## foo');
+    });
   });
 }
