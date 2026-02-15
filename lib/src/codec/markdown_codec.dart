@@ -42,17 +42,22 @@ String escapeMarkdown(String text) {
 ///
 /// This class owns the format-level grammar: paragraph splitting (`\n\n`),
 /// indentation (2-space nesting), and tree building.
-class MarkdownCodec {
-  MarkdownCodec({EditorSchema? schema})
-    : _schema = schema ?? EditorSchema.standard();
+class MarkdownCodec<B extends Object> {
+  MarkdownCodec({EditorSchema<B, Object>? schema})
+    : _schema = schema ?? EditorSchema.standard() as EditorSchema<B, Object>;
 
-  final EditorSchema _schema;
+  /// Convenience constructor that returns a codec typed for the built-in
+  /// [BlockType] enum using the standard schema.
+  static MarkdownCodec<BlockType> standard() =>
+      MarkdownCodec<BlockType>(schema: EditorSchema.standard());
+
+  final EditorSchema<B, Object> _schema;
 
   // -----------------------------------------------------------------------
   // Encode
   // -----------------------------------------------------------------------
 
-  String encode(Document doc) {
+  String encode(Document<B> doc) {
     final entries = <_EncodedLine>[];
     _encodeBlocks(doc.blocks, 0, entries);
 
@@ -78,7 +83,7 @@ class MarkdownCodec {
   }
 
   void _encodeBlocks(
-    List<TextBlock> blocks,
+    List<TextBlock<B>> blocks,
     int depth,
     List<_EncodedLine> entries,
   ) {
@@ -176,7 +181,8 @@ class MarkdownCodec {
         buffer.write(wrapMap[desired[i]]);
       }
 
-      buffer.write(text);
+      // Encode soft breaks (\n within a block) as hard line breaks.
+      buffer.write(text.replaceAll('\n', '  \n'));
     }
 
     // Close all remaining open styles (innermost first).
@@ -195,7 +201,7 @@ class MarkdownCodec {
   /// optionally followed by a language identifier.
   static final _fenceOpen = RegExp(r'^(`{3,}|~{3,})(.*)$');
 
-  Document decode(String markdown) {
+  Document<B> decode(String markdown) {
     if (markdown.isEmpty) {
       return Document.empty(_schema.defaultBlockType);
     }
@@ -286,7 +292,7 @@ class MarkdownCodec {
   }
 
   /// Decode a fenced code block from its multi-line string.
-  TextBlock _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
+  TextBlock<B> _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
     final lines = text.split('\n');
     final lang = fenceMatch.group(2)!.trim();
     final fenceDelim = fenceMatch.group(1)!;
@@ -306,7 +312,7 @@ class MarkdownCodec {
     final content = lines.sublist(1, endIndex).join('\n');
 
     // Look up the code block type key from the schema.
-    Object? codeBlockKey;
+    B? codeBlockKey;
     for (final entry in _schema.blocks.entries) {
       if (entry.value.label == 'Code Block') {
         codeBlockKey = entry.key;
@@ -344,10 +350,31 @@ class MarkdownCodec {
     return (depth, text.substring(i));
   }
 
+  /// Process CommonMark line breaks within a paragraph/block content string.
+  ///
+  /// - `  \n` (2+ trailing spaces + newline) → `\n` (hard line break)
+  /// - `\\\n` (backslash + newline) → `\n` (hard line break)
+  /// - plain `\n` → ` ` (soft continuation, join with space)
+  static String _processLineBreaks(String content) {
+    if (!content.contains('\n')) return content;
+    // Use a placeholder so hard-break \n aren't clobbered by the soft-break pass.
+    const placeholder = '\x00';
+    var result = content.replaceAllMapped(
+      RegExp(r' {2,}\n'),
+      (m) => placeholder,
+    );
+    result = result.replaceAll('\\\n', placeholder);
+    // Remaining plain \n are soft breaks → space.
+    result = result.replaceAll('\n', ' ');
+    // Restore hard breaks.
+    result = result.replaceAll(placeholder, '\n');
+    return result;
+  }
+
   /// Try all registered block decoders. If multiple match, pick the most
   /// specific one (the decoder that consumed the most prefix, i.e. whose
   /// DecodeMatch.content is shortest). Falls back to the default block type.
-  TextBlock _decodeBlock(String text) {
+  TextBlock<B> _decodeBlock(String text) {
     // CommonMark allows up to 3 leading spaces on block-level constructs.
     // Strip them before trying decoders (4+ spaces = indented code block,
     // which we don't support, but we still avoid stripping those).
@@ -360,7 +387,7 @@ class MarkdownCodec {
     }
     if (leading > 0) stripped = text.substring(leading);
 
-    Object? bestKey;
+    B? bestKey;
     DecodeMatch? bestMatch;
 
     for (final entry in _schema.blocks.entries) {
@@ -380,10 +407,11 @@ class MarkdownCodec {
     }
 
     if (bestMatch != null && bestKey != null) {
+      final content = _processLineBreaks(bestMatch.content);
       return TextBlock(
         id: generateBlockId(),
         blockType: bestKey,
-        segments: _decodeSegments(bestMatch.content),
+        segments: _decodeSegments(content),
         metadata: bestMatch.metadata,
       );
     }
@@ -392,7 +420,7 @@ class MarkdownCodec {
     return TextBlock(
       id: generateBlockId(),
       blockType: _schema.defaultBlockType,
-      segments: _decodeSegments(text),
+      segments: _decodeSegments(_processLineBreaks(text)),
     );
   }
 

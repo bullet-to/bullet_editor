@@ -577,6 +577,7 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Paragraph',
       policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
+      spacingBefore: 0.3,
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {

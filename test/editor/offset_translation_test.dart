@@ -162,12 +162,12 @@ void main() {
         ]),
       );
 
-      // No spacer — listItem and paragraph both have spacingBefore: 0.
-      expect(controller.text, 'abc\n\uFFFCdef\nghi');
+      // listItem has spacingBefore: 0, but paragraph at index 2 has spacingBefore: 0.3 → spacer before 'ghi'.
+      expect(controller.text, 'abc\n\uFFFCdef\n\u200C\nghi');
 
       // Type in the paragraph (no prefix) — offset 1 in display = offset 1 in model.
       controller.value = const TextEditingValue(
-        text: 'aXbc\n\uFFFCdef\nghi',
+        text: 'aXbc\n\uFFFCdef\n\u200C\nghi',
         selection: TextSelection.collapsed(offset: 2),
       );
       expect(controller.document.allBlocks[0].plainText, 'aXbc');
@@ -187,8 +187,8 @@ void main() {
         ]),
       );
 
-      // No spacer — paragraph has spacingBefore: 0.
-      expect(controller.text, 'hello\n\u200B');
+      // Spacer \u200C\n before paragraph at index 1 (spacingBefore: 0.3).
+      expect(controller.text, 'hello\n\u200C\n\u200B');
       // Model: "hello\n"
       expect(controller.document.plainText, 'hello\n');
     });
@@ -243,8 +243,9 @@ void main() {
         TextBlock(id: 'b', blockType: BlockType.paragraph), // empty paragraph
       ]);
 
-      // Model offset 3 = start of empty block → display position 3 (\u200B)
-      expect(modelToDisplay(doc, 3, schema), 3);
+      // Display: "hi\n\u200C\n\u200B" — spacer before paragraph at index 1.
+      // Model offset 3 = start of empty block → display position 5 (after spacer \u200C\n, at \u200B)
+      expect(modelToDisplay(doc, 3, schema), 5);
     });
 
     test('divider then empty paragraph: display text is correct', () {
@@ -255,8 +256,8 @@ void main() {
       ]);
 
       final display = buildDisplayText(doc, schema);
-      // \uFFFC (divider prefix) \n \u200B (empty para, no spacer — paragraph has spacingBefore: 0)
-      expect(display, '\uFFFC\n\u200B');
+      // \uFFFC (divider prefix) \n \u200C\n (spacer — paragraph has spacingBefore: 0.3) \u200B (empty para placeholder)
+      expect(display, '\uFFFC\n\u200C\n\u200B');
     });
 
     test('divider then empty paragraph: offset mapping round-trips', () {
@@ -281,12 +282,13 @@ void main() {
       );
 
       final displayText = controller.text;
-      expect(displayText, '\uFFFC\n\u200B');
+      // Spacer \u200C\n before paragraph at index 1 (spacingBefore: 0.3).
+      expect(displayText, '\uFFFC\n\u200C\n\u200B');
 
-      // Simulate typing 'H' at position 2 (the \u200B position).
+      // Simulate typing 'H' at position 4 (the \u200B position, after spacer).
       controller.value = TextEditingValue(
-        text: '\uFFFC\nH\u200B',
-        selection: const TextSelection.collapsed(offset: 3),
+        text: '\uFFFC\n\u200C\nH\u200B',
+        selection: const TextSelection.collapsed(offset: 5),
       );
 
       expect(controller.document.allBlocks[1].plainText, 'H');
@@ -302,8 +304,8 @@ void main() {
         ]),
       );
 
-      // No spacers — paragraphs have spacingBefore: 0.
-      expect(controller.text, '\u200B\n\u200B\n\u200B');
+      // Paragraphs at index 1 and 2 each get spacer \u200C\n (spacingBefore: 0.3).
+      expect(controller.text, '\u200B\n\u200C\n\u200B\n\u200C\n\u200B');
     });
   });
 }

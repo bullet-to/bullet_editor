@@ -1,3 +1,16 @@
+## 0.1.1
+
+### Bug fixes
+- `MarkdownCodec` is now generic (`MarkdownCodec<B>`) so `decode()` returns
+  `Document<B>` instead of `Document<dynamic>`. Eliminates runtime type cast
+  errors when using typed schemas.
+
+### Features
+- Shift+Enter inserts a soft line break (`\n`) within a block instead of
+  splitting into a new block. Works on all non-void block types.
+- Markdown codec encodes/decodes CommonMark hard line breaks (`  \n` and `\\\n`).
+- Paragraphs now have `spacingBefore: 0.3` for visual separation between blocks.
+
 ## 0.1.0
 
 Initial public release.

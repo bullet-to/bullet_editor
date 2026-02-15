@@ -393,6 +393,48 @@ class EditorController<B extends Object, S extends Object>
     _activeStyles = _document.stylesAt(cursorOffset);
   }
 
+  /// Insert a soft line break (`\n`) within the current block.
+  ///
+  /// Unlike Enter (which splits into a new block), this keeps the cursor
+  /// in the same block. Works on any non-void block.
+  void insertSoftBreak() {
+    if (!value.selection.isValid) return;
+    final modelSel = _selectionToModel(value.selection);
+    final pos = _document.blockAt(modelSel.baseOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    if (_schema.isVoid(block.blockType)) return;
+
+    _pushUndo();
+
+    final ops = <EditOperation>[];
+
+    // Delete selection first if non-collapsed.
+    if (!modelSel.isCollapsed) {
+      final start = modelSel.start;
+      final end = modelSel.end;
+      final startPos = _document.blockAt(start);
+      final endPos = _document.blockAt(end);
+      if (startPos.blockIndex == endPos.blockIndex) {
+        ops.add(DeleteText(startPos.blockIndex, startPos.localOffset,
+            endPos.localOffset - startPos.localOffset));
+      }
+    }
+
+    final insertOffset = pos.localOffset;
+    ops.add(InsertText(pos.blockIndex, insertOffset, '\n'));
+
+    final globalAfter = _document.globalOffset(pos.blockIndex, insertOffset) + 1;
+    final tx = Transaction(
+      operations: ops,
+      selectionAfter: TextSelection.collapsed(offset: globalAfter),
+    );
+    _document = tx.apply(_document);
+    _syncToTextField(
+      modelSelection: TextSelection.collapsed(offset: globalAfter),
+    );
+    _activeStyles = _document.stylesAt(globalAfter);
+  }
+
   /// Whether a divider can be inserted at the cursor position.
   bool get canInsertDivider {
     if (!value.selection.isValid) return false;

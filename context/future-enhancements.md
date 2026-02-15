@@ -104,3 +104,17 @@ The markdown codec does not recursively decode nested inline styles. For example
 **Impact:** Documents authored in this editor round-trip correctly (segments are per-character, so bold+italic produces `***text***` which decodes fine). The issue only affects markdown authored externally with nested delimiters like `**bold *italic* more**`.
 
 **Fix:** After the initial decode pass, re-run `_decodeSegments` on each segment's text to resolve inner styles. Requires care to avoid infinite recursion on malformed input.
+
+---
+
+## Multi-Widget Architecture (Block-per-Widget Rendering)
+
+The current editor renders the entire document as a single `TextField` with a rich `TextSpan` tree. This gives native cursor, selection, and IME behavior for free, but limits what can be rendered:
+
+- **Block-level backgrounds/padding** (e.g. code block background, block quote inset) can't be precisely controlled — only inline `backgroundColor` on `TextStyle` is available.
+- **Tall embedded widgets** (images, embeds) overflow adjacent lines because `WidgetSpan` doesn't reserve vertical space across line boundaries.
+- **Paragraph spacing** via `spacingBefore`/`spacingAfter` uses a font-size hack (`TextSpan` with tiny font + `height: 1.0`) which doesn't respond precisely to value changes.
+
+A multi-widget architecture (one `EditableText` per block, coordinated by a shared focus/selection controller) would solve all of these. Reference: [super_editor](https://github.com/superlistapp/super_editor) uses this approach. Flutter has no plans to add a block-based editor to the framework (issue #167039 closed as "not planned").
+
+**Trade-off:** Significant rewrite of selection handling, cursor navigation across block boundaries, and IME integration. The current single-TextField approach covers most use cases well.

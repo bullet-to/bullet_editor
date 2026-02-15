@@ -100,6 +100,13 @@ class _BulletEditorState<B extends Object, S extends Object>
   /// Chains to any pre-existing onKeyEvent (e.g. app-level shortcuts).
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      // Shift+Enter → soft line break (newline within block).
+      if (event.logicalKey == LogicalKeyboardKey.enter &&
+          HardwareKeyboard.instance.isShiftPressed) {
+        widget.controller.insertSoftBreak();
+        return KeyEventResult.handled;
+      }
+
       // Tab / Shift+Tab → indent / outdent.
       if (event.logicalKey == LogicalKeyboardKey.tab) {
         if (HardwareKeyboard.instance.isShiftPressed) {

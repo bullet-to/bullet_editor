@@ -199,15 +199,15 @@ void main() {
         ]),
       );
 
-      // No spacer — paragraph has spacingBefore: 0.
-      expect(controller.text, 'hello\nworld');
+      // Spacer \u200C\n before paragraph at index 1 (spacingBefore: 0.3).
+      expect(controller.text, 'hello\n\u200C\nworld');
 
-      // Cursor at start of "world" (display offset 6), press backspace.
-      // Flutter removes the \n, producing "helloworld". The
-      // controller sees the diff and merges the blocks.
+      // Cursor at start of "world" (display offset 8), press backspace.
+      // Flutter removes the \n at offset 7, producing "hello\n\u200Cworld".
+      // The controller sees the diff and merges the blocks.
       controller.value = const TextEditingValue(
-        text: 'helloworld',
-        selection: TextSelection.collapsed(offset: 5),
+        text: 'hello\n\u200Cworld',
+        selection: TextSelection.collapsed(offset: 7),
       );
 
       expect(controller.document.blocks.length, 1);
@@ -445,17 +445,17 @@ void main() {
         // Rules come from schema.
       );
 
-      // No spacer — paragraph has spacingBefore: 0.
-      expect(controller.text, 'Title\nparagraph');
+      // Spacer \u200C\n before paragraph at index 1 (spacingBefore: 0.3).
+      expect(controller.text, 'Title\n\u200C\nparagraph');
 
       controller.value = const TextEditingValue(
-        text: 'Title\nparagraph',
+        text: 'Title\n\u200C\nparagraph',
         selection: TextSelection.collapsed(offset: 5),
       );
 
       // Type space at end of H1.
       controller.value = const TextEditingValue(
-        text: 'Title \nparagraph',
+        text: 'Title \n\u200C\nparagraph',
         selection: TextSelection.collapsed(offset: 6),
       );
 
@@ -467,7 +467,7 @@ void main() {
       expect(controller.value.selection.baseOffset, 6);
 
       // Controller text should reflect the model.
-      expect(controller.text, 'Title \nparagraph');
+      expect(controller.text, 'Title \n\u200C\nparagraph');
     });
 
     test('Enter on heading creates paragraph block', () {
@@ -724,7 +724,7 @@ void main() {
 
       // Block 0 text: "Hello bold world! This is the POC." (34 chars)
       // Block 1 text: "...to **trigger* bold."
-      // Full text: block0 + \n + block1 (no spacer — paragraph has spacingBefore: 0)
+      // Full text: block0 + \n + spacer (\u200C\n) + block1 (paragraph at index 1, spacingBefore: 0.3)
       final block0Len = controller.document.blocks[0].plainText.length;
       final block1Text = controller.document.blocks[1].plainText;
 
@@ -733,12 +733,12 @@ void main() {
       // closingStarLocal points to the * before " bold"
       // User types another * right after it
       final insertLocalOffset = closingStarLocal + 1;
-      final insertGlobalOffset = block0Len + 1 + insertLocalOffset; // +1 for \n
+      final insertGlobalOffset = block0Len + 1 + 2 + insertLocalOffset; // +1 for \n, +2 for spacer \u200C\n
 
       final newBlock1Text =
           '${block1Text.substring(0, insertLocalOffset)}*${block1Text.substring(insertLocalOffset)}';
       final newFullText =
-          '${controller.document.blocks[0].plainText}\n$newBlock1Text';
+          '${controller.document.blocks[0].plainText}\n\u200C\n$newBlock1Text';
 
       controller.value = TextEditingValue(
         text: newFullText,
