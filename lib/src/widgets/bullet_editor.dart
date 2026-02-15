@@ -92,10 +92,13 @@ class _BulletEditorState<B extends Object, S extends Object>
     super.dispose();
   }
 
-  /// Handle editor key events:
-  /// - Tab / Shift+Tab → indent/outdent (must intercept to prevent focus
-  ///   traversal)
-  /// - Cmd+C / Cmd+X → rich copy/cut (encodes selection as markdown)
+  /// Handle editor key events that must be intercepted at the raw key level:
+  /// - Shift+Enter → soft line break
+  /// - Tab / Shift+Tab → indent/outdent (backup for Actions-based handling)
+  /// - Schema-driven inline style shortcuts (Cmd+B, Cmd+I, etc.)
+  ///
+  /// Copy, cut, and focus traversal (Tab) are also handled via Actions
+  /// overrides in [build] for robustness across platforms and widget trees.
   ///
   /// Chains to any pre-existing onKeyEvent (e.g. app-level shortcuts).
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -108,6 +111,9 @@ class _BulletEditorState<B extends Object, S extends Object>
       }
 
       // Tab / Shift+Tab → indent / outdent.
+      // Also handled via NextFocusIntent/PreviousFocusIntent Actions as
+      // backup, but onKeyEvent fires first and is needed to prevent the
+      // raw Tab character from reaching the TextField on some platforms.
       if (event.logicalKey == LogicalKeyboardKey.tab) {
         if (HardwareKeyboard.instance.isShiftPressed) {
           widget.controller.outdent();
@@ -115,38 +121,6 @@ class _BulletEditorState<B extends Object, S extends Object>
           widget.controller.indent();
         }
         return KeyEventResult.handled;
-      }
-
-      // Cmd/Ctrl + C/X → rich copy/cut with markdown encoding.
-      final isMeta = HardwareKeyboard.instance.isMetaPressed ||
-          HardwareKeyboard.instance.isControlPressed;
-      if (isMeta) {
-        switch (event.logicalKey) {
-          case LogicalKeyboardKey.keyC:
-            final md = widget.controller.encodeSelection();
-            if (md != null) {
-              Clipboard.setData(ClipboardData(text: md));
-              return KeyEventResult.handled;
-            }
-          case LogicalKeyboardKey.keyX:
-            final md = widget.controller.encodeSelection();
-            if (md != null) {
-              Clipboard.setData(ClipboardData(text: md));
-              final sel = widget.controller.value.selection;
-              if (!sel.isCollapsed) {
-                final start = sel.start;
-                widget.controller.value =
-                    widget.controller.value.copyWith(
-                  text: widget.controller.text.substring(0, sel.start) +
-                      widget.controller.text.substring(sel.end),
-                  selection: TextSelection.collapsed(offset: start),
-                );
-              }
-              return KeyEventResult.handled;
-            }
-          default:
-            break;
-        }
       }
 
       // Schema-driven inline style shortcuts (e.g. Cmd+B → bold).
@@ -176,11 +150,14 @@ class _BulletEditorState<B extends Object, S extends Object>
           color: theme.colorScheme.onSurface,
         );
 
-    // Intercept undo/redo intents so they route to our UndoManager instead of
-    // Flutter's built-in UndoHistory (which doesn't know about our document
-    // model and would corrupt the display text).
+    // Override Actions so editor shortcuts work regardless of how the key
+    // event arrives (raw key event, platform shortcut, or Shortcuts widget).
+    // This is critical in host apps where FocusTraversalGroup, EditableText,
+    // or platform menus would otherwise consume Tab, Cmd+C, Cmd+X, etc.
     return Actions(
       actions: {
+        // Undo/redo → route to our UndoManager instead of Flutter's built-in
+        // UndoHistory (which doesn't know about our document model).
         UndoTextIntent: CallbackAction<UndoTextIntent>(
           onInvoke: (_) {
             widget.controller.undo();
@@ -190,6 +167,33 @@ class _BulletEditorState<B extends Object, S extends Object>
         RedoTextIntent: CallbackAction<RedoTextIntent>(
           onInvoke: (_) {
             widget.controller.redo();
+            return null;
+          },
+        ),
+        // Tab → indent (overrides FocusTraversalGroup's NextFocusAction).
+        NextFocusIntent: CallbackAction<NextFocusIntent>(
+          onInvoke: (_) {
+            widget.controller.indent();
+            return null;
+          },
+        ),
+        // Shift+Tab → outdent (overrides PreviousFocusAction).
+        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
+          onInvoke: (_) {
+            widget.controller.outdent();
+            return null;
+          },
+        ),
+        // Cmd+C / Cmd+X → rich copy or cut (markdown-encoded selection).
+        // CopySelectionTextIntent handles both: collapseSelection=false is
+        // copy, collapseSelection=true is cut.
+        CopySelectionTextIntent: CallbackAction<CopySelectionTextIntent>(
+          onInvoke: (intent) {
+            if (intent.collapseSelection) {
+              widget.controller.richCut();
+            } else {
+              widget.controller.richCopy();
+            }
             return null;
           },
         ),

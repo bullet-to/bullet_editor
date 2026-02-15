@@ -1817,6 +1817,173 @@ void main() {
       });
     });
 
+    group('deleteSelection', () {
+      test('deletes within a single block', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello world')],
+            ),
+          ]),
+        );
+        // Select "lo wo" (offset 3..8).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 3, extentOffset: 8),
+        );
+        controller.deleteSelection();
+        expect(controller.document.allBlocks[0].plainText, 'helrld');
+        expect(controller.value.selection.isCollapsed, isTrue);
+      });
+
+      test('deletes across blocks', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('first')],
+            ),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('second')],
+            ),
+          ]),
+        );
+        // Display: "first\n\u200C\nsecond" (spacer between paragraphs).
+        // Select from display 2 ("r") to display 11 ("o" in second).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 2, extentOffset: 11),
+        );
+        controller.deleteSelection();
+        expect(controller.document.allBlocks.length, 1);
+        expect(controller.document.allBlocks[0].plainText, 'fiond');
+      });
+
+      test('resets non-default block to default when selection starts at 0', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h1,
+              segments: [const StyledSegment('Heading')],
+            ),
+          ]),
+        );
+        // Select all.
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          ),
+        );
+        controller.deleteSelection();
+        expect(controller.document.allBlocks[0].blockType, BlockType.paragraph);
+      });
+
+      test('does nothing for collapsed selection', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+        controller.deleteSelection();
+        expect(controller.document.allBlocks[0].plainText, 'hello');
+      });
+    });
+
+    group('richCopy / richCut', () {
+      test('richCopy returns true when selection exists', () {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('plain '),
+                const StyledSegment('bold', {InlineStyle.bold}),
+              ],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 6, extentOffset: 10),
+        );
+        expect(controller.richCopy(), isTrue);
+        // Document unchanged after copy.
+        expect(controller.document.allBlocks[0].plainText, 'plain bold');
+      });
+
+      test('richCopy returns false for collapsed cursor', () {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+        expect(controller.richCopy(), isFalse);
+      });
+
+      test('richCut deletes selection through document model', () {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello world')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 5, extentOffset: 11),
+        );
+        expect(controller.richCut(), isTrue);
+        expect(controller.document.allBlocks[0].plainText, 'hello');
+      });
+
+      test('richCut resets heading to paragraph when cut from start', () {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.h2,
+              segments: [const StyledSegment('Title')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          ),
+        );
+        controller.richCut();
+        expect(controller.document.allBlocks[0].blockType, BlockType.paragraph);
+        expect(controller.document.allBlocks[0].plainText, isEmpty);
+      });
+    });
+
     group('paste markdown', () {
       test('pasting bold markdown preserves formatting', () {
         final controller = EditorController(

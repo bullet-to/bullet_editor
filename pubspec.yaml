@@ -3,7 +3,7 @@ description: >-
   A structured rich text editor for Flutter built on a single TextField.
   Supports headings, lists, tasks, code blocks, block quotes, and
   full markdown round-trip serialization.
-version: 0.1.1
+version: 0.1.3
 homepage: https://github.com/bullet-to/bullet_editor
 repository: https://github.com/bullet-to/bullet_editor
 issue_tracker: https://github.com/bullet-to/bullet_editor/issues

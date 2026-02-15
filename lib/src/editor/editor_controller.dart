@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart' hide UndoManager;
 import 'package:flutter/widgets.dart';
 
 import '../codec/markdown_codec.dart';
@@ -237,7 +238,6 @@ class EditorController<B extends Object, S extends Object>
   // -- Public queries --
 
   /// Encode the current selection as markdown. Returns null if no selection.
-  /// Used for rich copy — put the result on the clipboard.
   String? encodeSelection() {
     if (!value.selection.isValid || value.selection.isCollapsed) return null;
     final modelSel = _selectionToModel(value.selection);
@@ -246,6 +246,77 @@ class EditorController<B extends Object, S extends Object>
     if (blocks.isEmpty) return null;
     final tempDoc = Document(blocks);
     return MarkdownCodec(schema: _schema).encode(tempDoc);
+  }
+
+  /// Delete the current selection through the document model.
+  ///
+  /// Does nothing if the selection is collapsed or invalid.
+  void deleteSelection() {
+    if (!value.selection.isValid || value.selection.isCollapsed) return;
+    final modelSel = _selectionToModel(value.selection);
+    final (start, end) = _orderedRange(modelSel);
+    final startPos = _document.blockAt(start);
+    final endPos = _document.blockAt(end);
+
+    _pushUndo();
+
+    final ops = <EditOperation>[];
+
+    if (startPos.blockIndex == endPos.blockIndex) {
+      ops.add(DeleteText(
+        startPos.blockIndex,
+        startPos.localOffset,
+        end - start,
+      ));
+    } else {
+      ops.add(DeleteRange(
+        startPos.blockIndex,
+        startPos.localOffset,
+        endPos.blockIndex,
+        endPos.localOffset,
+      ));
+    }
+
+    // If the selection started at position 0 of a non-default block,
+    // reset to default (e.g. cutting all text from a heading → paragraph).
+    if (startPos.localOffset == 0) {
+      final blockType = _document.allBlocks[startPos.blockIndex].blockType;
+      if (blockType != _schema.defaultBlockType) {
+        ops.add(ChangeBlockType(
+          startPos.blockIndex,
+          _schema.defaultBlockType,
+          policies: _schema.policies,
+        ));
+      }
+    }
+
+    final cursor = TextSelection.collapsed(offset: start);
+    _commitTransaction(
+      Transaction(operations: ops, selectionAfter: cursor),
+      cursorOverride: cursor,
+    );
+  }
+
+  /// Rich copy: encode the selection as markdown and place it on the clipboard.
+  ///
+  /// Returns true if something was copied.
+  bool richCopy() {
+    final md = encodeSelection();
+    if (md == null) return false;
+    Clipboard.setData(ClipboardData(text: md));
+    return true;
+  }
+
+  /// Rich cut: encode the selection as markdown, place it on the clipboard,
+  /// then delete the selection through the document model.
+  ///
+  /// Returns true if something was cut.
+  bool richCut() {
+    final md = encodeSelection();
+    if (md == null) return false;
+    Clipboard.setData(ClipboardData(text: md));
+    deleteSelection();
+    return true;
   }
 
   /// Whether the block at the cursor can be indented.

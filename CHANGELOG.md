@@ -1,3 +1,17 @@
+## 0.1.3
+
+### Improvements
+- Moved rich copy/cut business logic from `BulletEditor` widget to
+  `EditorController` (`richCopy()`, `richCut()`, `deleteSelection()`).
+- `deleteSelection()` resets non-default block types to paragraph when the
+  selection starts at offset 0.
+- Tab/Shift+Tab indent/outdent, Cmd+B/I/Shift+S inline style shortcuts, and
+  rich copy/cut are now handled internally by `BulletEditor` via `Actions`
+  overrides — no host-app wiring needed.
+
+### Tests
+- Added unit tests for `deleteSelection`, `richCopy`, and `richCut`.
+
 ## 0.1.1
 
 ### Bug fixes
