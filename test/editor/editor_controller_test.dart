@@ -2190,6 +2190,42 @@ void main() {
         )), reason: 'cursor should be before the H2, not inside it');
       });
 
+      test('pasting indented list normalizes depths', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: const [],
+            ),
+          ]),
+        );
+
+        // Cursor on empty paragraph.
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+
+        // Paste indented list (2-space base) — should normalize to root.
+        const md = '  - Top level\n  - Top level 2\n    - Child';
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: md + before,
+          selection: TextSelection.collapsed(offset: md.length),
+        );
+
+        // "Top level" and "Top level 2" should be at the same depth.
+        final blocks = controller.document.allBlocks;
+        final top1 = blocks.firstWhere((b) => b.plainText == 'Top level');
+        final top2 = blocks.firstWhere((b) => b.plainText == 'Top level 2');
+        expect(controller.document.depthOf(blocks.indexOf(top1)),
+            controller.document.depthOf(blocks.indexOf(top2)),
+            reason: 'both top-level items should be at the same depth');
+        expect(top2.children.length, 1);
+        expect(top2.children[0].plainText, 'Child');
+      });
+
       test('paste on heading does not make everything a heading', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),

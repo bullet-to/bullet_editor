@@ -339,6 +339,8 @@ class MarkdownCodec<B extends Object> {
   ///  2. No block is nested under a parent whose type has
   ///     `canHaveChildren: false` (e.g. headings, code blocks, dividers).
   ///
+  /// When collapsing a block, the entire subsequent group at depth >= the
+  /// original depth is shifted down by 1, preserving sibling relationships.
   /// Iterates until stable (typically 1-2 passes).
   List<(int, TextBlock<B>)> _normalizeDepths(
       List<(int, TextBlock<B>)> parsed) {
@@ -355,6 +357,8 @@ class MarkdownCodec<B extends Object> {
         }
       }
       // Collapse blocks whose would-be parent can't have children.
+      // When found, shift the entire subsequent group (all blocks at
+      // depth >= the collapsing depth) by -1 so siblings stay siblings.
       for (var i = 1; i < adj.length; i++) {
         final curDepth = adj[i].$1;
         if (curDepth == 0) continue;
@@ -363,7 +367,12 @@ class MarkdownCodec<B extends Object> {
           if (adj[j].$1 == curDepth - 1) {
             final parentDef = _schema.blockDef(adj[j].$2.blockType);
             if (!parentDef.policies.canHaveChildren) {
-              adj[i] = (curDepth - 1, adj[i].$2);
+              // Shift this block and all subsequent blocks that were
+              // part of the same subtree (depth >= curDepth) by -1.
+              for (var k = i; k < adj.length; k++) {
+                if (adj[k].$1 < curDepth) break;
+                adj[k] = (adj[k].$1 - 1, adj[k].$2);
+              }
               changed = true;
             }
             break;

@@ -1,3 +1,10 @@
+## 0.1.6
+
+### Bug fixes
+- Fix markdown decode depth normalization: when collapsing blocks under
+  non-childable parents (headings, etc.), the entire sibling group is now
+  shifted together, preserving relative relationships.
+
 ## 0.1.5
 
 ### Bug fixes

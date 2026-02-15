@@ -1113,6 +1113,55 @@ void main() {
         expect(doc.blocks[1].children.length, 1);
         expect(doc.blocks[1].children[0].plainText, 'C');
       });
+
+      test('indented siblings stay siblings, not parent-child', () {
+        final doc = codec.decode('  - Top level\n  - Top level 2\n    - Child');
+        // Both top-levels are roots; Child is under Top level 2.
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].plainText, 'Top level');
+        expect(doc.blocks[0].children, isEmpty);
+        expect(doc.blocks[1].plainText, 'Top level 2');
+        expect(doc.blocks[1].children.length, 1);
+        expect(doc.blocks[1].children[0].plainText, 'Child');
+      });
+
+      test('mixed list types with indentation', () {
+        final doc = codec.decode(
+          '  - Bullet\n  1. Numbered\n    - [ ] Task child',
+        );
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].plainText, 'Bullet');
+        expect(doc.blocks[1].blockType, BlockType.numberedList);
+        expect(doc.blocks[1].plainText, 'Numbered');
+        expect(doc.blocks[1].children.length, 1);
+        expect(doc.blocks[1].children[0].blockType, BlockType.taskItem);
+      });
+
+      test('heading followed by odd-space-indented siblings', () {
+        final doc = codec.decode('# Header\n\n   - One\n   - Two\n      - Child');
+        expect(doc.blocks.length, 3, reason: 'Header, One, Two as roots');
+        expect(doc.blocks[0].blockType, BlockType.h1);
+        expect(doc.blocks[1].plainText, 'One');
+        expect(doc.blocks[1].children, isEmpty);
+        expect(doc.blocks[2].plainText, 'Two');
+        expect(doc.blocks[2].children.length, 1);
+        expect(doc.blocks[2].children[0].plainText, 'Child');
+      });
+
+      test('deeply indented list normalizes relative depths', () {
+        final doc = codec.decode(
+          '    - A\n    - B\n      - C\n        - D',
+        );
+        // A, B are roots. C is child of B. D is child of C.
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].plainText, 'A');
+        expect(doc.blocks[1].plainText, 'B');
+        expect(doc.blocks[1].children.length, 1);
+        expect(doc.blocks[1].children[0].plainText, 'C');
+        expect(doc.blocks[1].children[0].children.length, 1);
+        expect(doc.blocks[1].children[0].children[0].plainText, 'D');
+      });
     });
   });
 }
