@@ -232,6 +232,16 @@ bool _needsEmptyPlaceholder(Document doc, int flatIndex, EditorSchema schema) {
 /// with spacingBefore.
 String buildDisplayText(Document doc, EditorSchema schema) {
   final flat = doc.allBlocks;
+
+  // A single empty non-prefixed block → return empty string so the
+  // TextField shows its hint text. The cursor still works because
+  // Flutter handles empty TextFields natively.
+  if (flat.length == 1 &&
+      flat[0].length == 0 &&
+      !hasPrefix(doc, 0, schema)) {
+    return '';
+  }
+
   final buf = StringBuffer();
   for (var i = 0; i < flat.length; i++) {
     if (i > 0) buf.write('\n');

@@ -308,4 +308,78 @@ void main() {
       expect(controller.text, '\u200B\n\u200C\n\u200B\n\u200C\n\u200B');
     });
   });
+
+  group('Hint text (empty document)', () {
+    test('single empty paragraph produces empty display text', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document.empty(BlockType.paragraph),
+      );
+
+      // Empty string so TextField shows hint text.
+      expect(controller.text, '');
+    });
+
+    test('single empty paragraph cursor is at offset 0', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document.empty(BlockType.paragraph),
+      );
+
+      expect(controller.selection, const TextSelection.collapsed(offset: 0));
+    });
+
+    test('typing on empty document produces non-empty display text', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document.empty(BlockType.paragraph),
+      );
+
+      // Simulate typing a character.
+      controller.value = const TextEditingValue(
+        text: 'a',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+
+      expect(controller.document.blocks[0].plainText, 'a');
+      expect(controller.text, 'a');
+    });
+
+    test('non-empty single paragraph does not return empty string', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hi')]),
+        ]),
+      );
+
+      expect(controller.text, 'hi');
+    });
+
+    test('empty list item still has prefix char (not empty string)', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
+        ]),
+      );
+
+      // List items have a prefix, so display text is not empty.
+      expect(controller.text, '\uFFFC');
+      expect(controller.text.isNotEmpty, true);
+    });
+
+    test('two empty paragraphs produce non-empty display text', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
+          TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+        ]),
+      );
+
+      // Two blocks → not the single-empty-paragraph case.
+      expect(controller.text.isNotEmpty, true);
+    });
+  });
 }
