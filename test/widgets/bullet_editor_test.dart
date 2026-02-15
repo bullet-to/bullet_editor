@@ -5,7 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('BulletEditor link tap', () {
-    testWidgets('tapping text allows segment lookup via controller', (tester) async {
+    testWidgets('tapping text allows segment lookup via controller', (
+      tester,
+    ) async {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
@@ -30,13 +32,12 @@ void main() {
           home: Scaffold(
             body: SizedBox(
               height: 200,
-              child: BulletEditor(
-                controller: controller,
-              ),
+              child: BulletEditor(controller: controller),
             ),
           ),
         ),
       );
+
       await tester.pumpAndSettle();
 
       final textFieldFinder = find.byType(TextField);
@@ -83,9 +84,7 @@ void main() {
           home: Scaffold(
             body: SizedBox(
               height: 200,
-              child: BulletEditor(
-                controller: controller,
-              ),
+              child: BulletEditor(controller: controller),
             ),
           ),
         ),
@@ -107,9 +106,21 @@ void main() {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first block')]),
-          TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('second block')]),
-          TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('third block')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('first block')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('second block')],
+          ),
+          TextBlock(
+            id: 'c',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('third block')],
+          ),
         ]),
       );
 
@@ -126,7 +137,9 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('tapping plain text does not trigger onLinkTap', (tester) async {
+    testWidgets('tapping plain text does not trigger onLinkTap', (
+      tester,
+    ) async {
       String? tappedUrl;
 
       final controller = EditorController(
@@ -148,9 +161,7 @@ void main() {
           home: Scaffold(
             body: SizedBox(
               height: 200,
-              child: BulletEditor(
-                controller: controller,
-              ),
+              child: BulletEditor(controller: controller),
             ),
           ),
         ),
@@ -179,8 +190,16 @@ void main() {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
-          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('first')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('second')],
+          ),
         ]),
       );
 
@@ -209,8 +228,11 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
 
-      expect(controller.document.blocks.length, 1,
-          reason: 'second should be nested under first');
+      expect(
+        controller.document.blocks.length,
+        1,
+        reason: 'second should be nested under first',
+      );
       expect(controller.document.blocks[0].children.length, 1);
       expect(controller.document.blocks[0].children[0].plainText, 'second');
       expect(controller.text.contains('\t'), isFalse);
@@ -225,7 +247,11 @@ void main() {
             blockType: BlockType.listItem,
             segments: [const StyledSegment('parent')],
             children: [
-              TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('child')]),
+              TextBlock(
+                id: 'b',
+                blockType: BlockType.listItem,
+                segments: [const StyledSegment('child')],
+              ),
             ],
           ),
         ]),
@@ -267,8 +293,16 @@ void main() {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', blockType: BlockType.listItem, segments: [const StyledSegment('first')]),
-          TextBlock(id: 'b', blockType: BlockType.listItem, segments: [const StyledSegment('second')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('first')],
+          ),
+          TextBlock(
+            id: 'b',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('second')],
+          ),
         ]),
       );
 
@@ -296,8 +330,11 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
 
-      expect(controller.document.blocks.length, 1,
-          reason: 'second nested under first');
+      expect(
+        controller.document.blocks.length,
+        1,
+        reason: 'second nested under first',
+      );
 
       // Shift+Tab → outdent.
       final childStart = controller.text.indexOf('second');
@@ -311,8 +348,11 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await tester.pump();
 
-      expect(controller.document.blocks.length, 2,
-          reason: 'second back at root level');
+      expect(
+        controller.document.blocks.length,
+        2,
+        reason: 'second back at root level',
+      );
     });
   });
 
@@ -321,7 +361,11 @@ void main() {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
         ]),
       );
 
@@ -353,7 +397,10 @@ void main() {
 
       // Dispatch UndoTextIntent via the Actions widget.
       final context = tester.element(find.byType(TextField));
-      Actions.invoke(context, const UndoTextIntent(SelectionChangedCause.keyboard));
+      Actions.invoke(
+        context,
+        const UndoTextIntent(SelectionChangedCause.keyboard),
+      );
       await tester.pump();
 
       // After undo, the 'X' should be gone.
@@ -364,7 +411,11 @@ void main() {
       final controller = EditorController(
         schema: EditorSchema.standard(),
         document: Document([
-          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
         ]),
       );
 
@@ -394,12 +445,18 @@ void main() {
 
       // Undo first.
       final context = tester.element(find.byType(TextField));
-      Actions.invoke(context, const UndoTextIntent(SelectionChangedCause.keyboard));
+      Actions.invoke(
+        context,
+        const UndoTextIntent(SelectionChangedCause.keyboard),
+      );
       await tester.pump();
       expect(controller.document.allBlocks.first.plainText, 'hello');
 
       // Now redo.
-      Actions.invoke(context, const RedoTextIntent(SelectionChangedCause.keyboard));
+      Actions.invoke(
+        context,
+        const RedoTextIntent(SelectionChangedCause.keyboard),
+      );
       await tester.pump();
       expect(controller.document.allBlocks.first.plainText, contains('X'));
     });
