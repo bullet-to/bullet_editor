@@ -9,8 +9,11 @@
 /// [attributes] holds data for styles that carry it (e.g. `{'url': '...'}`
 /// for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
-  const StyledSegment(this.text,
-      [this.styles = const {}, this.attributes = const {}]);
+  const StyledSegment(
+    this.text, [
+    this.styles = const {},
+    this.attributes = const {},
+  ]);
 
   final String text;
   final Set<Object> styles;
@@ -41,7 +44,10 @@ class StyledSegment {
 
   @override
   int get hashCode => Object.hash(
-      text, Object.hashAllUnordered(styles), Object.hashAll(attributes.entries));
+    text,
+    Object.hashAllUnordered(styles),
+    Object.hashAll(attributes.entries),
+  );
 
   @override
   String toString() {
@@ -54,11 +60,26 @@ class StyledSegment {
 
 /// Built-in block type keys. Use these with the standard schema, or define
 /// your own enum/class for custom block types.
-enum BlockType { paragraph, h1, h2, h3, listItem, numberedList, taskItem, divider }
+enum BlockType {
+  paragraph,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  listItem,
+  numberedList,
+  taskItem,
+  divider,
+  image,
+  blockQuote,
+  codeBlock,
+}
 
 /// Built-in inline style keys. Use these with the standard schema, or define
 /// your own enum/class for custom inline styles.
-enum InlineStyle { bold, italic, strikethrough, link }
+enum InlineStyle { bold, italic, strikethrough, link, code }
 
 /// Standard metadata key for task item checked state.
 const kCheckedKey = 'checked';
@@ -127,7 +148,8 @@ List<StyledSegment> mergeSegments(List<StyledSegment> segments) {
       // Merge with previous
       final prev = result.removeLast();
       result.add(
-          StyledSegment(prev.text + seg.text, prev.styles, prev.attributes));
+        StyledSegment(prev.text + seg.text, prev.styles, prev.attributes),
+      );
     } else {
       result.add(seg);
     }

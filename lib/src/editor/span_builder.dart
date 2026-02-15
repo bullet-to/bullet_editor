@@ -59,13 +59,23 @@ TextSpan buildDocumentSpan(
     // a spacer line break.
     if (hasSpacerBefore(doc, i, schema)) {
       final block = flat[i];
-      final spacingEm = schema.blockDef(block.blockType).spacingBefore;
+      final beforeEm = schema.blockDef(block.blockType).spacingBefore;
+      final afterEm = i > 0
+          ? schema.blockDef(flat[i - 1].blockType).spacingAfter
+          : 0.0;
+      final spacingEm = beforeEm > afterEm ? beforeEm : afterEm;
       final baseFontSize = style?.fontSize ?? kFallbackFontSize;
       final gapPx = baseFontSize * spacingEm;
+
+      // The spacer occupies a full text line (\u200C + \n). To control
+      // its height precisely, we set fontSize to the desired gap in pixels
+      // and height to 1.0 so the line takes exactly that many pixels.
+      // Clamp to minimum 2px so the font renderer doesn't collapse it.
+      final spacerSize = gapPx.clamp(2.0, double.infinity);
       children.add(
         TextSpan(
           text: '$spacerChar\n',
-          style: TextStyle(fontSize: gapPx, height: 1.0),
+          style: TextStyle(fontSize: spacerSize, height: 1.0, color: const Color(0x00000000)),
         ),
       );
     }

@@ -32,11 +32,14 @@ List<Map<String, dynamic>> _snapshotBlocks(List<TextBlock> blocks, int depth) {
       'text': b.plainText,
       'depth': depth,
       'styles': b.segments
-          .map((s) => {
-                'text': s.text,
-                'styles': s.styles.toList()..sort((a, b) => a.toString().compareTo(b.toString())),
-                if (s.attributes.isNotEmpty) 'attrs': s.attributes,
-              })
+          .map(
+            (s) => {
+              'text': s.text,
+              'styles': s.styles.toList()
+                ..sort((a, b) => a.toString().compareTo(b.toString())),
+              if (s.attributes.isNotEmpty) 'attrs': s.attributes,
+            },
+          )
           .toList(),
       if (b.metadata.isNotEmpty) 'metadata': b.metadata,
     });
@@ -61,8 +64,7 @@ const _supportedSections = {
 /// setext, code spans inside emphasis, etc.) or rely on CommonMark nuances
 /// our simple parser doesn't implement. Skip them individually.
 const _skipExamples = <int>{
-  // H4-H6 — we only support H1-H3.
-  62, // contains ####, #####, ######
+  // (H4-H6 now supported — example 62 removed from skip list)
 
   // `---` after text = setext heading, not thematic break.
   59, 96,
@@ -100,7 +102,6 @@ const _skipExamples = <int>{
   447, // `*foo****` — mismatched opener/closer counts
   464, // `****foo****` — 4-star runs
   466, // `******foo******` — 6-star runs
-
   // --- Links: reference-style links (not supported) ---
   // We only support inline links `[text](url)`, not reference-style
   // `[text][ref]` or `[text]` with `[ref]: /url "title"` definitions.
@@ -121,8 +122,7 @@ void main() {
     return;
   }
 
-  final specJson =
-      jsonDecode(specFile.readAsStringSync()) as List<dynamic>;
+  final specJson = jsonDecode(specFile.readAsStringSync()) as List<dynamic>;
   final codec = MarkdownCodec();
 
   group('CommonMark spec — decode does not throw', () {
@@ -137,8 +137,11 @@ void main() {
         final md = (example['markdown'] as String).trimRight();
         // Should never throw.
         final doc = codec.decode(md);
-        expect(doc.blocks, isNotEmpty,
-            reason: 'Decoded document should have at least one block');
+        expect(
+          doc.blocks,
+          isNotEmpty,
+          reason: 'Decoded document should have at least one block',
+        );
       });
     }
   });
@@ -160,11 +163,14 @@ void main() {
         final snap1 = _snapshot(first);
         final snap2 = _snapshot(second);
 
-        expect(snap2, equals(snap1),
-            reason:
-                'decode(encode(decode(md))) should equal decode(md)\n'
-                'markdown: ${json.encode(md)}\n'
-                're-encoded: ${json.encode(reEncoded)}');
+        expect(
+          snap2,
+          equals(snap1),
+          reason:
+              'decode(encode(decode(md))) should equal decode(md)\n'
+              'markdown: ${json.encode(md)}\n'
+              're-encoded: ${json.encode(reEncoded)}',
+        );
       });
     }
   });
@@ -230,17 +236,24 @@ void main() {
 
     test('mixed block types', () {
       _assertRoundTrip(
-          codec, '# Title\n\nParagraph\n\n- item\n\n---\n\n1. one');
+        codec,
+        '# Title\n\nParagraph\n\n- item\n\n---\n\n1. one',
+      );
     });
 
     test('empty paragraph between blocks', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph,
-            segments: [const StyledSegment('above')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph,
-            segments: const []),
-        TextBlock(id: 'c', blockType: BlockType.h2,
-            segments: [const StyledSegment('Heading')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
+        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.h2,
+          segments: [const StyledSegment('Heading')],
+        ),
       ]);
       final md = codec.encode(doc);
       final decoded = codec.decode(md);
@@ -309,8 +322,9 @@ void main() {
 
     test('all styles in one paragraph', () {
       _assertRoundTrip(
-          codec,
-          'Normal **bold** *italic* ~~strike~~ [link](url)');
+        codec,
+        'Normal **bold** *italic* ~~strike~~ [link](url)',
+      );
     });
   });
 
@@ -401,32 +415,53 @@ void main() {
   group('Edge cases — encode specifics', () {
     test('consecutive list items use tight separator', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem,
-            segments: [const StyledSegment('one')]),
-        TextBlock(id: 'b', blockType: BlockType.listItem,
-            segments: [const StyledSegment('two')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('one')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('two')],
+        ),
       ]);
       expect(codec.encode(doc), '- one\n- two');
     });
 
     test('paragraph after list uses double newline', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem,
-            segments: [const StyledSegment('item')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph,
-            segments: [const StyledSegment('para')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.listItem,
+          segments: [const StyledSegment('item')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('para')],
+        ),
       ]);
       expect(codec.encode(doc), '- item\n\npara');
     });
 
     test('numbered list ordinals are sequential', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.numberedList,
-            segments: [const StyledSegment('a')]),
-        TextBlock(id: 'b', blockType: BlockType.numberedList,
-            segments: [const StyledSegment('b')]),
-        TextBlock(id: 'c', blockType: BlockType.numberedList,
-            segments: [const StyledSegment('c')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('a')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('b')],
+        ),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.numberedList,
+          segments: [const StyledSegment('c')],
+        ),
       ]);
       expect(codec.encode(doc), '1. a\n2. b\n3. c');
     });
@@ -438,8 +473,11 @@ void main() {
           blockType: BlockType.listItem,
           segments: [const StyledSegment('parent')],
           children: [
-            TextBlock(id: 'b', blockType: BlockType.listItem,
-                segments: [const StyledSegment('child')]),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('child')],
+            ),
           ],
         ),
       ]);
@@ -448,12 +486,18 @@ void main() {
 
     test('task item checked state encodes correctly', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.taskItem,
-            segments: [const StyledSegment('a')],
-            metadata: {'checked': false}),
-        TextBlock(id: 'b', blockType: BlockType.taskItem,
-            segments: [const StyledSegment('b')],
-            metadata: {'checked': true}),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('a')],
+          metadata: {'checked': false},
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.taskItem,
+          segments: [const StyledSegment('b')],
+          metadata: {'checked': true},
+        ),
       ]);
       expect(codec.encode(doc), '- [ ] a\n- [x] b');
     });
@@ -469,8 +513,12 @@ void _assertRoundTrip(MarkdownCodec codec, String md) {
   final snap1 = _snapshot(first);
   final snap2 = _snapshot(second);
 
-  expect(snap2, equals(snap1),
-      reason: 'Round-trip failed.\n'
-          'Input:      ${json.encode(md)}\n'
-          'Re-encoded: ${json.encode(encoded)}');
+  expect(
+    snap2,
+    equals(snap1),
+    reason:
+        'Round-trip failed.\n'
+        'Input:      ${json.encode(md)}\n'
+        'Re-encoded: ${json.encode(encoded)}',
+  );
 }

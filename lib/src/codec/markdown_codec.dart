@@ -6,10 +6,17 @@ import 'format.dart';
 import 'inline_codec.dart';
 
 /// ASCII punctuation characters that can be backslash-escaped in CommonMark.
-const _escapable = r'!"#$%&' "'" r'()*+,-./:;<=>?@[\]^_`{|}~';
+const _escapable =
+    r'!"#$%&'
+    "'"
+    r'()*+,-./:;<=>?@[\]^_`{|}~';
 
 /// Regex matching a backslash followed by an ASCII punctuation character.
-final _backslashEscape = RegExp(r'\\([!"#$%&' "'" r'()*+,\-./:;<=>?@\[\\\]^_`{|}~])');
+final _backslashEscape = RegExp(
+  r'\\([!"#$%&'
+  "'"
+  r'()*+,\-./:;<=>?@\[\\\]^_`{|}~])',
+);
 
 /// Unescape CommonMark backslash escapes: `\*` → `*`, `\[` → `[`, etc.
 String unescapeMarkdown(String text) {
@@ -20,7 +27,7 @@ String unescapeMarkdown(String text) {
 /// Only escapes chars that our codec actually uses as syntax.
 String escapeMarkdown(String text) {
   return text.replaceAllMapped(
-    RegExp(r'[\\*_~\[\]]'),
+    RegExp(r'[\\*_~\[\]`]'),
     (m) => '\\${m.group(0)}',
   );
 }
@@ -56,7 +63,8 @@ class MarkdownCodec {
       if (i > 0) {
         final prev = entries[i - 1];
         final curr = entries[i];
-        final tightPair = _schema.isListLike(prev.blockType) &&
+        final tightPair =
+            _schema.isListLike(prev.blockType) &&
             _schema.isListLike(curr.blockType);
         // An empty block already contributes "" as its line, so the \n\n
         // separator before it produces one blank line. Use \n after
@@ -70,7 +78,10 @@ class MarkdownCodec {
   }
 
   void _encodeBlocks(
-      List<TextBlock> blocks, int depth, List<_EncodedLine> entries) {
+    List<TextBlock> blocks,
+    int depth,
+    List<_EncodedLine> entries,
+  ) {
     var numberedOrdinal = 0;
     for (final block in blocks) {
       final content = _encodeSegments(block.segments);
@@ -90,9 +101,7 @@ class MarkdownCodec {
       );
 
       final codec = _blockCodec(block.blockType);
-      final line = codec != null
-          ? codec.encode(block, ctx)
-          : '$indent$content';
+      final line = codec != null ? codec.encode(block, ctx) : '$indent$content';
 
       entries.add(_EncodedLine(line, block.blockType, depth));
 
@@ -182,32 +191,136 @@ class MarkdownCodec {
   // Decode
   // -----------------------------------------------------------------------
 
+  /// Regex matching a fenced code block opening: 3+ backticks or tildes,
+  /// optionally followed by a language identifier.
+  static final _fenceOpen = RegExp(r'^(`{3,}|~{3,})(.*)$');
+
   Document decode(String markdown) {
     if (markdown.isEmpty) {
       return Document.empty(_schema.defaultBlockType);
     }
-    // Split on \n\n for paragraph breaks, then further split tight lists
-    // (consecutive lines that each match a block prefix).
-    final rawParagraphs = markdown.split('\n\n');
-    final paragraphs = <String>[];
-    for (final p in rawParagraphs) {
-      if (p.contains('\n')) {
-        // Check if this paragraph has multiple lines that are each block-typed.
-        final lines = p.split('\n');
-        if (lines.length > 1 && lines.every(_looksLikeBlock)) {
-          paragraphs.addAll(lines);
-          continue;
-        }
-      }
-      paragraphs.add(p);
+
+    // Fence-aware block splitter: split lines into blocks, keeping fenced
+    // code block regions (including blank lines) as single multi-line strings.
+    final paragraphs = _splitBlocks(markdown);
+
+    if (paragraphs.isEmpty) {
+      return Document.empty(_schema.defaultBlockType);
     }
 
     final parsed = paragraphs.map((text) {
+      // Check for fenced code block (multi-line string starting with ```)
+      final fenceMatch = _fenceOpen.firstMatch(text.split('\n').first);
+      if (fenceMatch != null) {
+        return (0, _decodeFencedCodeBlock(text, fenceMatch));
+      }
       final (depth, content) = _stripIndent(text);
       return (depth, _decodeBlock(content));
     }).toList();
 
     return Document(buildTreeFromPairs(parsed, 0));
+  }
+
+  /// Split markdown into block-level strings, aware of fenced code blocks.
+  ///
+  /// Outside a fence: blank lines separate blocks, tight-list detection
+  /// applies. Inside a fence: everything (including blank lines) is
+  /// accumulated until the closing fence.
+  List<String> _splitBlocks(String markdown) {
+    final lines = markdown.split('\n');
+    final blocks = <String>[];
+    final current = StringBuffer();
+    var inFence = false;
+    String? fenceDelim;
+
+    void flushCurrent() {
+      if (current.isEmpty) return;
+      final block = current.toString();
+      current.clear();
+      // Apply tight-list splitting to the flushed block.
+      if (block.contains('\n')) {
+        final subLines = block.split('\n');
+        if (subLines.length > 1 && subLines.every(_looksLikeBlock)) {
+          blocks.addAll(subLines);
+          return;
+        }
+      }
+      blocks.add(block);
+    }
+
+    for (final line in lines) {
+      if (!inFence) {
+        // Check for fence opening.
+        final fence = _fenceOpen.firstMatch(line);
+        if (fence != null) {
+          flushCurrent();
+          inFence = true;
+          fenceDelim = fence.group(1)!;
+          current.write(line);
+          continue;
+        }
+
+        if (line.isEmpty) {
+          flushCurrent();
+        } else {
+          if (current.isNotEmpty) current.write('\n');
+          current.write(line);
+        }
+      } else {
+        current.write('\n');
+        current.write(line);
+        // Check for fence closing: line is just the delimiter (or longer).
+        final delim = fenceDelim!;
+        final trimmed = line.trimRight();
+        final closingChar = delim[0];
+        if (RegExp('^$closingChar{${delim.length},}\$').hasMatch(trimmed)) {
+          flushCurrent();
+          inFence = false;
+          fenceDelim = null;
+        }
+      }
+    }
+
+    flushCurrent();
+    return blocks;
+  }
+
+  /// Decode a fenced code block from its multi-line string.
+  TextBlock _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
+    final lines = text.split('\n');
+    final lang = fenceMatch.group(2)!.trim();
+    final fenceDelim = fenceMatch.group(1)!;
+    final closingChar = fenceDelim[0];
+    final closingPattern = RegExp('^$closingChar{${fenceDelim.length},}\$');
+
+    // Find closing fence line (skip first line which is the opening).
+    var endIndex = lines.length;
+    for (var i = 1; i < lines.length; i++) {
+      if (closingPattern.hasMatch(lines[i].trimRight())) {
+        endIndex = i;
+        break;
+      }
+    }
+
+    // Content is everything between opening and closing fence.
+    final content = lines.sublist(1, endIndex).join('\n');
+
+    // Look up the code block type key from the schema.
+    Object? codeBlockKey;
+    for (final entry in _schema.blocks.entries) {
+      if (entry.value.label == 'Code Block') {
+        codeBlockKey = entry.key;
+        break;
+      }
+    }
+    codeBlockKey ??= _schema.defaultBlockType;
+
+    return TextBlock(
+      id: generateBlockId(),
+      blockType: codeBlockKey,
+      segments: [StyledSegment(content)],
+      metadata: lang.isNotEmpty ? {'language': lang} : const {},
+    );
   }
 
   /// Strip leading indentation and return (depth, remaining content).
@@ -221,9 +334,7 @@ class MarkdownCodec {
       if (text[i] == '\t') {
         depth++;
         i++;
-      } else if (i + 1 < text.length &&
-          text[i] == ' ' &&
-          text[i + 1] == ' ') {
+      } else if (i + 1 < text.length && text[i] == ' ' && text[i + 1] == ' ') {
         depth++;
         i += 2;
       } else {
@@ -242,7 +353,9 @@ class MarkdownCodec {
     // which we don't support, but we still avoid stripping those).
     var stripped = text;
     var leading = 0;
-    while (leading < 3 && leading < stripped.length && stripped[leading] == ' ') {
+    while (leading < 3 &&
+        leading < stripped.length &&
+        stripped[leading] == ' ') {
       leading++;
     }
     if (leading > 0) stripped = text.substring(leading);
@@ -294,7 +407,7 @@ class MarkdownCodec {
   ///
   /// Wrap matches are recursively decoded so that `**1 *2* 3**` correctly
   /// produces bold("1 ") + bold+italic("2") + bold(" 3").
-  List<StyledSegment> _decodeSegments(String text, [int _depth = 0]) {
+  List<StyledSegment> _decodeSegments(String text, [int depth = 0]) {
     final wrapEntries = _inlineWrapEntries();
     final decodeEntries = _inlineDecodeEntries();
 
@@ -313,10 +426,12 @@ class MarkdownCodec {
       for (var i = 0; i < wrapEntries.length; i++) {
         for (var j = i + 1; j < wrapEntries.length; j++) {
           final combined = wrapEntries[i].wrap + wrapEntries[j].wrap;
-          combinedEntries.add(_InlineCombinedWrapEntry(
-            {wrapEntries[i].key, wrapEntries[j].key},
-            combined,
-          ));
+          combinedEntries.add(
+            _InlineCombinedWrapEntry({
+              wrapEntries[i].key,
+              wrapEntries[j].key,
+            }, combined),
+          );
         }
       }
       // Sort combined by length descending so longest matches first.
@@ -354,8 +469,9 @@ class MarkdownCodec {
           continue;
         }
         segments.add(
-          StyledSegment(
-              decoded.match.text, {decoded.key}, decoded.match.attributes),
+          StyledSegment(decoded.match.text, {
+            decoded.key,
+          }, decoded.match.attributes),
         );
         pos += decoded.match.fullMatchLength;
         continue;
@@ -379,14 +495,15 @@ class MarkdownCodec {
               styles = {wrapEntries[i - combinedEntries.length].key};
             }
 
-            if (styles.isNotEmpty && _depth < _maxDecodeDepth) {
-              final inner = _decodeSegments(content, _depth + 1);
+            if (styles.isNotEmpty && depth < _maxDecodeDepth) {
+              final inner = _decodeSegments(content, depth + 1);
               for (final seg in inner) {
-                segments.add(StyledSegment(
-                  seg.text,
-                  {...seg.styles, ...styles},
-                  seg.attributes,
-                ));
+                segments.add(
+                  StyledSegment(seg.text, {
+                    ...seg.styles,
+                    ...styles,
+                  }, seg.attributes),
+                );
               }
             } else if (styles.isNotEmpty) {
               segments.add(StyledSegment(content, styles));

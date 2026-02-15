@@ -85,6 +85,47 @@ class _EditorScreenState extends State<EditorScreen> {
         segments: [const StyledSegment('Heading 3 example')],
       ),
       TextBlock(
+        id: 'bh4',
+        blockType: BlockType.h4,
+        segments: [const StyledSegment('Heading 4 example')],
+      ),
+      TextBlock(
+        id: 'bh5',
+        blockType: BlockType.h5,
+        segments: [const StyledSegment('Heading 5 example')],
+      ),
+      TextBlock(
+        id: 'bh6',
+        blockType: BlockType.h6,
+        segments: [const StyledSegment('Heading 6 example')],
+      ),
+      TextBlock(
+        id: 'bq1',
+        blockType: BlockType.blockQuote,
+        segments: [const StyledSegment('This is a block quote')],
+      ),
+      TextBlock(
+        id: 'binline',
+        blockType: BlockType.paragraph,
+        segments: [
+          const StyledSegment('Here is some '),
+          const StyledSegment('inline code', {InlineStyle.code}),
+          const StyledSegment(' in a paragraph.'),
+        ],
+      ),
+      TextBlock(
+        id: 'bcode',
+        blockType: BlockType.codeBlock,
+        segments: [const StyledSegment('void main() {\n  print("Hello!");\n}')],
+        metadata: {'language': 'dart'},
+      ),
+      TextBlock(
+        id: 'bimg',
+        blockType: BlockType.image,
+        segments: [const StyledSegment('Flutter logo')],
+        metadata: {'url': 'https://storage.googleapis.com/cms-storage-bucket/6e19fee6b47b36ca613f.png'},
+      ),
+      TextBlock(
         id: 'b3',
         blockType: BlockType.listItem,
         segments: [const StyledSegment('Parent item')],

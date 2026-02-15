@@ -458,6 +458,32 @@ class DividerBackspaceRule extends InputRule {
   }
 }
 
+/// Enter inside a code block inserts a literal newline instead of splitting.
+///
+/// Code blocks store multi-line content as a single block with embedded `\n`.
+/// This rule intercepts SplitBlock and replaces it with InsertText('\n').
+class CodeBlockEnterRule extends InputRule {
+  @override
+  Transaction? tryTransform(
+      Transaction pending, Document doc, EditorSchema schema) {
+    final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
+    if (splitOp == null) return null;
+
+    final block = doc.allBlocks[splitOp.blockIndex];
+    if (schema.blockDef(block.blockType).label != 'Code Block') return null;
+
+    final globalOffset =
+        doc.globalOffset(splitOp.blockIndex, splitOp.offset);
+
+    return Transaction(
+      operations: [
+        InsertText(splitOp.blockIndex, splitOp.offset, '\n'),
+      ],
+      selectionAfter: TextSelection.collapsed(offset: globalOffset + 1),
+    );
+  }
+}
+
 /// Find the first InsertText operation in a transaction, if any.
 InsertText? _findInsertOp(Transaction tx) {
   for (final op in tx.operations) {

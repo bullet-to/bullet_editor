@@ -7,8 +7,16 @@ void main() {
 
     test('encode plain paragraphs', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Hello')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('World')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Hello')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('World')],
+        ),
       ]);
       expect(codec.encode(doc), 'Hello\n\nWorld');
     });
@@ -144,7 +152,11 @@ void main() {
             const StyledSegment(' and normal'),
           ],
         ),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('Second paragraph')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Second paragraph')],
+        ),
       ]);
 
       final markdown = codec.encode(original);
@@ -281,9 +293,17 @@ void main() {
 
     test('round-trip divider between paragraphs', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Above')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Above')],
+        ),
         TextBlock(id: 'b', blockType: BlockType.divider),
-        TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('Below')]),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Below')],
+        ),
       ]);
       final md = codec.encode(doc);
       expect(md, 'Above\n\n---\n\nBelow');
@@ -497,13 +517,29 @@ void main() {
       // With empty para: "above\n\n\n## Heading" (two blank lines visible).
       // The empty para contributes one extra \n.
       final withEmpty = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
         TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
-        TextBlock(id: 'c', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.h2,
+          segments: [const StyledSegment('Heading')],
+        ),
       ]);
       final without = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
-        TextBlock(id: 'c', blockType: BlockType.h2, segments: [const StyledSegment('Heading')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.h2,
+          segments: [const StyledSegment('Heading')],
+        ),
       ]);
       final resultWith = codec.encode(withEmpty);
       final resultWithout = codec.encode(without);
@@ -514,7 +550,8 @@ void main() {
     });
 
     test('full document round-trip preserves structure', () {
-      final md = '# Welcome\n\n'
+      final md =
+          '# Welcome\n\n'
           'Paragraph\n\n'
           '- Parent\n\n'
           '  - Child\n\n'
@@ -524,9 +561,13 @@ void main() {
           '2. Second';
       final decoded = codec.decode(md);
       // Parent should have Child as nested.
-      expect(decoded.blocks.length, 7); // h1, para, list(+child), list, divider, num, num
+      expect(
+        decoded.blocks.length,
+        7,
+      ); // h1, para, list(+child), list, divider, num, num
       final parentBlock = decoded.blocks.firstWhere(
-          (b) => b.plainText == 'Parent');
+        (b) => b.plainText == 'Parent',
+      );
       expect(parentBlock.children.length, 1);
       expect(parentBlock.children[0].plainText, 'Child');
     });
@@ -624,8 +665,11 @@ void main() {
 
     test('encode divider always produces ---', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.divider,
-            segments: [const StyledSegment('')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.divider,
+          segments: [const StyledSegment('')],
+        ),
       ]);
       expect(codec.encode(doc), '---');
     });
@@ -659,17 +703,24 @@ void main() {
 
     test('encode plain text escapes markdown chars', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph,
-            segments: [const StyledSegment('foo *bar* baz')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('foo *bar* baz')],
+        ),
       ]);
       expect(codec.encode(doc), r'foo \*bar\* baz');
     });
 
     test('encode does not escape inside styled spans', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
-          const StyledSegment('hello *world*', {InlineStyle.bold}),
-        ]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [
+            const StyledSegment('hello *world*', {InlineStyle.bold}),
+          ],
+        ),
       ]);
       // The * inside bold span should NOT be escaped.
       expect(codec.encode(doc), '**hello *world***');
@@ -689,6 +740,264 @@ void main() {
       final reDecoded = codec.decode(encoded);
       expect(reDecoded.blocks[0].blockType, BlockType.paragraph);
       expect(reDecoded.blocks[0].plainText, '## foo');
+    });
+
+    // --- H4-H6 ---
+
+    test('decode H4', () {
+      final doc = codec.decode('#### foo');
+      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('decode H5', () {
+      final doc = codec.decode('##### foo');
+      expect(doc.blocks[0].blockType, BlockType.h5);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('decode H6', () {
+      final doc = codec.decode('###### foo');
+      expect(doc.blocks[0].blockType, BlockType.h6);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('encode H4-H6 round-trip', () {
+      final md = '#### H4\n\n##### H5\n\n###### H6';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[1].blockType, BlockType.h5);
+      expect(doc.blocks[2].blockType, BlockType.h6);
+      final reEncoded = codec.encode(doc);
+      expect(reEncoded, md);
+    });
+
+    test('empty H4-H6', () {
+      expect(codec.decode('####').blocks[0].blockType, BlockType.h4);
+      expect(codec.decode('####').blocks[0].plainText, '');
+      expect(codec.decode('#####').blocks[0].blockType, BlockType.h5);
+      expect(codec.decode('######').blocks[0].blockType, BlockType.h6);
+    });
+
+    test('H4 trailing # stripping', () {
+      final doc = codec.decode('#### foo ####');
+      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('H4 with leading spaces', () {
+      final doc = codec.decode('  #### foo');
+      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    // --- Inline code ---
+
+    test('decode inline code', () {
+      final doc = codec.decode('foo `bar` baz');
+      expect(doc.blocks[0].segments.length, 3);
+      expect(doc.blocks[0].segments[1].text, 'bar');
+      expect(doc.blocks[0].segments[1].styles, {InlineStyle.code});
+    });
+
+    test('inline code content is literal (no italic)', () {
+      final doc = codec.decode('`*foo*`');
+      expect(doc.blocks[0].segments.length, 1);
+      expect(doc.blocks[0].segments[0].text, '*foo*');
+      expect(doc.blocks[0].segments[0].styles, {InlineStyle.code});
+    });
+
+    test('encode inline code round-trip', () {
+      final doc = codec.decode('foo `code` bar');
+      final encoded = codec.encode(doc);
+      expect(encoded, 'foo `code` bar');
+    });
+
+    test('literal backtick in plain text is escaped', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('foo ` bar')],
+        ),
+      ]);
+      expect(codec.encode(doc), r'foo \` bar');
+    });
+
+    test('inline code round-trip preserves content', () {
+      final doc = codec.decode('`hello world`');
+      final encoded = codec.encode(doc);
+      final reDecoded = codec.decode(encoded);
+      expect(reDecoded.blocks[0].segments[0].text, 'hello world');
+      expect(reDecoded.blocks[0].segments[0].styles, {InlineStyle.code});
+    });
+
+    // --- Autolinks ---
+
+    test('decode angle-bracket autolink', () {
+      final doc = codec.decode('see <https://example.com> here');
+      expect(doc.blocks[0].segments.length, 3);
+      expect(doc.blocks[0].segments[1].text, 'https://example.com');
+      expect(doc.blocks[0].segments[1].styles, {InlineStyle.link});
+      expect(
+        doc.blocks[0].segments[1].attributes['url'],
+        'https://example.com',
+      );
+    });
+
+    test('decode bare URL', () {
+      final doc = codec.decode('visit https://flutter.dev today');
+      expect(doc.blocks[0].segments.length, 3);
+      expect(doc.blocks[0].segments[1].text, 'https://flutter.dev');
+      expect(doc.blocks[0].segments[1].styles, {InlineStyle.link});
+      expect(
+        doc.blocks[0].segments[1].attributes['url'],
+        'https://flutter.dev',
+      );
+    });
+
+    test('standard link still works with autolinks', () {
+      final doc = codec.decode('[text](https://example.com)');
+      expect(doc.blocks[0].segments[0].text, 'text');
+      expect(
+        doc.blocks[0].segments[0].attributes['url'],
+        'https://example.com',
+      );
+    });
+
+    test('autolink round-trip normalizes to standard link', () {
+      final doc = codec.decode('<https://example.com>');
+      final encoded = codec.encode(doc);
+      expect(encoded, '[https://example.com](https://example.com)');
+    });
+
+    // --- Images ---
+
+    test('decode image block', () {
+      final doc = codec.decode('![alt text](image.png)');
+      expect(doc.blocks[0].blockType, BlockType.image);
+      expect(doc.blocks[0].plainText, 'alt text');
+      expect(doc.blocks[0].metadata['url'], 'image.png');
+    });
+
+    test('encode image round-trip', () {
+      final doc = codec.decode('![photo](https://example.com/img.jpg)');
+      final encoded = codec.encode(doc);
+      expect(encoded, '![photo](https://example.com/img.jpg)');
+    });
+
+    test('image with empty alt text', () {
+      final doc = codec.decode('![](url.png)');
+      expect(doc.blocks[0].blockType, BlockType.image);
+      expect(doc.blocks[0].plainText, '');
+      expect(doc.blocks[0].metadata['url'], 'url.png');
+    });
+
+    test('mixed text with image syntax stays paragraph', () {
+      final doc = codec.decode('before ![img](url) after');
+      expect(doc.blocks[0].blockType, BlockType.paragraph);
+    });
+
+    // --- Block quotes ---
+
+    test('decode block quote', () {
+      final doc = codec.decode('> Hello world');
+      expect(doc.blocks[0].blockType, BlockType.blockQuote);
+      expect(doc.blocks[0].plainText, 'Hello world');
+    });
+
+    test('encode block quote round-trip', () {
+      final doc = codec.decode('> Some quote');
+      final encoded = codec.encode(doc);
+      expect(encoded, '> Some quote');
+    });
+
+    test('block quote with indented children', () {
+      final md = '> Parent quote\n  - Child item';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.blockQuote);
+      expect(doc.blocks[0].plainText, 'Parent quote');
+      expect(doc.blocks[0].children.length, 1);
+      expect(doc.blocks[0].children[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].children[0].plainText, 'Child item');
+    });
+
+    test('consecutive block quotes use tight separator', () {
+      final doc = codec.decode('> First\n> Second');
+      expect(doc.blocks.length, 2);
+      expect(doc.blocks[0].blockType, BlockType.blockQuote);
+      expect(doc.blocks[1].blockType, BlockType.blockQuote);
+    });
+
+    test('block quote round-trip with children', () {
+      final md = '> Quote\n\n  - Item';
+      final doc = codec.decode(md);
+      final encoded = codec.encode(doc);
+      final reDecoded = codec.decode(encoded);
+      expect(reDecoded.blocks[0].blockType, BlockType.blockQuote);
+      expect(reDecoded.blocks[0].children.length, 1);
+    });
+
+    // --- Fenced code blocks ---
+
+    test('decode fenced code block', () {
+      final md = '```\nfoo\nbar\n```';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].plainText, 'foo\nbar');
+    });
+
+    test('decode fenced code block with language', () {
+      final md = '```dart\nvoid main() {}\n```';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].metadata['language'], 'dart');
+      expect(doc.blocks[0].plainText, 'void main() {}');
+    });
+
+    test('fenced code block preserves blank lines inside', () {
+      final md = '```\nline1\n\nline3\n```';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].plainText, 'line1\n\nline3');
+    });
+
+    test('fenced code block no inline decode', () {
+      final md = '```\n*bold* and `code`\n```';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].segments.length, 1);
+      expect(doc.blocks[0].plainText, '*bold* and `code`');
+      expect(doc.blocks[0].segments[0].styles, isEmpty);
+    });
+
+    test('encode fenced code block round-trip', () {
+      final md = '```python\nprint("hi")\n```';
+      final doc = codec.decode(md);
+      final encoded = codec.encode(doc);
+      expect(encoded, md);
+    });
+
+    test('tilde fenced code block', () {
+      final md = '~~~\nfoo\n~~~';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].plainText, 'foo');
+    });
+
+    test('unclosed fence includes rest as content', () {
+      final md = '```\nfoo\nbar';
+      final doc = codec.decode(md);
+      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].plainText, 'foo\nbar');
+    });
+
+    test('fenced code block between paragraphs', () {
+      final md = 'before\n\n```\ncode\n```\n\nafter';
+      final doc = codec.decode(md);
+      expect(doc.blocks.length, 3);
+      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[1].blockType, BlockType.codeBlock);
+      expect(doc.blocks[2].blockType, BlockType.paragraph);
     });
   });
 }

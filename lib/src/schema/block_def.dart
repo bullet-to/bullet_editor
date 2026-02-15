@@ -21,6 +21,7 @@ class BlockDef {
     this.isHeading = false,
     this.splitInheritsType = false,
     this.spacingBefore = 0.0,
+    this.spacingAfter = 0.0,
     this.baseStyle,
     this.prefixBuilder,
     this.codecs,
@@ -62,6 +63,12 @@ class BlockDef {
   /// 0.0 means no extra spacing. Only applies when the block is not the first
   /// in the document. Typical values: h1 1.0, h2 0.8, divider 0.4.
   final double spacingBefore;
+
+  /// Vertical spacing after this block, in em units (multiples of the base
+  /// font size). Rendered as an extra blank line below the block.
+  /// 0.0 means no extra spacing. Only applies when the block is not the last
+  /// in the document.
+  final double spacingAfter;
 
   /// Returns the base [TextStyle] for this block type, given the editor's
   /// base style. Return null to use the base style unchanged.

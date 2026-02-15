@@ -25,16 +25,20 @@ bool hasPrefix(Document doc, int flatIndex, EditorSchema schema) {
   final block = doc.allBlocks[flatIndex];
   return schema.isListLike(block.blockType) ||
       schema.isVoid(block.blockType) ||
-      doc.depthOf(flatIndex) > 0;
+      doc.depthOf(flatIndex) > 0 ||
+      schema.blockDef(block.blockType).prefixBuilder != null;
 }
 
 /// Whether a block has a spacer line before it (display-only `\n` that
 /// creates an empty line whose height is controlled by the current block's
-/// `spacingBefore` value). Always false for the first block.
+/// `spacingBefore` value or the previous block's `spacingAfter`).
+/// Always false for the first block.
 bool hasSpacerBefore(Document doc, int flatIndex, EditorSchema schema) {
   if (flatIndex <= 0) return false;
   final block = doc.allBlocks[flatIndex];
-  return schema.blockDef(block.blockType).spacingBefore > 0;
+  final prevBlock = doc.allBlocks[flatIndex - 1];
+  return schema.blockDef(block.blockType).spacingBefore > 0 ||
+      schema.blockDef(prevBlock.blockType).spacingAfter > 0;
 }
 
 /// Convert a display offset (TextField) to a model offset (Document).

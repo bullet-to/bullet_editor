@@ -96,6 +96,114 @@ abstract final class Blocks {
     return s;
   }
 
+  /// Heading 6.
+  static BlockDef h6({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
+    return BlockDef(
+      label: 'Heading 6',
+      isHeading: true,
+      spacingBefore: style?.spacingBefore ?? 0.4,
+      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      baseStyle: (base) {
+        final size =
+            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 0.85);
+        return (base ?? const TextStyle()).copyWith(
+          fontSize: size,
+          fontWeight: style?.fontWeight ?? FontWeight.w600,
+          height: style?.lineHeight ?? 1.3,
+        );
+      },
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) =>
+              '${ctx.indent}###### ${_escapeTrailingHashes(ctx.content)}',
+          decode: (line) {
+            if (line == '######' || line.startsWith('###### ')) {
+              final raw = line.length <= 7 ? '' : line.substring(7);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
+          },
+        ),
+      },
+      inputRules: [
+        PrefixBlockRule('######', BlockType.h6),
+        HeadingBackspaceRule(),
+      ],
+    );
+  }
+
+  /// Heading 5.
+  static BlockDef h5({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
+    return BlockDef(
+      label: 'Heading 5',
+      isHeading: true,
+      spacingBefore: style?.spacingBefore ?? 0.4,
+      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      baseStyle: (base) {
+        final size =
+            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 0.875);
+        return (base ?? const TextStyle()).copyWith(
+          fontSize: size,
+          fontWeight: style?.fontWeight ?? FontWeight.w600,
+          height: style?.lineHeight ?? 1.3,
+        );
+      },
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) =>
+              '${ctx.indent}##### ${_escapeTrailingHashes(ctx.content)}',
+          decode: (line) {
+            if (line == '#####' || line.startsWith('##### ')) {
+              final raw = line.length <= 6 ? '' : line.substring(6);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
+          },
+        ),
+      },
+      inputRules: [
+        PrefixBlockRule('#####', BlockType.h5),
+        HeadingBackspaceRule(),
+      ],
+    );
+  }
+
+  /// Heading 4.
+  static BlockDef h4({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
+    return BlockDef(
+      label: 'Heading 4',
+      isHeading: true,
+      spacingBefore: style?.spacingBefore ?? 0.5,
+      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      baseStyle: (base) {
+        final size =
+            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 1.0);
+        return (base ?? const TextStyle()).copyWith(
+          fontSize: size,
+          fontWeight: style?.fontWeight ?? FontWeight.w600,
+          height: style?.lineHeight ?? 1.3,
+        );
+      },
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) =>
+              '${ctx.indent}#### ${_escapeTrailingHashes(ctx.content)}',
+          decode: (line) {
+            if (line == '####' || line.startsWith('#### ')) {
+              final raw = line.length <= 5 ? '' : line.substring(5);
+              return DecodeMatch(_stripTrailingHashes(raw));
+            }
+            return null;
+          },
+        ),
+      },
+      inputRules: [
+        PrefixBlockRule('####', BlockType.h4),
+        HeadingBackspaceRule(),
+      ],
+    );
+  }
+
   /// Heading 3.
   static BlockDef h3({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
     return BlockDef(
@@ -125,7 +233,10 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [PrefixBlockRule('###', BlockType.h3), HeadingBackspaceRule()],
+      inputRules: [
+        PrefixBlockRule('###', BlockType.h3),
+        HeadingBackspaceRule(),
+      ],
     );
   }
 
@@ -298,6 +409,87 @@ abstract final class Blocks {
     );
   }
 
+  /// Fenced code block. Content is literal text (no inline styles).
+  /// Language stored in metadata `{'language': 'dart'}`.
+  static BlockDef codeBlock() {
+    return BlockDef(
+      label: 'Code Block',
+      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      baseStyle: (base) => (base ?? const TextStyle()).copyWith(
+        fontFamily: _monoFontFamily,
+        fontFamilyFallback: _monoFontFallbacks,
+        fontSize: ((base?.fontSize ?? kFallbackFontSize) * 0.9),
+        backgroundColor: const Color(0x30808080),
+      ),
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) {
+            final lang = block.metadata['language'] ?? '';
+            final content = block.plainText;
+            return '${ctx.indent}```$lang\n$content\n```';
+          },
+          // Decode handled specially in MarkdownCodec._decodeBlock
+          // for multi-line fenced content.
+        ),
+      },
+      inputRules: [CodeBlockEnterRule()],
+    );
+  }
+
+  /// Block quote.
+  static BlockDef blockQuote({Color? barColor}) {
+    return BlockDef(
+      label: 'Block Quote',
+      policies: const BlockPolicies(
+        canBeChild: true,
+        canHaveChildren: true,
+        maxDepth: 6,
+      ),
+      baseStyle: (base) {
+        final size = (base?.fontSize ?? kFallbackFontSize) * 1.1;
+        return (base ?? const TextStyle()).copyWith(
+          fontSize: size,
+          fontStyle: FontStyle.italic,
+          color: const Color(0xFF9E9E9E),
+          height: 1.5,
+        );
+      },
+      spacingBefore: 0.1,
+      spacingAfter: 0.1,
+      prefixBuilder: (doc, i, block, style) {
+        final fontSize = style.fontSize ?? kFallbackFontSize;
+        final barHeight = fontSize * 1.4;
+        return SizedBox(
+          width: 16,
+          height: barHeight,
+          child: Center(
+            child: Container(
+              width: 3,
+              height: barHeight,
+              decoration: BoxDecoration(
+                color: barColor ?? const Color(0xFFBDBDBD),
+                borderRadius: BorderRadius.circular(1.5),
+              ),
+            ),
+          ),
+        );
+      },
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) => '${ctx.indent}> ${ctx.content}',
+          decode: (line) {
+            if (!line.startsWith('> ')) return null;
+            return DecodeMatch(line.substring(2));
+          },
+        ),
+      },
+      inputRules: [
+        PrefixBlockRule('>', BlockType.blockQuote),
+        NestedBackspaceRule(),
+      ],
+    );
+  }
+
   /// Horizontal divider (void block).
   static BlockDef divider({Color? color}) {
     return BlockDef(
@@ -318,6 +510,42 @@ abstract final class Blocks {
         ),
       },
       inputRules: [DividerRule(), DividerBackspaceRule()],
+    );
+  }
+
+  /// Image (void block). Alt text stored as content, URL in metadata.
+  static BlockDef image() {
+    return BlockDef(
+      label: 'Image',
+      isVoid: true,
+      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      prefixBuilder: (doc, i, block, style) {
+        final url = block.metadata['url'] ?? '';
+        final alt = block.plainText;
+        return SizedBox(
+          width: double.infinity,
+          height: 100,
+          child: Center(
+            child: Text(
+              alt.isNotEmpty ? '[$alt]' : '[Image: $url]',
+              style: TextStyle(color: style.color?.withValues(alpha: 0.5)),
+            ),
+          ),
+        );
+      },
+      codecs: {
+        Format.markdown: BlockCodec(
+          encode: (block, ctx) {
+            final url = block.metadata['url'] ?? '';
+            return '${ctx.indent}![${ctx.content}]($url)';
+          },
+          decode: (line) {
+            final m = RegExp(r'^!\[([^\]]*)\]\(([^)]+)\)$').firstMatch(line);
+            if (m == null) return null;
+            return DecodeMatch(m.group(1)!, metadata: {'url': m.group(2)!});
+          },
+        ),
+      },
     );
   }
 
@@ -388,13 +616,36 @@ abstract final class Inlines {
             return '[$text]($url)';
           },
           decode: (text) {
-            final match = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
-            if (match == null) return null;
-            return InlineDecodeMatch(
-              text: match.group(1)!,
-              fullMatchLength: match.end,
-              attributes: {'url': match.group(2)!},
-            );
+            // Standard inline link: [text](url)
+            final inline = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(text);
+            if (inline != null) {
+              return InlineDecodeMatch(
+                text: inline.group(1)!,
+                fullMatchLength: inline.end,
+                attributes: {'url': inline.group(2)!},
+              );
+            }
+            // Autolink: <https://...> or <http://...>
+            final angle = RegExp(r'^<(https?://[^>]+)>').firstMatch(text);
+            if (angle != null) {
+              final url = angle.group(1)!;
+              return InlineDecodeMatch(
+                text: url,
+                fullMatchLength: angle.end,
+                attributes: {'url': url},
+              );
+            }
+            // Bare URL: https://... or http://...
+            final bare = RegExp(r'^https?://[^\s<>\[\])]+').firstMatch(text);
+            if (bare != null) {
+              final url = bare.group(0)!;
+              return InlineDecodeMatch(
+                text: url,
+                fullMatchLength: bare.end,
+                attributes: {'url': url},
+              );
+            }
+            return null;
           },
         ),
       },
@@ -430,11 +681,39 @@ abstract final class Inlines {
   static InlineStyleDef strikethrough() {
     return InlineStyleDef(
       label: 'Strikethrough',
-      shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true),
+      shortcut: const SingleActivator(
+        LogicalKeyboardKey.keyS,
+        meta: true,
+        shift: true,
+      ),
       applyStyle: (base, {attributes = const {}}) =>
           base.copyWith(decoration: TextDecoration.lineThrough),
       codecs: {Format.markdown: const InlineCodec(wrap: '~~')},
       inputRules: [StrikethroughWrapRule()],
+    );
+  }
+
+  /// Inline code (monospace).
+  static InlineStyleDef code() {
+    return InlineStyleDef(
+      label: 'Code',
+      applyStyle: (base, {attributes = const {}}) => base.copyWith(
+        fontFamily: _monoFontFamily,
+        fontFamilyFallback: _monoFontFallbacks,
+        fontSize: (base.fontSize ?? kFallbackFontSize) * 0.9,
+        backgroundColor: const Color(0x30808080),
+      ),
+      codecs: {
+        Format.markdown: InlineCodec(
+          encode: (text, attributes) => '`$text`',
+          decode: (text) {
+            final m = RegExp(r'^`([^`]+)`').firstMatch(text);
+            if (m == null) return null;
+            return InlineDecodeMatch(text: m.group(1)!, fullMatchLength: m.end);
+          },
+        ),
+      },
+      inputRules: [InlineWrapRule('`', InlineStyle.code)],
     );
   }
 }
@@ -465,6 +744,9 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
   HeadingStyle? h1,
   HeadingStyle? h2,
   HeadingStyle? h3,
+  HeadingStyle? h4,
+  HeadingStyle? h5,
+  HeadingStyle? h6,
   // Colors (null = derive from text color brightness).
   Color? linkColor,
   Color? accentColor,
@@ -485,6 +767,9 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
     indentPerDepthFactor: indentPerDepthFactor ?? 1.5,
     blocks: {
       // --- Order: specific prefix rules before general ones ---
+      BlockType.h6: Blocks.h6(style: h6, prefixWidthFactor: pwf),
+      BlockType.h5: Blocks.h5(style: h5, prefixWidthFactor: pwf),
+      BlockType.h4: Blocks.h4(style: h4, prefixWidthFactor: pwf),
       BlockType.h3: Blocks.h3(style: h3, prefixWidthFactor: pwf),
       BlockType.h2: Blocks.h2(style: h2, prefixWidthFactor: pwf),
       BlockType.h1: Blocks.h1(style: h1, prefixWidthFactor: pwf),
@@ -497,12 +782,16 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
         prefixWidthFactor: pwf,
       ),
       BlockType.numberedList: Blocks.numberedList(prefixWidthFactor: pwf),
+      BlockType.blockQuote: Blocks.blockQuote(),
+      BlockType.codeBlock: Blocks.codeBlock(),
       BlockType.divider: Blocks.divider(color: dividerColor),
+      BlockType.image: Blocks.image(),
       BlockType.paragraph: Blocks.paragraph(),
       if (additionalBlocks != null) ...additionalBlocks,
     },
     inlineStyles: {
       InlineStyle.link: Inlines.link(color: linkColor),
+      InlineStyle.code: Inlines.code(),
       InlineStyle.bold: Inlines.bold(),
       InlineStyle.italic: Inlines.italic(),
       InlineStyle.strikethrough: Inlines.strikethrough(),
@@ -517,6 +806,17 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
 
 /// Fallback font size when no style is provided.
 const double kFallbackFontSize = 16.0;
+
+/// Primary monospace font family (platform-appropriate).
+const String _monoFontFamily = 'Menlo';
+
+/// Fallback monospace families for cross-platform coverage.
+const List<String> _monoFontFallbacks = [
+  'Consolas',
+  'SF Mono',
+  'Roboto Mono',
+  'monospace',
+];
 
 /// Compute prefix width from a resolved font size and factor.
 double prefixWidth(double fontSize, [double factor = 1.5]) => fontSize * factor;
