@@ -1,3 +1,13 @@
+## 0.1.4
+
+### Bug fixes
+- Fix keyboard shortcuts (Cmd+B, Cmd+I, Shift+Enter, etc.) not working in
+  host apps. Moved all key handling from `FocusNode.onKeyEvent` (which
+  `EditableText` overwrites) to `Shortcuts` + `Actions` widgets.
+- Fix markdown decoder nesting indented list items under headings/paragraphs.
+  Blocks whose parent type has `canHaveChildren: false` are now collapsed to
+  sibling level during decode.
+
 ## 0.1.3
 
 ### Improvements

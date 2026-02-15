@@ -170,7 +170,7 @@ class _EditorScreenState extends State<EditorScreen> {
     );
     _controller.addListener(() => setState(() {}));
 
-    _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
+    _focusNode = FocusNode();
   }
 
   @override
@@ -265,26 +265,7 @@ class _EditorScreenState extends State<EditorScreen> {
     return buf.toString();
   }
 
-  /// App-level keyboard shortcuts. Bold/italic/strikethrough, copy/cut,
-  /// Tab, undo/redo are all handled by BulletEditor via the schema.
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
-
-    final isMeta =
-        HardwareKeyboard.instance.isMetaPressed ||
-        HardwareKeyboard.instance.isControlPressed;
-    if (!isMeta) return KeyEventResult.ignored;
-
-    // Cmd+K → link dialog (app-specific, needs UI).
-    if (event.logicalKey == LogicalKeyboardKey.keyK) {
-      _showLinkDialog();
-      return KeyEventResult.handled;
-    }
-
-    return KeyEventResult.ignored;
-  }
+  // App-level shortcuts are added via Shortcuts widget in build().
 
   @override
   Widget build(BuildContext context) {
@@ -333,9 +314,27 @@ class _EditorScreenState extends State<EditorScreen> {
             const SizedBox(height: 8),
             Expanded(
               flex: 3,
-              child: BulletEditor(
-                controller: _controller,
-                focusNode: _focusNode,
+              // Cmd+K for link dialog is app-specific, so it lives here
+              // rather than in BulletEditor.
+              child: Shortcuts(
+                shortcuts: const {
+                  SingleActivator(LogicalKeyboardKey.keyK, meta: true):
+                      _LinkDialogIntent(),
+                },
+                child: Actions(
+                  actions: {
+                    _LinkDialogIntent: CallbackAction<_LinkDialogIntent>(
+                      onInvoke: (_) {
+                        _showLinkDialog();
+                        return null;
+                      },
+                    ),
+                  },
+                  child: BulletEditor(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -368,4 +367,8 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
     );
   }
+}
+
+class _LinkDialogIntent extends Intent {
+  const _LinkDialogIntent();
 }

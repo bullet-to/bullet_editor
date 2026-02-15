@@ -1083,5 +1083,36 @@ void main() {
       expect(md, '```dart\nline 1\nline 2\n```');
     });
     });
+
+    group('indented list normalization', () {
+      test('indented list with no parent decodes as root-level', () {
+        final doc = codec.decode('  - Parent\n    - Child');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].plainText, 'Parent');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'Child');
+        // depth 0, not 1
+        expect(doc.depthOf(0), 0);
+      });
+
+      test('heading followed by indented list keeps them as siblings', () {
+        final doc = codec.decode('# Header\n\n  - Item');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.h1);
+        expect(doc.blocks[1].blockType, BlockType.listItem);
+        expect(doc.depthOf(0), 0);
+        expect(doc.depthOf(1), 0);
+      });
+
+      test('uniformly indented blocks all become depth 0', () {
+        final doc = codec.decode('  - A\n  - B\n    - C');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].plainText, 'A');
+        expect(doc.blocks[1].plainText, 'B');
+        expect(doc.blocks[1].children.length, 1);
+        expect(doc.blocks[1].children[0].plainText, 'C');
+      });
+    });
   });
 }

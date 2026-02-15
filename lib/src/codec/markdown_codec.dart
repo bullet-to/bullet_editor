@@ -224,7 +224,12 @@ class MarkdownCodec<B extends Object> {
       return (depth, _decodeBlock(content));
     }).toList();
 
-    return Document(buildTreeFromPairs(parsed, 0));
+    // Normalize depths: ensure no block is nested under a parent whose
+    // block type doesn't support children (e.g. headings, code blocks).
+    // Also close depth gaps (no jump > 1 between consecutive blocks).
+    final normalized = _normalizeDepths(parsed);
+
+    return Document(buildTreeFromPairs(normalized, 0));
   }
 
   /// Split markdown into block-level strings, aware of fenced code blocks.
@@ -327,6 +332,47 @@ class MarkdownCodec<B extends Object> {
       segments: [StyledSegment(content)],
       metadata: lang.isNotEmpty ? {'language': lang} : const {},
     );
+  }
+
+  /// Normalize (depth, block) pairs so that:
+  ///  1. No depth gap > 1 between consecutive blocks.
+  ///  2. No block is nested under a parent whose type has
+  ///     `canHaveChildren: false` (e.g. headings, code blocks, dividers).
+  ///
+  /// Iterates until stable (typically 1-2 passes).
+  List<(int, TextBlock<B>)> _normalizeDepths(
+      List<(int, TextBlock<B>)> parsed) {
+    final adj = List<(int, TextBlock<B>)>.of(parsed);
+    var changed = true;
+    while (changed) {
+      changed = false;
+      // Close depth gaps.
+      for (var i = 1; i < adj.length; i++) {
+        final maxDepth = adj[i - 1].$1 + 1;
+        if (adj[i].$1 > maxDepth) {
+          adj[i] = (maxDepth, adj[i].$2);
+          changed = true;
+        }
+      }
+      // Collapse blocks whose would-be parent can't have children.
+      for (var i = 1; i < adj.length; i++) {
+        final curDepth = adj[i].$1;
+        if (curDepth == 0) continue;
+        // Walk backwards to find the nearest block at curDepth - 1.
+        for (var j = i - 1; j >= 0; j--) {
+          if (adj[j].$1 == curDepth - 1) {
+            final parentDef = _schema.blockDef(adj[j].$2.blockType);
+            if (!parentDef.policies.canHaveChildren) {
+              adj[i] = (curDepth - 1, adj[i].$2);
+              changed = true;
+            }
+            break;
+          }
+          if (adj[j].$1 < curDepth - 1) break;
+        }
+      }
+    }
+    return adj;
   }
 
   /// Strip leading indentation and return (depth, remaining content).
