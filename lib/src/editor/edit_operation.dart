@@ -603,6 +603,11 @@ class IndentBlock extends EditOperation {
 /// after its parent.
 ///
 /// Only valid for nested blocks (depth > 0).
+///
+/// When the block has subsequent siblings, those siblings become children
+/// of the outdented block (standard behavior matching Notion / Google Docs).
+/// This preserves visual ordering: the outdented block appears right after
+/// its former parent, and its former later siblings stay below it.
 class OutdentBlock extends EditOperation {
   OutdentBlock(this.flatIndex);
   final int flatIndex;
@@ -613,14 +618,28 @@ class OutdentBlock extends EditOperation {
     if (parent == null) return doc; // Already at root — can't outdent.
 
     final block = doc.allBlocks[flatIndex];
+    final sibIdx = doc.siblingIndex(flatIndex);
+    final siblings = parent.children;
 
-    // Remove block from parent's children.
-    var result = doc.removeBlockByFlatIndex(flatIndex);
+    // Collect subsequent siblings (they'll become children of the
+    // outdented block to preserve visual order).
+    final subsequentSiblings = siblings.sublist(sibIdx + 1);
 
-    // Insert as sibling after the parent.
-    final parentFlatIndex = result.indexOfBlock(parent.id);
-    if (parentFlatIndex < 0) return doc;
-    result = result.insertAfterFlatIndex(parentFlatIndex, block);
+    // Build the outdented block with its existing children + adopted siblings.
+    final updatedBlock = block.copyWith(
+      children: [...block.children, ...subsequentSiblings],
+    );
+
+    // Remove the block and all subsequent siblings from the parent.
+    final trimmedChildren = siblings.sublist(0, sibIdx);
+    final parentFlatIndex = doc.indexOfBlock(parent.id);
+    final updatedParent = parent.copyWith(children: trimmedChildren);
+    var result = doc.replaceBlockByFlatIndex(parentFlatIndex, updatedParent);
+
+    // Insert the outdented block as a sibling after the (now trimmed) parent.
+    final newParentIdx = result.indexOfBlock(parent.id);
+    if (newParentIdx < 0) return doc;
+    result = result.insertAfterFlatIndex(newParentIdx, updatedBlock);
 
     return result;
   }

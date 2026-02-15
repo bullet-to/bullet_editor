@@ -1,3 +1,10 @@
+## 0.1.5
+
+### Bug fixes
+- Fix outdent reordering siblings. Outdenting a block now adopts its
+  subsequent siblings as children (matching Notion/Google Docs behavior),
+  preserving visual order.
+
 ## 0.1.4
 
 ### Bug fixes

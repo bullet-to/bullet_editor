@@ -578,6 +578,58 @@ void main() {
       expect(controller.document.blocks[1].blockType, BlockType.paragraph);
     });
 
+    test('outdent adopts subsequent siblings as children', () {
+      // Parent with three children: A, B, C. Outdent B.
+      // Expected: Parent has only A. B becomes sibling with C as child.
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'parent',
+            blockType: BlockType.listItem,
+            segments: [const StyledSegment('Parent')],
+            children: [
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.listItem,
+                segments: [const StyledSegment('A')],
+              ),
+              TextBlock(
+                id: 'b',
+                blockType: BlockType.listItem,
+                segments: [const StyledSegment('B')],
+              ),
+              TextBlock(
+                id: 'c',
+                blockType: BlockType.listItem,
+                segments: [const StyledSegment('C')],
+              ),
+            ],
+          ),
+        ]),
+      );
+
+      // Place cursor in B.
+      controller.value = TextEditingValue(
+        text: controller.text,
+        selection: TextSelection.collapsed(
+          offset: controller.text.indexOf('B'),
+        ),
+      );
+
+      controller.outdent();
+
+      // Parent should have only A as child.
+      expect(controller.document.blocks[0].children.length, 1);
+      expect(controller.document.blocks[0].children[0].id, 'a');
+      // B becomes root sibling after Parent.
+      expect(controller.document.blocks.length, 2);
+      expect(controller.document.blocks[1].id, 'b');
+      // C becomes child of B.
+      expect(controller.document.blocks[1].children.length, 1);
+      expect(controller.document.blocks[1].children[0].id, 'c');
+    });
+
     test('backspace on empty list item keeps cursor in place', () {
       final controller = EditorController(
         schema: EditorSchema.standard(),
