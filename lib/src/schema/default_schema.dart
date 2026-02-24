@@ -329,17 +329,20 @@ abstract final class Blocks {
             return '${ctx.indent}- [${checked ? 'x' : ' '}] ${ctx.content}';
           },
           decode: (line) {
-            if (line.startsWith('- [x] ')) {
-              return DecodeMatch(
-                line.substring(6),
-                metadata: {kCheckedKey: true},
-              );
-            }
-            if (line.startsWith('- [ ] ')) {
-              return DecodeMatch(
-                line.substring(6),
-                metadata: {kCheckedKey: false},
-              );
+            final markers = ['- ', '* ', '+ '];
+            for (final m in markers) {
+              if (line.startsWith('${m}[x] ')) {
+                return DecodeMatch(
+                  line.substring(m.length + 4),
+                  metadata: {kCheckedKey: true},
+                );
+              }
+              if (line.startsWith('${m}[ ] ')) {
+                return DecodeMatch(
+                  line.substring(m.length + 4),
+                  metadata: {kCheckedKey: false},
+                );
+              }
             }
             return null;
           },
@@ -369,8 +372,12 @@ abstract final class Blocks {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
           decode: (line) {
-            if (!line.startsWith('- ')) return null;
-            return DecodeMatch(line.substring(2));
+            if (line.startsWith('- ') ||
+                line.startsWith('* ') ||
+                line.startsWith('+ ')) {
+              return DecodeMatch(line.substring(2));
+            }
+            return null;
           },
         ),
       },
@@ -399,7 +406,7 @@ abstract final class Blocks {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
           decode: (line) {
-            final match = RegExp(r'^\d+\. ').firstMatch(line);
+            final match = RegExp(r'^\d+[.)] ').firstMatch(line);
             if (match == null) return null;
             return DecodeMatch(line.substring(match.end));
           },

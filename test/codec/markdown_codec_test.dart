@@ -984,104 +984,109 @@ void main() {
     // Soft / hard line breaks
     // -------------------------------------------------------------------------
     group('line breaks', () {
-    test('decode: two trailing spaces + newline → hard break (\\n in content)',
+      test(
+        'decode: two trailing spaces + newline → hard break (\\n in content)',
         () {
-      final doc = codec.decode('line one  \nline two');
-      expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].plainText, 'line one\nline two');
-    });
-
-    test('decode: backslash + newline → hard break', () {
-      final doc = codec.decode('line one\\\nline two');
-      expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].plainText, 'line one\nline two');
-    });
-
-    test('decode: plain newline → soft break (space)', () {
-      final doc = codec.decode('line one\nline two');
-      expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].plainText, 'line one line two');
-    });
-
-    test('decode: multiple hard breaks', () {
-      final doc = codec.decode('a  \nb  \nc');
-      expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].plainText, 'a\nb\nc');
-    });
-
-    test('decode: hard break in heading', () {
-      final doc = codec.decode('# title  \ncontinued');
-      // Heading decoder takes first line; continuation is a separate paragraph
-      // because _splitBlocks treats non-block lines after a heading as a new block.
-      // Actually: _splitBlocks joins them. Let's see what happens:
-      final text = doc.blocks[0].plainText;
-      // The heading prefix is stripped. Content may include the continuation.
-      expect(text.contains('\n') || doc.blocks.length > 1, true);
-    });
-
-    test('encode: \\n in block content → two trailing spaces + newline', () {
-      final block = TextBlock(
-        id: 'b1',
-        blockType: BlockType.paragraph,
-        segments: [StyledSegment('line one\nline two')],
+          final doc = codec.decode('line one  \nline two');
+          expect(doc.blocks.length, 1);
+          expect(doc.blocks[0].plainText, 'line one\nline two');
+        },
       );
-      final doc = Document([block]);
-      final md = codec.encode(doc);
-      expect(md, 'line one  \nline two');
-    });
 
-    test('encode: multiple \\n in content', () {
-      final block = TextBlock(
-        id: 'b1',
-        blockType: BlockType.paragraph,
-        segments: [StyledSegment('a\nb\nc')],
-      );
-      final doc = Document([block]);
-      final md = codec.encode(doc);
-      expect(md, 'a  \nb  \nc');
-    });
+      test('decode: backslash + newline → hard break', () {
+        final doc = codec.decode('line one\\\nline two');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'line one\nline two');
+      });
 
-    test('round-trip: hard break survives encode→decode', () {
-      final block = TextBlock(
-        id: 'b1',
-        blockType: BlockType.paragraph,
-        segments: [StyledSegment('hello\nworld')],
-      );
-      final doc = Document([block]);
-      final md = codec.encode(doc);
-      final decoded = codec.decode(md);
-      expect(decoded.blocks.length, 1);
-      expect(decoded.blocks[0].plainText, 'hello\nworld');
-    });
+      test('decode: plain newline → soft break (space)', () {
+        final doc = codec.decode('line one\nline two');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'line one line two');
+      });
 
-    test('round-trip: hard break with inline styles', () {
-      final block = TextBlock(
-        id: 'b1',
-        blockType: BlockType.paragraph,
-        segments: [
-          StyledSegment('bold line', {InlineStyle.bold}),
-          StyledSegment('\nplain line'),
-        ],
-      );
-      final doc = Document([block]);
-      final md = codec.encode(doc);
-      expect(md.contains('  \n'), true);
-      final decoded = codec.decode(md);
-      expect(decoded.blocks[0].plainText, 'bold line\nplain line');
-    });
+      test('decode: multiple hard breaks', () {
+        final doc = codec.decode('a  \nb  \nc');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'a\nb\nc');
+      });
 
-    test('code blocks preserve literal newlines (no hard break encoding)', () {
-      final block = TextBlock(
-        id: 'b1',
-        blockType: BlockType.codeBlock,
-        segments: [StyledSegment('line 1\nline 2')],
-        metadata: const {'language': 'dart'},
+      test('decode: hard break in heading', () {
+        final doc = codec.decode('# title  \ncontinued');
+        // Heading decoder takes first line; continuation is a separate paragraph
+        // because _splitBlocks treats non-block lines after a heading as a new block.
+        // Actually: _splitBlocks joins them. Let's see what happens:
+        final text = doc.blocks[0].plainText;
+        // The heading prefix is stripped. Content may include the continuation.
+        expect(text.contains('\n') || doc.blocks.length > 1, true);
+      });
+
+      test('encode: \\n in block content → two trailing spaces + newline', () {
+        final block = TextBlock(
+          id: 'b1',
+          blockType: BlockType.paragraph,
+          segments: [StyledSegment('line one\nline two')],
+        );
+        final doc = Document([block]);
+        final md = codec.encode(doc);
+        expect(md, 'line one  \nline two');
+      });
+
+      test('encode: multiple \\n in content', () {
+        final block = TextBlock(
+          id: 'b1',
+          blockType: BlockType.paragraph,
+          segments: [StyledSegment('a\nb\nc')],
+        );
+        final doc = Document([block]);
+        final md = codec.encode(doc);
+        expect(md, 'a  \nb  \nc');
+      });
+
+      test('round-trip: hard break survives encode→decode', () {
+        final block = TextBlock(
+          id: 'b1',
+          blockType: BlockType.paragraph,
+          segments: [StyledSegment('hello\nworld')],
+        );
+        final doc = Document([block]);
+        final md = codec.encode(doc);
+        final decoded = codec.decode(md);
+        expect(decoded.blocks.length, 1);
+        expect(decoded.blocks[0].plainText, 'hello\nworld');
+      });
+
+      test('round-trip: hard break with inline styles', () {
+        final block = TextBlock(
+          id: 'b1',
+          blockType: BlockType.paragraph,
+          segments: [
+            StyledSegment('bold line', {InlineStyle.bold}),
+            StyledSegment('\nplain line'),
+          ],
+        );
+        final doc = Document([block]);
+        final md = codec.encode(doc);
+        expect(md.contains('  \n'), true);
+        final decoded = codec.decode(md);
+        expect(decoded.blocks[0].plainText, 'bold line\nplain line');
+      });
+
+      test(
+        'code blocks preserve literal newlines (no hard break encoding)',
+        () {
+          final block = TextBlock(
+            id: 'b1',
+            blockType: BlockType.codeBlock,
+            segments: [StyledSegment('line 1\nline 2')],
+            metadata: const {'language': 'dart'},
+          );
+          final doc = Document([block]);
+          final md = codec.encode(doc);
+          // Code blocks use fenced format, not trailing-space hard breaks.
+          expect(md, '```dart\nline 1\nline 2\n```');
+        },
       );
-      final doc = Document([block]);
-      final md = codec.encode(doc);
-      // Code blocks use fenced format, not trailing-space hard breaks.
-      expect(md, '```dart\nline 1\nline 2\n```');
-    });
     });
 
     group('indented list normalization', () {
@@ -1139,7 +1144,9 @@ void main() {
       });
 
       test('heading followed by odd-space-indented siblings', () {
-        final doc = codec.decode('# Header\n\n   - One\n   - Two\n      - Child');
+        final doc = codec.decode(
+          '# Header\n\n   - One\n   - Two\n      - Child',
+        );
         expect(doc.blocks.length, 3, reason: 'Header, One, Two as roots');
         expect(doc.blocks[0].blockType, BlockType.h1);
         expect(doc.blocks[1].plainText, 'One');
@@ -1150,9 +1157,7 @@ void main() {
       });
 
       test('deeply indented list normalizes relative depths', () {
-        final doc = codec.decode(
-          '    - A\n    - B\n      - C\n        - D',
-        );
+        final doc = codec.decode('    - A\n    - B\n      - C\n        - D');
         // A, B are roots. C is child of B. D is child of C.
         expect(doc.blocks.length, 2);
         expect(doc.blocks[0].plainText, 'A');
@@ -1161,6 +1166,113 @@ void main() {
         expect(doc.blocks[1].children[0].plainText, 'C');
         expect(doc.blocks[1].children[0].children.length, 1);
         expect(doc.blocks[1].children[0].children[0].plainText, 'D');
+      });
+    });
+
+    group('tab indentation', () {
+      test('single tab equals one depth level', () {
+        final doc = codec.decode('- Parent\n\t- Child');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'Parent');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'Child');
+      });
+
+      test('nested tabs produce multiple depth levels', () {
+        final doc = codec.decode('- A\n\t- B\n\t\t- C');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'A');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'B');
+        expect(doc.blocks[0].children[0].children.length, 1);
+        expect(doc.blocks[0].children[0].children[0].plainText, 'C');
+      });
+
+      test('mixed tabs and spaces', () {
+        final doc = codec.decode('- A\n\t- B\n\t  - C');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'A');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'B');
+        expect(doc.blocks[0].children[0].children.length, 1);
+        expect(doc.blocks[0].children[0].children[0].plainText, 'C');
+      });
+
+      test('tab-indented list with no parent normalizes to root', () {
+        final doc = codec.decode('\t- A\n\t\t- B');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'A');
+        expect(doc.depthOf(0), 0);
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'B');
+      });
+    });
+
+    group('alternative list markers (* and +)', () {
+      test('* marker decodes as bullet list', () {
+        final doc = codec.decode('* Alpha\n* Beta');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].plainText, 'Alpha');
+        expect(doc.blocks[1].blockType, BlockType.listItem);
+        expect(doc.blocks[1].plainText, 'Beta');
+      });
+
+      test('+ marker decodes as bullet list', () {
+        final doc = codec.decode('+ Alpha\n+ Beta');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].plainText, 'Alpha');
+      });
+
+      test('nested * markers', () {
+        final doc = codec.decode('* Parent\n  * Child');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'Parent');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'Child');
+      });
+
+      test('* task items decode correctly', () {
+        final doc = codec.decode('* [x] Done\n* [ ] Todo');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.taskItem);
+        expect(doc.blocks[0].plainText, 'Done');
+        expect(doc.blocks[0].metadata[kCheckedKey], true);
+        expect(doc.blocks[1].blockType, BlockType.taskItem);
+        expect(doc.blocks[1].plainText, 'Todo');
+        expect(doc.blocks[1].metadata[kCheckedKey], false);
+      });
+
+      test('encoding always uses - marker', () {
+        final doc = codec.decode('* Alpha\n* Beta');
+        final encoded = codec.encode(doc);
+        expect(encoded, '- Alpha\n- Beta');
+      });
+    });
+
+    group('numbered list ) delimiter', () {
+      test(') delimiter decodes as numbered list', () {
+        final doc = codec.decode('1) First\n2) Second');
+        expect(doc.blocks.length, 2);
+        expect(doc.blocks[0].blockType, BlockType.numberedList);
+        expect(doc.blocks[0].plainText, 'First');
+        expect(doc.blocks[1].blockType, BlockType.numberedList);
+        expect(doc.blocks[1].plainText, 'Second');
+      });
+
+      test('nested ) delimiter', () {
+        final doc = codec.decode('1) Parent\n  1) Child');
+        expect(doc.blocks.length, 1);
+        expect(doc.blocks[0].plainText, 'Parent');
+        expect(doc.blocks[0].children.length, 1);
+        expect(doc.blocks[0].children[0].plainText, 'Child');
+      });
+
+      test('encoding always uses . delimiter', () {
+        final doc = codec.decode('1) First\n2) Second');
+        final encoded = codec.encode(doc);
+        expect(encoded, '1. First\n2. Second');
       });
     });
   });
