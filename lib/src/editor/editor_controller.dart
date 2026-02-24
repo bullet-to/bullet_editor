@@ -570,15 +570,16 @@ class EditorController<B extends Object, S extends Object>
     _syncToTextField(modelSelection: modelSel);
   }
 
-  /// Apply a link to the current selection, or update the link at the cursor.
+  /// Apply a link to the current selection, or insert/update a link at the cursor.
   ///
-  /// With a selection: applies [InlineStyle.link] with the given [url].
-  /// With a collapsed cursor inside an existing link: updates that link's URL.
-  /// To remove a link, use `toggleStyle(InlineStyle.link)` on a linked selection.
-  void setLink(String url) {
+  /// - **Non-collapsed selection:** applies [InlineStyle.link] with [url].
+  /// - **Collapsed cursor inside an existing link:** updates that link's URL
+  ///   (and optionally its display [text]).
+  /// - **Collapsed cursor not on a link:** inserts [text] (or [url] if [text]
+  ///   is null) as a new linked segment at the cursor position.
+  void setLink(String url, {String? text}) {
     if (!value.selection.isValid) return;
 
-    // Collapsed cursor inside an existing link → update that segment's URL.
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
       final pos = _document.blockAt(modelOffset);
@@ -589,40 +590,61 @@ class EditorController<B extends Object, S extends Object>
         if (pos.localOffset >= segStart &&
             pos.localOffset <= segEnd &&
             seg.styles.contains(InlineStyle.link)) {
-          // Found the link segment — apply remove + add over its range.
+          // Inside an existing link → update its URL (and text if provided).
           final globalStart = _document.globalOffset(pos.blockIndex, segStart);
           _pushUndo();
           final attrs = {'url': url};
-          final tx = Transaction(
-            operations: [
-              ToggleStyle(
-                pos.blockIndex,
-                segStart,
-                segEnd,
-                InlineStyle.link,
-                attributes: seg.attributes,
-              ),
-              ToggleStyle(
-                pos.blockIndex,
-                segStart,
-                segEnd,
-                InlineStyle.link,
-                attributes: attrs,
-              ),
+          final ops = <EditOperation>[
+            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
+                attributes: seg.attributes),
+            if (text != null) ...[
+              DeleteText(pos.blockIndex, segStart, segEnd - segStart),
+              InsertText(pos.blockIndex, segStart, text),
             ],
-            selectionAfter: _selectionToModel(value.selection),
-          );
-          _document = tx.apply(_document);
-          _syncToTextField(
-            modelSelection: TextSelection.collapsed(
-              offset: globalStart + (pos.localOffset - segStart),
+            ToggleStyle(
+              pos.blockIndex,
+              segStart,
+              text != null ? segStart + text.length : segEnd,
+              InlineStyle.link,
+              attributes: attrs,
             ),
+          ];
+          final cursorAfter = globalStart + (text?.length ?? (pos.localOffset - segStart));
+          _document = Transaction(
+            operations: ops,
+            selectionAfter: TextSelection.collapsed(offset: cursorAfter),
+          ).apply(_document);
+          _syncToTextField(
+            modelSelection: TextSelection.collapsed(offset: cursorAfter),
           );
           return;
         }
         segStart = segEnd;
       }
-      // Collapsed but not inside a link — nothing to do.
+
+      // Collapsed, not inside a link → insert new linked text.
+      final displayText = text ?? url;
+      if (displayText.isEmpty) return;
+      _pushUndo();
+      final attrs = {'url': url};
+      final ops = <EditOperation>[
+        InsertText(pos.blockIndex, pos.localOffset, displayText),
+        ToggleStyle(
+          pos.blockIndex,
+          pos.localOffset,
+          pos.localOffset + displayText.length,
+          InlineStyle.link,
+          attributes: attrs,
+        ),
+      ];
+      final cursorAfter = modelOffset + displayText.length;
+      _document = Transaction(
+        operations: ops,
+        selectionAfter: TextSelection.collapsed(offset: cursorAfter),
+      ).apply(_document);
+      _syncToTextField(
+        modelSelection: TextSelection.collapsed(offset: cursorAfter),
+      );
       return;
     }
 

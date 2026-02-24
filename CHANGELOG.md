@@ -1,3 +1,16 @@
+## 0.1.8
+
+### Bug fixes
+- Fix iOS autocorrect moving cursor inside the corrected word. The
+  controller now uses the platform cursor when it's past the edit region
+  (autocorrect pattern) and the diff-based cursor otherwise.
+
+### Features
+- `setLink` now accepts an optional `text` parameter. With a collapsed
+  cursor, it inserts linked text at the cursor position instead of
+  being a no-op. Existing links can also have their display text
+  updated.
+
 ## 0.1.7
 
 ### Bug fixes

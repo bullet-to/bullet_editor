@@ -1965,7 +1965,7 @@ void main() {
         expect(linkSeg.attributes['url'], 'https://updated.com');
       });
 
-      test('setLink with collapsed cursor on plain text is no-op', () {
+      test('setLink with collapsed cursor inserts linked text', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -1977,19 +1977,45 @@ void main() {
           ]),
         );
 
+        // Cursor at offset 2 → "pl|ain"
         controller.value = controller.value.copyWith(
-          selection: TextSelection.collapsed(offset: controller.text.indexOf('plain') + 2),
+          selection: TextSelection.collapsed(
+              offset: controller.text.indexOf('plain') + 2),
         );
 
-        controller.setLink('https://example.com');
+        controller.setLink('https://example.com', text: 'link');
 
-        // No link should be applied — collapsed on plain text.
-        expect(
-          controller.document.allBlocks[0].segments.any(
-            (s) => s.styles.contains(InlineStyle.link),
-          ),
-          isFalse,
+        // "link" inserted at cursor with link style.
+        expect(controller.document.allBlocks[0].plainText, 'pllinkain');
+        final linkSeg = controller.document.allBlocks[0].segments
+            .firstWhere((s) => s.styles.contains(InlineStyle.link));
+        expect(linkSeg.text, 'link');
+        expect(linkSeg.attributes['url'], 'https://example.com');
+      });
+
+      test('setLink with collapsed cursor and no text uses URL as text', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
         );
+
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 5),
+        );
+
+        controller.setLink('https://x.com');
+
+        expect(controller.document.allBlocks[0].plainText,
+            'hellohttps://x.com');
+        final linkSeg = controller.document.allBlocks[0].segments
+            .firstWhere((s) => s.styles.contains(InlineStyle.link));
+        expect(linkSeg.text, 'https://x.com');
       });
 
       test('setLink on plain text applies link', () {
