@@ -1491,6 +1491,121 @@ void main() {
       });
     });
 
+    group('iOS autocorrect', () {
+      test('autocorrect replacement preserves platform cursor position', () {
+        // iOS autocorrect: user types "dont " then iOS replaces "dont" with
+        // "don't". The cursor should stay after the space (position 6), not
+        // jump back to position 5 (right after the replaced text).
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('')],
+            ),
+          ]),
+        );
+
+        // User types "dont ".
+        controller.value = const TextEditingValue(
+          text: 'dont ',
+          selection: TextSelection.collapsed(offset: 5),
+        );
+        expect(controller.document.blocks[0].plainText, 'dont ');
+
+        // iOS autocorrect fires: replaces "dont" with "don't", cursor at 6.
+        controller.value = const TextEditingValue(
+          text: "don't ",
+          selection: TextSelection.collapsed(offset: 6),
+        );
+
+        expect(controller.document.blocks[0].plainText, "don't ");
+        expect(
+          controller.value.selection.baseOffset,
+          6,
+          reason: 'cursor must stay after the space, not jump back into word',
+        );
+      });
+
+      test('autocorrect on list item preserves cursor after space', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.listItem,
+              segments: [const StyledSegment('')],
+            ),
+          ]),
+        );
+
+        // User types "dont " on a list item. Display has \uFFFC prefix.
+        controller.value = TextEditingValue(
+          text: '\uFFFCdont ',
+          selection: const TextSelection.collapsed(offset: 6),
+        );
+
+        // iOS autocorrect: "dont" → "don't", cursor after space.
+        controller.value = TextEditingValue(
+          text: "\uFFFCdon't ",
+          selection: const TextSelection.collapsed(offset: 7),
+        );
+
+        expect(controller.document.allBlocks[0].plainText, "don't ");
+        expect(
+          controller.value.selection.baseOffset,
+          7,
+          reason: 'cursor must stay after space on prefixed block',
+        );
+      });
+
+      test('typing into empty block between others places cursor correctly', () {
+        // When typing the first char into an empty block, the \u200B
+        // placeholder disappears. The diff-based cursor must be used
+        // because the platform cursor is stale (positioned in the old
+        // display text that included \u200B).
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(id: 'a', blockType: BlockType.h2,
+                segments: [const StyledSegment('Above')]),
+            TextBlock(id: 'b', blockType: BlockType.paragraph,
+                segments: const []),
+            TextBlock(id: 'c', blockType: BlockType.h3,
+                segments: [const StyledSegment('Below')]),
+          ]),
+        );
+
+        // Find the \u200B placeholder for the empty paragraph.
+        final emptyPos = controller.text.indexOf('\u200B');
+        expect(emptyPos, greaterThanOrEqualTo(0));
+
+        // Click after \u200B (where a real tap lands on zero-width char).
+        final afterEmpty = emptyPos + 1;
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: afterEmpty),
+        );
+
+        // Type 'a' at cursor position.
+        final before = controller.text;
+        controller.value = controller.value.copyWith(
+          text: '${before.substring(0, afterEmpty)}a${before.substring(afterEmpty)}',
+          selection: TextSelection.collapsed(offset: afterEmpty + 1),
+        );
+
+        expect(controller.document.allBlocks[1].plainText, 'a');
+
+        // Cursor must stay on block [1], not jump to block [2].
+        final modelCursor = controller.displayToModel(
+          controller.value.selection.baseOffset,
+        );
+        final cursorBlock = controller.document.blockAt(modelCursor);
+        expect(cursorBlock.blockIndex, 1,
+            reason: 'cursor must stay on paragraph after typing into empty block');
+      });
+    });
+
     group('Link support', () {
       test('setLink applies link style with URL to selection', () {
         final controller = EditorController(

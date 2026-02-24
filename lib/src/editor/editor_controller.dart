@@ -269,18 +269,18 @@ class EditorController<B extends Object, S extends Object>
     final ops = <EditOperation>[];
 
     if (startPos.blockIndex == endPos.blockIndex) {
-      ops.add(DeleteText(
-        startPos.blockIndex,
-        startPos.localOffset,
-        end - start,
-      ));
+      ops.add(
+        DeleteText(startPos.blockIndex, startPos.localOffset, end - start),
+      );
     } else {
-      ops.add(DeleteRange(
-        startPos.blockIndex,
-        startPos.localOffset,
-        endPos.blockIndex,
-        endPos.localOffset,
-      ));
+      ops.add(
+        DeleteRange(
+          startPos.blockIndex,
+          startPos.localOffset,
+          endPos.blockIndex,
+          endPos.localOffset,
+        ),
+      );
     }
 
     // If the selection started at position 0 of a non-default block,
@@ -288,11 +288,13 @@ class EditorController<B extends Object, S extends Object>
     if (startPos.localOffset == 0) {
       final blockType = _document.allBlocks[startPos.blockIndex].blockType;
       if (blockType != _schema.defaultBlockType) {
-        ops.add(ChangeBlockType(
-          startPos.blockIndex,
-          _schema.defaultBlockType,
-          policies: _schema.policies,
-        ));
+        ops.add(
+          ChangeBlockType(
+            startPos.blockIndex,
+            _schema.defaultBlockType,
+            policies: _schema.policies,
+          ),
+        );
       }
     }
 
@@ -492,15 +494,21 @@ class EditorController<B extends Object, S extends Object>
       final startPos = _document.blockAt(start);
       final endPos = _document.blockAt(end);
       if (startPos.blockIndex == endPos.blockIndex) {
-        ops.add(DeleteText(startPos.blockIndex, startPos.localOffset,
-            endPos.localOffset - startPos.localOffset));
+        ops.add(
+          DeleteText(
+            startPos.blockIndex,
+            startPos.localOffset,
+            endPos.localOffset - startPos.localOffset,
+          ),
+        );
       }
     }
 
     final insertOffset = pos.localOffset;
     ops.add(InsertText(pos.blockIndex, insertOffset, '\n'));
 
-    final globalAfter = _document.globalOffset(pos.blockIndex, insertOffset) + 1;
+    final globalAfter =
+        _document.globalOffset(pos.blockIndex, insertOffset) + 1;
     final tx = Transaction(
       operations: ops,
       selectionAfter: TextSelection.collapsed(offset: globalAfter),
@@ -578,21 +586,37 @@ class EditorController<B extends Object, S extends Object>
       var segStart = 0;
       for (final seg in block.segments) {
         final segEnd = segStart + seg.text.length;
-        if (pos.localOffset >= segStart && pos.localOffset <= segEnd &&
+        if (pos.localOffset >= segStart &&
+            pos.localOffset <= segEnd &&
             seg.styles.contains(InlineStyle.link)) {
           // Found the link segment — apply remove + add over its range.
           final globalStart = _document.globalOffset(pos.blockIndex, segStart);
           _pushUndo();
           final attrs = {'url': url};
-          final tx = Transaction(operations: [
-            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
-                attributes: seg.attributes),
-            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
-                attributes: attrs),
-          ], selectionAfter: _selectionToModel(value.selection));
+          final tx = Transaction(
+            operations: [
+              ToggleStyle(
+                pos.blockIndex,
+                segStart,
+                segEnd,
+                InlineStyle.link,
+                attributes: seg.attributes,
+              ),
+              ToggleStyle(
+                pos.blockIndex,
+                segStart,
+                segEnd,
+                InlineStyle.link,
+                attributes: attrs,
+              ),
+            ],
+            selectionAfter: _selectionToModel(value.selection),
+          );
           _document = tx.apply(_document);
           _syncToTextField(
-            modelSelection: TextSelection.collapsed(offset: globalStart + (pos.localOffset - segStart)),
+            modelSelection: TextSelection.collapsed(
+              offset: globalStart + (pos.localOffset - segStart),
+            ),
           );
           return;
         }
@@ -833,8 +857,11 @@ class EditorController<B extends Object, S extends Object>
       if (block.blockType != _schema.defaultBlockType) {
         final tx = Transaction(
           operations: [
-            ChangeBlockType(0, _schema.defaultBlockType,
-                policies: _schema.policies),
+            ChangeBlockType(
+              0,
+              _schema.defaultBlockType,
+              policies: _schema.policies,
+            ),
           ],
           selectionAfter: const TextSelection.collapsed(offset: 0),
         );
@@ -904,15 +931,28 @@ class EditorController<B extends Object, S extends Object>
       return;
     }
 
-    // Compute the model cursor from the diff: right after the inserted text
-    // (or at the deletion point). This is more reliable than mapping the
-    // stale display cursor through the new document, which breaks when
-    // display-only chars (e.g. \u200B placeholder) appear or disappear.
-    final modelCursor = pasteCursor ??
-        TextSelection.collapsed(
+    // Cursor positioning strategy:
+    // - Paste: use pasteCursor (computed from decoded block lengths).
+    // - Platform cursor past the edit (autocorrect): the edit is mid-word
+    //   but the cursor is further ahead (after the trailing space). Use
+    //   the platform cursor mapped through the new document (null →
+    //   fallback in _commitTransaction).
+    // - Otherwise: use the diff-based cursor. Display-only chars (e.g.
+    //   \u200B placeholder) may appear or disappear, making the platform
+    //   cursor stale relative to the new display text.
+    TextSelection? cursorOverride;
+    if (pasteCursor != null) {
+      cursorOverride = pasteCursor;
+    } else {
+      final diffEnd = diff.start + diff.insertedText.length;
+      final platformCursor = value.selection.baseOffset;
+      if (platformCursor <= diffEnd) {
+        cursorOverride = TextSelection.collapsed(
           offset: modelDiff.start + modelDiff.insertedText.length,
         );
-    _commitTransaction(tx, cursorOverride: modelCursor);
+      }
+    }
+    _commitTransaction(tx, cursorOverride: cursorOverride);
 
     // Clear composing state AFTER the resolve frame so _commitTransaction
     // sees isProvisional and skips undo + input rules.
@@ -1039,9 +1079,7 @@ class EditorController<B extends Object, S extends Object>
       // block is inserted BEFORE. The cursor stays on the original block
       // (now at splitOffset + 1) — the user pressed Enter to push their
       // line down, so the cursor follows the content.
-      final cursorAfter = TextSelection.collapsed(
-        offset: splitOffset + 1,
-      );
+      final cursorAfter = TextSelection.collapsed(offset: splitOffset + 1);
       return (
         Transaction(
           operations: [
@@ -1113,8 +1151,11 @@ class EditorController<B extends Object, S extends Object>
         final blockType = _document.allBlocks[startPos.blockIndex].blockType;
         if (blockType != _schema.defaultBlockType) {
           ops.add(
-            ChangeBlockType(startPos.blockIndex, _schema.defaultBlockType,
-                policies: _schema.policies),
+            ChangeBlockType(
+              startPos.blockIndex,
+              _schema.defaultBlockType,
+              policies: _schema.policies,
+            ),
           );
         }
       }
@@ -1262,7 +1303,9 @@ class EditorController<B extends Object, S extends Object>
   String? linkAtDisplayOffset(int displayOffset) {
     final modelOffset = displayToModel(displayOffset);
     return _linkFrom(_document.segmentAt(modelOffset)) ??
-        _linkFrom(_document.segmentAt(modelOffset, boundary: SegmentBoundary.backward));
+        _linkFrom(
+          _document.segmentAt(modelOffset, boundary: SegmentBoundary.backward),
+        );
   }
 
   static String? _linkFrom(StyledSegment? seg) {
