@@ -515,6 +515,47 @@ void main() {
       expect(resultDoc.allBlocks[0].metadata['checked'], false);
       expect(resultDoc.allBlocks[0].plainText, '');
     });
+    test('[ ] on paragraph creates unchecked task (no hyphen)', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('[ ]')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 3, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 4),
+      );
+      final rule = TaskItemRule();
+      final result = rule.tryTransform(pending, doc, schema);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(resultDoc.allBlocks[0].metadata['checked'], false);
+      expect(resultDoc.allBlocks[0].plainText, '');
+    });
+
+    test('[x] on paragraph creates checked task (no hyphen)', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('[x]')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 3, ' ')],
+        selectionAfter: const TextSelection.collapsed(offset: 4),
+      );
+      final rule = TaskItemRule();
+      final result = rule.tryTransform(pending, doc, schema);
+      expect(result, isNotNull);
+      final resultDoc = result!.apply(doc);
+      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(resultDoc.allBlocks[0].metadata['checked'], true);
+      expect(resultDoc.allBlocks[0].plainText, '');
+    });
   });
 
   group('EmptyListItemRule with list-like types', () {

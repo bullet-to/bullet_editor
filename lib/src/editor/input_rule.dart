@@ -266,13 +266,18 @@ class TaskItemRule extends InputRule {
     int prefixLen;
 
     if (block.blockType == schema.defaultBlockType) {
-      // Path 1: full "- [ ] " on a default block type.
       if (text.startsWith('- [ ] ')) {
         checked = false;
         prefixLen = 6;
       } else if (text.startsWith('- [x] ')) {
         checked = true;
         prefixLen = 6;
+      } else if (text.startsWith('[ ] ')) {
+        checked = false;
+        prefixLen = 4;
+      } else if (text.startsWith('[x] ')) {
+        checked = true;
+        prefixLen = 4;
       } else {
         return null;
       }

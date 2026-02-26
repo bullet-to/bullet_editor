@@ -1,3 +1,9 @@
+## 0.1.10
+
+### Features
+- Typing `[ ] ` or `[x] ` on a paragraph now converts to a task item,
+  matching the existing `- [ ] ` shortcut for users who forget the hyphen.
+
 ## 0.1.9
 
 ### Bug fixes
