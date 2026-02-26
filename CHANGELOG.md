@@ -1,3 +1,10 @@
+## 0.1.9
+
+### Bug fixes
+- `setBlockType` now applies to all blocks in a non-collapsed selection,
+  not just the first. Affects bullet list, numbered list, task item,
+  heading, and all other block type conversions.
+
 ## 0.1.8
 
 ### Bug fixes

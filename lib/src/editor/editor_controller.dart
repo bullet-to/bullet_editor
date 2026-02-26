@@ -706,18 +706,25 @@ class EditorController<B extends Object, S extends Object>
     _syncToTextField(modelSelection: modelSel);
   }
 
-  /// Change the block type of the block at the cursor position.
+  /// Change the block type of blocks in the current selection.
+  ///
+  /// - Collapsed selection: changes the single block at the cursor.
+  /// - Non-collapsed selection: changes every block touched by the range.
   void setBlockType(B type) {
     if (!value.selection.isValid) return;
     final modelSel = _selectionToModel(value.selection);
-    final pos = _document.blockAt(modelSel.baseOffset);
+    final (start, end) = _orderedRange(modelSel);
+    final startBlock = _document.blockAt(start).blockIndex;
+    final endBlock = _document.blockAt(end).blockIndex;
 
     _pushUndo();
-    _document = ChangeBlockType(
-      pos.blockIndex,
-      type,
-      policies: _schema.policies,
-    ).apply(_document);
+    for (var i = startBlock; i <= endBlock; i++) {
+      _document = ChangeBlockType(
+        i,
+        type,
+        policies: _schema.policies,
+      ).apply(_document);
+    }
     _syncToTextField(modelSelection: modelSel);
   }
 
