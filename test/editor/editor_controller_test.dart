@@ -2210,6 +2210,241 @@ void main() {
       });
     });
 
+    group('linkInfo', () {
+      test('returns null for invalid selection', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: -1, extentOffset: -1),
+        );
+        expect(controller.linkInfo, isNull);
+      });
+
+      test('collapsed cursor in plain text returns empty LinkInfo', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 3),
+        );
+        expect(controller.linkInfo, const LinkInfo());
+      });
+
+      test('collapsed cursor in a link returns segment text and URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('see '),
+                const StyledSegment(
+                  'here',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+                const StyledSegment(' end'),
+              ],
+            ),
+          ]),
+        );
+        final hereStart = controller.text.indexOf('here');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: hereStart + 2),
+        );
+        expect(
+          controller.linkInfo,
+          const LinkInfo(text: 'here', url: 'https://example.com'),
+        );
+      });
+
+      test('selection in plain text returns selected text, no URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello world')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 6, extentOffset: 11),
+        );
+        expect(controller.linkInfo, const LinkInfo(text: 'world'));
+      });
+
+      test('selection fully inside a link returns text and URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('see '),
+                const StyledSegment(
+                  'click here',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+                const StyledSegment(' end'),
+              ],
+            ),
+          ]),
+        );
+        final linkStart = controller.text.indexOf('click');
+        controller.value = controller.value.copyWith(
+          selection:
+              TextSelection(baseOffset: linkStart, extentOffset: linkStart + 5),
+        );
+        expect(
+          controller.linkInfo,
+          const LinkInfo(text: 'click', url: 'https://example.com'),
+        );
+      });
+
+      test('selection spanning link and plain text returns one URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'lin',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+                const StyledSegment('k rest'),
+              ],
+            ),
+          ]),
+        );
+        // Select "link" (spans both segments).
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 4),
+        );
+        expect(
+          controller.linkInfo,
+          const LinkInfo(text: 'link', url: 'https://example.com'),
+        );
+      });
+
+      test('selection spanning two links with same URL returns that URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'aaa',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+                const StyledSegment(' '),
+                const StyledSegment(
+                  'bbb',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+              ],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 7),
+        );
+        expect(
+          controller.linkInfo,
+          const LinkInfo(text: 'aaa bbb', url: 'https://example.com'),
+        );
+      });
+
+      test('selection spanning two links with different URLs returns no URL',
+          () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'aaa',
+                  {InlineStyle.link},
+                  {'url': 'https://first.com'},
+                ),
+                const StyledSegment(' '),
+                const StyledSegment(
+                  'bbb',
+                  {InlineStyle.link},
+                  {'url': 'https://second.com'},
+                ),
+              ],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 0, extentOffset: 7),
+        );
+        expect(controller.linkInfo, const LinkInfo(text: 'aaa bbb'));
+      });
+
+      test('cross-block selection collects text with newline', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'hello',
+                  {InlineStyle.link},
+                  {'url': 'https://example.com'},
+                ),
+              ],
+            ),
+            TextBlock(
+              id: 'b',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('world')],
+            ),
+          ]),
+        );
+        // Select all text across both blocks.
+        controller.value = controller.value.copyWith(
+          selection:
+              TextSelection(baseOffset: 0, extentOffset: controller.text.length),
+        );
+        expect(
+          controller.linkInfo,
+          const LinkInfo(text: 'hello\nworld', url: 'https://example.com'),
+        );
+      });
+    });
+
     group('encodeSelection', () {
       test('encodes bold text as markdown', () {
         final controller = EditorController(

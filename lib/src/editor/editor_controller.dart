@@ -16,6 +16,32 @@ import 'undo_manager.dart';
 /// Callback for link taps. Receives the URL from the segment's attributes.
 typedef LinkTapCallback = void Function(String url);
 
+/// Pre-fill info for a link dialog.
+///
+/// Returned by [EditorController.linkInfo] to provide the text and URL
+/// that should populate the dialog fields.
+class LinkInfo {
+  const LinkInfo({this.text = '', this.url});
+
+  /// Text to pre-fill. Selected text, or the full link segment text
+  /// when the cursor is collapsed inside a link.
+  final String text;
+
+  /// URL to pre-fill, or null when creating a new link.
+  final String? url;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LinkInfo && text == other.text && url == other.url;
+
+  @override
+  int get hashCode => Object.hash(text, url);
+
+  @override
+  String toString() => 'LinkInfo(text: "$text", url: $url)';
+}
+
 /// The bridge between Flutter's TextField and our document model.
 ///
 /// [B] is the block type key, [S] is the inline style key.
@@ -107,6 +133,68 @@ class EditorController<B extends Object, S extends Object>
         : SegmentBoundary.forward;
     final seg = _document.segmentAt(modelOffset, boundary: boundary);
     return seg?.attributes ?? const {};
+  }
+
+  /// Pre-fill info for a link dialog, or null if the selection is invalid.
+  ///
+  /// - Collapsed cursor in a link: segment text and URL.
+  /// - Collapsed cursor in plain text: empty text, no URL.
+  /// - Selection with exactly one link URL: selected text and that URL.
+  /// - Selection with 0 or 2+ different URLs: selected text, no URL.
+  LinkInfo? get linkInfo {
+    final sel = value.selection;
+    if (!sel.isValid) return null;
+
+    if (sel.isCollapsed) {
+      final modelOffset = displayToModel(sel.baseOffset);
+      final seg = _document.segmentAt(
+        modelOffset,
+        boundary: SegmentBoundary.backward,
+      );
+      if (seg != null &&
+          seg.styles.contains(InlineStyle.link) &&
+          seg.attributes['url'] != null) {
+        return LinkInfo(
+          text: seg.text,
+          url: seg.attributes['url'] as String,
+        );
+      }
+      return const LinkInfo();
+    }
+
+    final (start, end) = _orderedRange(sel);
+    final modelStart = displayToModel(start);
+    final modelEnd = displayToModel(end);
+
+    String? foundUrl;
+    var multiple = false;
+    final textBuf = StringBuffer();
+
+    _forEachBlockInRange(modelStart, modelEnd,
+        (_, block, localStart, localEnd) {
+      if (textBuf.isNotEmpty) textBuf.write('\n');
+      textBuf.write(block.plainText.substring(localStart, localEnd));
+
+      var offset = 0;
+      for (final seg in block.segments) {
+        final segEnd = offset + seg.text.length;
+        if (segEnd > localStart &&
+            offset < localEnd &&
+            seg.styles.contains(InlineStyle.link)) {
+          final url = seg.attributes['url'] as String?;
+          if (url != null) {
+            if (foundUrl == null) {
+              foundUrl = url;
+            } else if (foundUrl != url) {
+              multiple = true;
+            }
+          }
+        }
+        offset = segEnd;
+      }
+    });
+
+    return LinkInfo(text: textBuf.toString(), url: multiple ? null : foundUrl);
   }
 
   // -- Offset helpers (delegate to offset_mapper) --
