@@ -1,3 +1,15 @@
+## 0.1.11
+
+### Features
+- Add `LinkInfo` class and `linkInfo` getter on `EditorController` for
+  pre-filling link dialogs. Handles collapsed cursor (in link or plain text)
+  and selections spanning multiple segments/blocks with different URLs.
+
+### Bug fixes
+- Fix link tap firing when tapping empty space below or to the right of
+  link text. The widget now verifies the pointer-down position is on actual
+  text using line metrics before triggering `onLinkTap`.
+
 ## 0.1.10
 
 ### Features

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../codec/markdown_codec.dart';
@@ -53,6 +54,8 @@ class _BulletEditorState<B extends Object, S extends Object>
   late final UndoHistoryController _undoHistoryController;
   late FocusNode _focusNode;
   bool _ownsNode = false;
+  final _textFieldKey = GlobalKey();
+  Offset? _lastPointerDown;
 
   @override
   void initState() {
@@ -182,50 +185,104 @@ class _BulletEditorState<B extends Object, S extends Object>
             },
           ),
         },
-        child: TextField(
-          controller: widget.controller,
-          focusNode: _focusNode,
-          // Disable Flutter's built-in undo/redo history.
-          undoController: _undoHistoryController,
-          style: base,
-          maxLines: widget.maxLines,
-          minLines: widget.minLines,
-          readOnly: widget.readOnly,
-          autofocus: widget.autofocus,
-          expands: widget.expands,
-          keyboardType: TextInputType.multiline,
-          textInputAction: TextInputAction.newline,
-          decoration:
-              widget.decoration ??
-              InputDecoration(
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                hintText: 'Start writing...',
-                hintStyle: base.copyWith(
-                  color:
-                      (base.color ?? theme.colorScheme.onSurface).withValues(
-                    alpha: 0.35,
+        child: Listener(
+          onPointerDown: (event) => _lastPointerDown = event.position,
+          child: TextField(
+            key: _textFieldKey,
+            controller: widget.controller,
+            focusNode: _focusNode,
+            // Disable Flutter's built-in undo/redo history.
+            undoController: _undoHistoryController,
+            style: base,
+            maxLines: widget.maxLines,
+            minLines: widget.minLines,
+            readOnly: widget.readOnly,
+            autofocus: widget.autofocus,
+            expands: widget.expands,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            decoration:
+                widget.decoration ??
+                InputDecoration(
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  hintText: 'Start writing...',
+                  hintStyle: base.copyWith(
+                    color:
+                        (base.color ?? theme.colorScheme.onSurface).withValues(
+                      alpha: 0.35,
+                    ),
                   ),
                 ),
-              ),
-          onTap: () {
-            final ctrl = widget.controller;
-            if (ctrl.onLinkTap != null && ctrl.value.selection.isValid) {
-              final url = ctrl.linkAtDisplayOffset(
-                ctrl.value.selection.baseOffset,
-              );
-              if (url != null) {
-                ctrl.onLinkTap!(url);
-              }
-            }
-          },
-          scrollController: ScrollController(),
+            onTap: () => _handleLinkTap(base),
+            scrollController: ScrollController(),
+          ),
         ),
       ),
     );
+  }
+
+  void _handleLinkTap(TextStyle base) {
+    final ctrl = widget.controller;
+    if (ctrl.onLinkTap == null || !ctrl.value.selection.isValid) return;
+
+    final url = ctrl.linkAtDisplayOffset(ctrl.value.selection.baseOffset);
+    if (url == null) return;
+
+    if (!_isTapOnText(base)) return;
+    ctrl.onLinkTap!(url);
+  }
+
+  /// Verify the last pointer-down was on actual text, not empty space
+  /// below or to the right of a line.
+  bool _isTapOnText(TextStyle base) {
+    if (_lastPointerDown == null) return true;
+
+    final editable = _findRenderEditable();
+    if (editable == null) return true;
+
+    final localPos = editable.globalToLocal(_lastPointerDown!);
+    final span = widget.controller.buildTextSpan(
+      context: context,
+      style: base,
+      withComposing: false,
+    );
+    final painter = TextPainter(
+      text: span,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    );
+    painter.layout(maxWidth: editable.size.width);
+    final metrics = painter.computeLineMetrics();
+    painter.dispose();
+
+    for (final line in metrics) {
+      final lineTop = line.baseline - line.ascent;
+      final lineBottom = line.baseline + line.descent;
+      if (localPos.dy >= lineTop && localPos.dy < lineBottom) {
+        return localPos.dx >= 0 && localPos.dx <= line.left + line.width;
+      }
+    }
+    return false;
+  }
+
+  RenderEditable? _findRenderEditable() {
+    final renderObj = _textFieldKey.currentContext?.findRenderObject();
+    if (renderObj == null) return null;
+    RenderEditable? result;
+    void visit(RenderObject obj) {
+      if (result != null) return;
+      if (obj is RenderEditable) {
+        result = obj;
+        return;
+      }
+      obj.visitChildren(visit);
+    }
+    visit(renderObj);
+    return result;
   }
 }
 

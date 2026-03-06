@@ -91,8 +91,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // Tap on the actual text, not the center of the container (which
+      // is empty space below the text and should NOT trigger a link).
       final textFieldFinder = find.byType(TextField);
-      await tester.tapAt(tester.getCenter(textFieldFinder));
+      final topLeft = tester.getTopLeft(textFieldFinder);
+      await tester.tapAt(topLeft + const Offset(50, 20));
       await tester.pumpAndSettle();
 
       expect(tappedUrl, 'https://example.com');
