@@ -2057,6 +2057,43 @@ void main() {
         expect(seg.attributes['url'], 'https://new.com');
       });
 
+      test('setLink with non-collapsed selection replaces text and URL', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('see '),
+                const StyledSegment(
+                  'here',
+                  {InlineStyle.link},
+                  {'url': 'https://old.com'},
+                ),
+                const StyledSegment(' end'),
+              ],
+            ),
+          ]),
+        );
+
+        // Select the "here" link text.
+        final hereStart = controller.text.indexOf('here');
+        controller.value = controller.value.copyWith(
+          selection:
+              TextSelection(baseOffset: hereStart, extentOffset: hereStart + 4),
+        );
+
+        controller.setLink('https://new.com', text: 'click me');
+
+        expect(controller.document.allBlocks[0].plainText, 'see click me end');
+        final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
+          (s) => s.styles.contains(InlineStyle.link),
+        );
+        expect(linkSeg.text, 'click me');
+        expect(linkSeg.attributes['url'], 'https://new.com');
+      });
+
       test('setLink with collapsed cursor inside link updates URL', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),

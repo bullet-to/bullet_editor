@@ -652,12 +652,70 @@ class EditorController<B extends Object, S extends Object>
     final (start, end) = _orderedRange(modelSel);
     final attrs = {'url': url};
 
-    // Build ops: if any part of the range already has a link, remove it first
-    // so the toggle always adds. This makes setLink idempotent for edits.
+    // When text is provided, replace the selected content then apply the link.
+    if (text != null) {
+      final startPos = _document.blockAt(start);
+      final endPos = _document.blockAt(end);
+      _pushUndo();
+      final ops = <EditOperation>[];
+
+      // Remove existing link styles in the range first.
+      _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
+        var offset = 0;
+        for (final seg in block.segments) {
+          final segEnd = offset + seg.text.length;
+          if (segEnd > localStart &&
+              offset < localEnd &&
+              seg.styles.contains(InlineStyle.link)) {
+            ops.add(
+              ToggleStyle(i, localStart, localEnd, InlineStyle.link,
+                  attributes: seg.attributes),
+            );
+            break;
+          }
+          offset = segEnd;
+        }
+      });
+
+      // Delete selected range.
+      if (startPos.blockIndex == endPos.blockIndex) {
+        ops.add(
+          DeleteText(startPos.blockIndex, startPos.localOffset, end - start),
+        );
+      } else {
+        ops.add(
+          DeleteRange(startPos.blockIndex, startPos.localOffset,
+              endPos.blockIndex, endPos.localOffset),
+        );
+      }
+
+      // Insert new text and apply link style.
+      ops.add(InsertText(startPos.blockIndex, startPos.localOffset, text));
+      ops.add(
+        ToggleStyle(
+          startPos.blockIndex,
+          startPos.localOffset,
+          startPos.localOffset + text.length,
+          InlineStyle.link,
+          attributes: attrs,
+        ),
+      );
+
+      final cursorAfter = start + text.length;
+      _document = Transaction(
+        operations: ops,
+        selectionAfter: TextSelection.collapsed(offset: cursorAfter),
+      ).apply(_document);
+      _syncToTextField(
+        modelSelection: TextSelection.collapsed(offset: cursorAfter),
+      );
+      return;
+    }
+
+    // text is null — just toggle the link style on the existing selection.
     final removeOps = <EditOperation>[];
     final addOps = <EditOperation>[];
     _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
-      // Check if this range already has link style — if so, remove first.
       var hasLink = false;
       var offset = 0;
       for (final seg in block.segments) {
