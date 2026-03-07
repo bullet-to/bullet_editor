@@ -16,6 +16,34 @@ import 'undo_manager.dart';
 /// Callback for link taps. Receives the URL from the segment's attributes.
 typedef LinkTapCallback = void Function(String url);
 
+/// A concrete contiguous segment occurrence with resolved offsets.
+///
+/// Unlike [StyledSegment], this includes where the segment lives in the
+/// document in block-local, model, and display coordinates.
+final class SegmentRun<B extends Object> {
+  const SegmentRun({
+    required this.blockIndex,
+    required this.block,
+    required this.segment,
+    required this.localStart,
+    required this.localEnd,
+    required this.globalStart,
+    required this.globalEnd,
+    required this.displayStart,
+    required this.displayEnd,
+  });
+
+  final int blockIndex;
+  final TextBlock<B> block;
+  final StyledSegment segment;
+  final int localStart;
+  final int localEnd;
+  final int globalStart;
+  final int globalEnd;
+  final int displayStart;
+  final int displayEnd;
+}
+
 /// Pre-fill info for a link dialog.
 ///
 /// Returned by [EditorController.linkInfo] to provide the text and URL
@@ -124,15 +152,17 @@ class EditorController<B extends Object, S extends Object>
   /// `{'url': '...'}` for a link). Empty map if no attributes.
   Map<String, dynamic> get currentAttributes {
     if (!value.selection.isValid) return const {};
-    final modelOffset = displayToModel(value.selection.baseOffset);
     // With a selection, prefer the segment being selected (forward).
     // With a collapsed cursor, prefer the segment the cursor is "on" (backward)
     // so that positioning at the end of a link reports that link's attributes.
     final boundary = value.selection.isCollapsed
         ? SegmentBoundary.backward
         : SegmentBoundary.forward;
-    final seg = _document.segmentAt(modelOffset, boundary: boundary);
-    return seg?.attributes ?? const {};
+    return _segmentRunAtDisplayOffset(
+          value.selection.baseOffset,
+          boundary: boundary,
+        )?.segment.attributes ??
+        const {};
   }
 
   /// Pre-fill info for a link dialog, or null if the selection is invalid.
@@ -146,18 +176,12 @@ class EditorController<B extends Object, S extends Object>
     if (!sel.isValid) return null;
 
     if (sel.isCollapsed) {
-      final modelOffset = displayToModel(sel.baseOffset);
-      final seg = _document.segmentAt(
-        modelOffset,
+      final run = _linkRunAtModelOffset(
+        displayToModel(sel.baseOffset),
         boundary: SegmentBoundary.backward,
       );
-      if (seg != null &&
-          seg.styles.contains(InlineStyle.link) &&
-          seg.attributes['url'] != null) {
-        return LinkInfo(
-          text: seg.text,
-          url: seg.attributes['url'] as String,
-        );
+      if (run != null) {
+        return LinkInfo(text: run.segment.text, url: _linkUrl(run.segment)!);
       }
       return const LinkInfo();
     }
@@ -170,18 +194,20 @@ class EditorController<B extends Object, S extends Object>
     var multiple = false;
     final textBuf = StringBuffer();
 
-    _forEachBlockInRange(modelStart, modelEnd,
-        (_, block, localStart, localEnd) {
+    _forEachBlockInRange(modelStart, modelEnd, (
+      _,
+      block,
+      localStart,
+      localEnd,
+    ) {
       if (textBuf.isNotEmpty) textBuf.write('\n');
       textBuf.write(block.plainText.substring(localStart, localEnd));
 
       var offset = 0;
       for (final seg in block.segments) {
         final segEnd = offset + seg.text.length;
-        if (segEnd > localStart &&
-            offset < localEnd &&
-            seg.styles.contains(InlineStyle.link)) {
-          final url = seg.attributes['url'] as String?;
+        if (segEnd > localStart && offset < localEnd) {
+          final url = _linkUrl(seg);
           if (url != null) {
             if (foundUrl == null) {
               foundUrl = url;
@@ -195,6 +221,23 @@ class EditorController<B extends Object, S extends Object>
     });
 
     return LinkInfo(text: textBuf.toString(), url: multiple ? null : foundUrl);
+  }
+
+  /// Display (TextField) range of the link segment at the cursor, or null.
+  ///
+  /// When [value.selection] is valid and collapsed and the cursor is inside
+  /// a link segment, returns `(start, end)` in display coordinates. Use this
+  /// to set the selection and call [toggleStyle] to remove the link, or for
+  /// UI (e.g. highlighting). Otherwise returns null.
+  (int, int)? get linkSegmentDisplayRangeAtCursor {
+    final sel = value.selection;
+    if (!sel.isValid || !sel.isCollapsed) return null;
+
+    final run = _linkRunAtModelOffset(
+      displayToModel(sel.baseOffset),
+      boundary: SegmentBoundary.backward,
+    );
+    return run != null ? (run.displayStart, run.displayEnd) : null;
   }
 
   // -- Offset helpers (delegate to offset_mapper) --
@@ -232,6 +275,71 @@ class EditorController<B extends Object, S extends Object>
       }
     }
   }
+
+  SegmentRun<B>? _segmentRunAtModelOffset(
+    int modelOffset, {
+    SegmentBoundary boundary = SegmentBoundary.forward,
+  }) {
+    final pos = _document.blockAt(modelOffset);
+    final block = _document.allBlocks[pos.blockIndex];
+    var localStart = 0;
+
+    for (var i = 0; i < block.segments.length; i++) {
+      final seg = block.segments[i];
+      final localEnd = localStart + seg.text.length;
+      final isInside =
+          pos.localOffset > localStart && pos.localOffset < localEnd;
+      final isAtEnd = pos.localOffset == localEnd && seg.text.isNotEmpty;
+      final isAtStart = pos.localOffset == localStart && seg.text.isNotEmpty;
+
+      if (isInside ||
+          (isAtEnd &&
+              (boundary == SegmentBoundary.backward ||
+                  i + 1 == block.segments.length)) ||
+          (isAtStart &&
+              (boundary == SegmentBoundary.forward || localStart == 0))) {
+        final globalStart = _document.globalOffset(pos.blockIndex, localStart);
+        final globalEnd = _document.globalOffset(pos.blockIndex, localEnd);
+        return SegmentRun(
+          blockIndex: pos.blockIndex,
+          block: block,
+          segment: seg,
+          localStart: localStart,
+          localEnd: localEnd,
+          globalStart: globalStart,
+          globalEnd: globalEnd,
+          displayStart: mapper.modelToDisplay(_document, globalStart, _schema),
+          displayEnd: mapper.modelToDisplay(_document, globalEnd, _schema),
+        );
+      }
+
+      localStart = localEnd;
+    }
+
+    return null;
+  }
+
+  SegmentRun<B>? _linkRunAtModelOffset(
+    int modelOffset, {
+    SegmentBoundary boundary = SegmentBoundary.backward,
+  }) {
+    final run = _segmentRunAtModelOffset(modelOffset, boundary: boundary);
+    return run != null && _linkUrl(run.segment) != null ? run : null;
+  }
+
+  SegmentRun<B>? _segmentRunAtDisplayOffset(
+    int displayOffset, {
+    SegmentBoundary boundary = SegmentBoundary.forward,
+  }) => _segmentRunAtModelOffset(
+    displayToModel(displayOffset),
+    boundary: boundary,
+  );
+
+  SegmentRun<B>? _linkRunAtDisplayOffset(
+    int displayOffset, {
+    SegmentBoundary boundary = SegmentBoundary.backward,
+  }) =>
+      _linkRunAtModelOffset(displayToModel(displayOffset), boundary: boundary);
 
   /// Convert a display offset (TextField position) to a model offset.
   int displayToModel(int displayOffset) =>
@@ -628,6 +736,35 @@ class EditorController<B extends Object, S extends Object>
     if (!value.selection.isValid) return;
 
     if (value.selection.isCollapsed) {
+      // When cursor is inside a link, toggling link removes the link from that segment.
+      if (style == InlineStyle.link) {
+        final modelOffset = displayToModel(value.selection.baseOffset);
+        final run = _linkRunAtModelOffset(
+          modelOffset,
+          boundary: SegmentBoundary.backward,
+        );
+        if (run != null) {
+          _pushUndo();
+          final tx = Transaction(
+            operations: [
+              ToggleStyle(
+                run.blockIndex,
+                run.localStart,
+                run.localEnd,
+                InlineStyle.link,
+                attributes: run.segment.attributes,
+              ),
+            ],
+            selectionAfter: TextSelection.collapsed(offset: modelOffset),
+          );
+          _document = tx.apply(_document);
+          _syncToTextField(
+            modelSelection: TextSelection.collapsed(offset: modelOffset),
+          );
+          return;
+        }
+      }
+
       if (_activeStyles.contains(style)) {
         _activeStyles = Set.of(_activeStyles)..remove(style);
       } else {
@@ -670,47 +807,52 @@ class EditorController<B extends Object, S extends Object>
 
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
-      final pos = _document.blockAt(modelOffset);
-      final block = _document.allBlocks[pos.blockIndex];
-      var segStart = 0;
-      for (final seg in block.segments) {
-        final segEnd = segStart + seg.text.length;
-        if (pos.localOffset >= segStart &&
-            pos.localOffset <= segEnd &&
-            seg.styles.contains(InlineStyle.link)) {
-          // Inside an existing link → update its URL (and text if provided).
-          final globalStart = _document.globalOffset(pos.blockIndex, segStart);
-          _pushUndo();
-          final attrs = {'url': url};
-          final ops = <EditOperation>[
-            ToggleStyle(pos.blockIndex, segStart, segEnd, InlineStyle.link,
-                attributes: seg.attributes),
-            if (text != null) ...[
-              DeleteText(pos.blockIndex, segStart, segEnd - segStart),
-              InsertText(pos.blockIndex, segStart, text),
-            ],
-            ToggleStyle(
-              pos.blockIndex,
-              segStart,
-              text != null ? segStart + text.length : segEnd,
-              InlineStyle.link,
-              attributes: attrs,
+      final run = _linkRunAtModelOffset(
+        modelOffset,
+        boundary: SegmentBoundary.backward,
+      );
+      if (run != null) {
+        // Inside an existing link → update its URL (and text if provided).
+        _pushUndo();
+        final attrs = {'url': url};
+        final ops = <EditOperation>[
+          ToggleStyle(
+            run.blockIndex,
+            run.localStart,
+            run.localEnd,
+            InlineStyle.link,
+            attributes: run.segment.attributes,
+          ),
+          if (text != null) ...[
+            DeleteText(
+              run.blockIndex,
+              run.localStart,
+              run.localEnd - run.localStart,
             ),
-          ];
-          final cursorAfter = globalStart + (text?.length ?? (pos.localOffset - segStart));
-          _document = Transaction(
-            operations: ops,
-            selectionAfter: TextSelection.collapsed(offset: cursorAfter),
-          ).apply(_document);
-          _syncToTextField(
-            modelSelection: TextSelection.collapsed(offset: cursorAfter),
-          );
-          return;
-        }
-        segStart = segEnd;
+            InsertText(run.blockIndex, run.localStart, text),
+          ],
+          ToggleStyle(
+            run.blockIndex,
+            run.localStart,
+            text != null ? run.localStart + text.length : run.localEnd,
+            InlineStyle.link,
+            attributes: attrs,
+          ),
+        ];
+        final cursorAfter =
+            run.globalStart + (text?.length ?? (modelOffset - run.globalStart));
+        _document = Transaction(
+          operations: ops,
+          selectionAfter: TextSelection.collapsed(offset: cursorAfter),
+        ).apply(_document);
+        _syncToTextField(
+          modelSelection: TextSelection.collapsed(offset: cursorAfter),
+        );
+        return;
       }
 
       // Collapsed, not inside a link → insert new linked text.
+      final pos = _document.blockAt(modelOffset);
       final displayText = text ?? url;
       if (displayText.isEmpty) return;
       _pushUndo();
@@ -754,10 +896,15 @@ class EditorController<B extends Object, S extends Object>
           final segEnd = offset + seg.text.length;
           if (segEnd > localStart &&
               offset < localEnd &&
-              seg.styles.contains(InlineStyle.link)) {
+              _linkUrl(seg) != null) {
             ops.add(
-              ToggleStyle(i, localStart, localEnd, InlineStyle.link,
-                  attributes: seg.attributes),
+              ToggleStyle(
+                i,
+                localStart,
+                localEnd,
+                InlineStyle.link,
+                attributes: seg.attributes,
+              ),
             );
             break;
           }
@@ -772,8 +919,12 @@ class EditorController<B extends Object, S extends Object>
         );
       } else {
         ops.add(
-          DeleteRange(startPos.blockIndex, startPos.localOffset,
-              endPos.blockIndex, endPos.localOffset),
+          DeleteRange(
+            startPos.blockIndex,
+            startPos.localOffset,
+            endPos.blockIndex,
+            endPos.localOffset,
+          ),
         );
       }
 
@@ -808,9 +959,7 @@ class EditorController<B extends Object, S extends Object>
       var offset = 0;
       for (final seg in block.segments) {
         final segEnd = offset + seg.text.length;
-        if (segEnd > localStart &&
-            offset < localEnd &&
-            seg.styles.contains(InlineStyle.link)) {
+        if (segEnd > localStart && offset < localEnd && _linkUrl(seg) != null) {
           hasLink = true;
           break;
         }
@@ -1470,20 +1619,26 @@ class EditorController<B extends Object, S extends Object>
   /// Get the styled segment at a model offset, or null if out of range.
   /// Delegates to [Document.segmentAt] with forward boundary.
   StyledSegment? segmentAtOffset(int modelOffset) =>
-      _document.segmentAt(modelOffset);
+      _segmentRunAtModelOffset(modelOffset)?.segment;
 
   /// Get the link URL at a display offset, or null if not on a link.
   /// Checks both forward and backward boundaries so tapping at either
   /// edge of a link detects it.
-  String? linkAtDisplayOffset(int displayOffset) {
-    final modelOffset = displayToModel(displayOffset);
-    return _linkFrom(_document.segmentAt(modelOffset)) ??
-        _linkFrom(
-          _document.segmentAt(modelOffset, boundary: SegmentBoundary.backward),
-        );
-  }
+  String? linkAtDisplayOffset(int displayOffset) =>
+      _linkUrl(
+        _linkRunAtDisplayOffset(
+          displayOffset,
+          boundary: SegmentBoundary.forward,
+        )?.segment,
+      ) ??
+      _linkUrl(
+        _linkRunAtDisplayOffset(
+          displayOffset,
+          boundary: SegmentBoundary.backward,
+        )?.segment,
+      );
 
-  static String? _linkFrom(StyledSegment? seg) {
+  static String? _linkUrl(StyledSegment? seg) {
     if (seg != null &&
         seg.styles.contains(InlineStyle.link) &&
         seg.attributes['url'] != null) {
