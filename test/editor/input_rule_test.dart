@@ -498,6 +498,23 @@ void main() {
         isTrue,
       );
     });
+
+    test('does not steal the first closing star from bold syntax', () {
+      final rule = ItalicWrapRule();
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('**world')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 7, '*')],
+        selectionAfter: const TextSelection.collapsed(offset: 8),
+      );
+
+      expect(rule.tryTransform(pending, doc, schema), isNull);
+    });
   });
 
   group('StrikethroughWrapRule', () {
@@ -911,6 +928,29 @@ void main() {
         ),
         isTrue,
       );
+    });
+
+    test('fires when the inserted chunk ends with closing paren', () {
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('[link](https://google.')],
+        ),
+      ]);
+      final pending = Transaction(
+        operations: [InsertText(0, 22, 'com)')],
+        selectionAfter: const TextSelection.collapsed(offset: 26),
+      );
+
+      final result = LinkWrapRule().tryTransform(pending, doc, schema);
+      expect(result, isNotNull);
+
+      final applied = result!.apply(doc);
+      final seg = applied.allBlocks[0].segments[0];
+      expect(seg.text, 'link');
+      expect(seg.styles, {InlineEntityType.link});
+      expect(seg.attributes['url'], 'https://google.com');
     });
   });
 }

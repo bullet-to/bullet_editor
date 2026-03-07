@@ -153,9 +153,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       if (additionalInputRules != null) ...additionalInputRules,
     ];
     _syncToTextField();
-    _activeStyles = _document.stylesAt(
+    _selectionStyles = _document.stylesAt(
       mapper.displayToModel(_document, value.selection.baseOffset, _schema),
     );
+    _typingStyles = _filterTypingStyles(_selectionStyles);
     addListener(_onValueChanged);
   }
 
@@ -166,8 +167,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   InlineEntityTapCallback<E>? _onInlineEntityTap;
   bool _isSyncing = false;
 
-  /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
-  /// While the cursor stays at this offset, the override is preserved.
+  /// The cursor offset at which [_typingStyles] was manually set (by
+  /// [toggleStyle]). While the cursor stays at this offset, that typing-style
+  /// override is preserved even if the document at the cursor has different
+  /// styles.
   /// Set to -1 when no override is active.
   int _styleOverrideOffset = -1;
   TextEditingValue _previousValue = TextEditingValue.empty;
@@ -181,20 +184,32 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   /// from the model text, e.g. Safari dead key fix).
   int? _composingModelCursor;
 
-  Set<Object> _activeStyles = {};
+  Set<Object> _selectionStyles = {};
+  Set<Object> _typingStyles = {};
 
   Document<B> get document => _document;
   EditorSchema<B, S, E> get schema => _schema;
 
-  /// Active formatting styles at the cursor. Typed as `Set<S>` for exhaustive
-  /// switch. Inline entity keys are excluded so this remains a formatting-style
-  /// API. Inline styles marked `isDataCarrying` are also excluded to preserve
-  /// compatibility with custom schemas that still model entities that way.
-  Set<S> get activeStyles => _activeStyles
+  /// Active formatting styles for the current typing position. Typed as `Set<S>`
+  /// for exhaustive switch. This represents formatting styles that newly typed
+  /// text would inherit, which may differ temporarily from the document styles
+  /// when the user has toggled a style at a collapsed cursor.
+  Set<S> get activeStyles => _typingStyles.cast<S>().toSet();
+
+  Set<Object> _filterTypingStyles(Iterable<Object> styles) => styles
       .where((style) => _schema.isInlineStyleKey(style))
       .where((style) => !_schema.inlineStyleDef(style).isDataCarrying)
-      .cast<S>()
       .toSet();
+
+  void _setStyleStateFromResolvedStyles(
+    Iterable<Object> styles, {
+    bool preserveTypingOverride = false,
+  }) {
+    _selectionStyles = Set<Object>.of(styles);
+    if (!preserveTypingOverride) {
+      _typingStyles = _filterTypingStyles(_selectionStyles);
+    }
+  }
 
   /// Called when the editor detects a tap on a data-carrying inline entity.
   InlineEntityTapCallback<E>? get onInlineEntityTap => _onInlineEntityTap;
@@ -449,12 +464,12 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   TextSelection _selectionToDisplay(TextSelection sel) =>
       mapper.selectionToDisplay(_document, sel, _schema);
 
-  /// Compute active styles for the current selection.
+  /// Compute the raw inline keys present at the current selection.
   ///
-  /// - Collapsed: styles at the cursor position.
-  /// - Non-collapsed: intersection of styles across ALL characters in the
-  ///   selection. Bold is active only if every selected character is bold.
-  Set<Object> _stylesForSelection(TextSelection sel) {
+  /// - Collapsed: keys at the cursor position.
+  /// - Non-collapsed: intersection of keys across ALL characters in the
+  ///   selection.
+  Set<Object> _selectionStylesForSelection(TextSelection sel) {
     final modelSel = _selectionToModel(sel);
 
     if (sel.isCollapsed) {
@@ -530,8 +545,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
 
     _document = entry.document as Document<B>;
     _syncToTextField(modelSelection: entry.selection);
-    _activeStyles = _document.stylesAt(
-      entry.selection.baseOffset.clamp(0, _document.plainText.length),
+    _setStyleStateFromResolvedStyles(
+      _document.stylesAt(
+        entry.selection.baseOffset.clamp(0, _document.plainText.length),
+      ),
     );
   }
 
@@ -674,7 +691,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       _document = IndentBlock(i, policies: _schema.policies).apply(_document);
     }
     _syncToTextField(modelSelection: modelSel);
-    _activeStyles = _document.stylesAt(start);
+    _setStyleStateFromResolvedStyles(_document.stylesAt(start));
   }
 
   void outdent() {
@@ -722,7 +739,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       }
     }
     _syncToTextField(modelSelection: modelSel);
-    _activeStyles = _document.stylesAt(start);
+    _setStyleStateFromResolvedStyles(_document.stylesAt(start));
   }
 
   /// Insert a divider at the cursor position.
@@ -763,7 +780,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     _syncToTextField(
       modelSelection: TextSelection.collapsed(offset: cursorOffset),
     );
-    _activeStyles = _document.stylesAt(cursorOffset);
+    _setStyleStateFromResolvedStyles(_document.stylesAt(cursorOffset));
   }
 
   /// Insert a soft line break (`\n`) within the current block.
@@ -811,7 +828,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     _syncToTextField(
       modelSelection: TextSelection.collapsed(offset: globalAfter),
     );
-    _activeStyles = _document.stylesAt(globalAfter);
+    _setStyleStateFromResolvedStyles(_document.stylesAt(globalAfter));
   }
 
   /// Whether a divider can be inserted at the cursor position.
@@ -827,7 +844,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
 
   /// Toggle an inline style.
   ///
-  /// - Collapsed cursor: toggles the style in [_activeStyles] so the next
+  /// - Collapsed cursor: toggles the style in [_typingStyles] so the next
   ///   typed text gets (or loses) the style.
   /// - Non-collapsed selection: applies [ToggleStyle] to the selected range.
   void toggleStyle(S style) {
@@ -839,10 +856,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     if (_schema.inlineStyleDef(style).isDataCarrying) return;
 
     if (value.selection.isCollapsed) {
-      if (_activeStyles.contains(style)) {
-        _activeStyles = Set.of(_activeStyles)..remove(style);
+      if (_typingStyles.contains(style)) {
+        _typingStyles = Set.of(_typingStyles)..remove(style);
       } else {
-        _activeStyles = Set.of(_activeStyles)..add(style);
+        _typingStyles = Set.of(_typingStyles)..add(style);
       }
       _styleOverrideOffset = displayToModel(value.selection.baseOffset);
       notifyListeners();
@@ -863,8 +880,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     _pushUndo();
     final tx = Transaction(operations: ops, selectionAfter: modelSel);
     _document = tx.apply(_document);
-    _activeStyles = _stylesForSelection(
-      TextSelection(baseOffset: start, extentOffset: end),
+    _setStyleStateFromResolvedStyles(
+      _selectionStylesForSelection(
+        TextSelection(baseOffset: start, extentOffset: end),
+      ),
     );
     _syncToTextField(modelSelection: modelSel);
   }
@@ -1052,8 +1071,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       operations: [...removeOps, ...addOps],
       selectionAfter: modelSel,
     ).apply(_document);
-    _activeStyles = _stylesForSelection(
-      TextSelection(baseOffset: start, extentOffset: end),
+    _setStyleStateFromResolvedStyles(
+      _selectionStylesForSelection(
+        TextSelection(baseOffset: start, extentOffset: end),
+      ),
     );
     _syncToTextField(modelSelection: modelSel);
   }
@@ -1240,8 +1261,8 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       afterSel = TextSelection.collapsed(offset: newModelOffset);
     }
     _syncToTextField(modelSelection: afterSel);
-    _activeStyles = _document.stylesAt(
-      displayToModel(value.selection.baseOffset),
+    _setStyleStateFromResolvedStyles(
+      _document.stylesAt(displayToModel(value.selection.baseOffset)),
     );
   }
 
@@ -1261,10 +1282,17 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     }
     final modelOffset = displayToModel(value.selection.baseOffset);
     if (_styleOverrideOffset >= 0 && modelOffset == _styleOverrideOffset) {
-      // Cursor still at the override position — preserve manual styles.
+      // Cursor still at the override position — preserve manual typing styles,
+      // but still refresh the raw styles actually present in the document.
+      _setStyleStateFromResolvedStyles(
+        _selectionStylesForSelection(value.selection),
+        preserveTypingOverride: true,
+      );
     } else {
       _styleOverrideOffset = -1;
-      _activeStyles = _stylesForSelection(value.selection);
+      _setStyleStateFromResolvedStyles(
+        _selectionStylesForSelection(value.selection),
+      );
     }
     _previousValue = value;
   }
@@ -1589,7 +1617,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
             startPos.blockIndex,
             startPos.localOffset,
             diff.insertedText,
-            styles: _activeStyles,
+            styles: _typingStyles,
           ),
         );
       }
@@ -1624,7 +1652,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
               startPos.blockIndex,
               startPos.localOffset,
               diff.insertedText,
-              styles: _activeStyles,
+              styles: _typingStyles,
             ),
           ],
           selectionAfter: selection,

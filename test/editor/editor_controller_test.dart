@@ -51,6 +51,145 @@ void main() {
       expect(controller.value.selection.baseOffset, 11);
     });
 
+    test('typed markdown link converts when final input is batched', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('[link](https://google.')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: '[link](https://google.com)',
+        selection: TextSelection.collapsed(offset: 26),
+      );
+
+      expect(controller.document.blocks[0].plainText, 'link');
+      expect(
+        controller.document.blocks[0].segments.single,
+        const StyledSegment(
+          'link',
+          {InlineEntityType.link},
+          {'url': 'https://google.com'},
+        ),
+      );
+    });
+
+    test('typing after markdown link conversion does not extend the link', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('[link](https://google.')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: '[link](https://google.com)',
+        selection: TextSelection.collapsed(offset: 26),
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'link!',
+        selection: TextSelection.collapsed(offset: 5),
+      );
+
+      final segments = controller.document.blocks[0].segments;
+      expect(segments.length, 2);
+      expect(
+        segments[0],
+        const StyledSegment(
+          'link',
+          {InlineEntityType.link},
+          {'url': 'https://google.com'},
+        ),
+      );
+      expect(segments[1].text, '!');
+      expect(segments[1].styles, isEmpty);
+    });
+
+    test('collapsed toggle override clears when cursor moves', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello world')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'hello world',
+        selection: TextSelection.collapsed(offset: 5),
+      );
+      controller.toggleStyle(InlineStyle.bold);
+      expect(controller.activeStyles, {InlineStyle.bold});
+
+      controller.value = const TextEditingValue(
+        text: 'hello world',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+      expect(controller.activeStyles, isEmpty);
+    });
+
+    test(
+      'cursor at link end exposes link attributes but typing stays plain',
+      () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                'link',
+                  {InlineEntityType.link},
+                  {'url': 'https://google.com'},
+                ),
+              ],
+            ),
+          ]),
+        );
+
+        controller.value = const TextEditingValue(
+        text: 'link',
+          selection: TextSelection.collapsed(offset: 4),
+        );
+
+        expect(controller.currentAttributes['url'], 'https://google.com');
+        expect(controller.inlineEntityAtCursor?.type, InlineEntityType.link);
+        expect(controller.activeStyles, isEmpty);
+
+        controller.value = const TextEditingValue(
+        text: 'link!',
+          selection: TextSelection.collapsed(offset: 5),
+        );
+
+      final segments = controller.document.blocks[0].segments;
+      expect(segments.length, 2);
+      expect(
+        segments[0],
+        const StyledSegment(
+          'link',
+          {InlineEntityType.link},
+          {'url': 'https://google.com'},
+        ),
+      );
+      expect(segments[1].text, '!');
+      expect(segments[1].styles, isEmpty);
+      },
+    );
+
     test('typing after bold continues the style', () {
       // Start with a document that already has bold text.
       final controller = EditorController(
@@ -94,6 +233,33 @@ void main() {
       expect(controller.document.blocks[0].segments[0].styles, {
         InlineStyle.bold,
       });
+    });
+
+    test('typed markdown link converts when final input is a single paren', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('[link](https://google.com')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: '[link](https://google.com)',
+        selection: TextSelection.collapsed(offset: 27),
+      );
+
+      expect(
+        controller.document.blocks[0].segments.single,
+        const StyledSegment(
+          'link',
+          {InlineEntityType.link},
+          {'url': 'https://google.com'},
+        ),
+      );
     });
 
     test('space typed at bold/unstyled boundary inherits bold', () {
@@ -309,6 +475,35 @@ void main() {
         InlineStyle.bold,
       });
       expect(controller.value.selection.baseOffset, 5);
+    });
+
+    test('typing closing ** does not pass through italic first', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('**hello')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: '**hello*',
+        selection: TextSelection.collapsed(offset: 8),
+      );
+      expect(controller.document.blocks[0].plainText, '**hello*');
+
+      controller.value = const TextEditingValue(
+        text: '**hello**',
+        selection: TextSelection.collapsed(offset: 9),
+      );
+
+      expect(controller.document.blocks[0].plainText, 'hello');
+      expect(controller.document.blocks[0].segments.single.styles, {
+        InlineStyle.bold,
+      });
     });
 
     test('Multiple bold segments in one block', () {

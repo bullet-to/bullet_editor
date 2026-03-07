@@ -32,10 +32,10 @@ abstract class InputRule {
 /// 2. Strip both delimiters
 /// 3. Apply the style to the enclosed text
 class InlineWrapRule extends InputRule {
-  InlineWrapRule(this.delimiter, this.style)
-    : _pattern = RegExp(
-        '${RegExp.escape(delimiter)}(.+?)${RegExp.escape(delimiter)}',
-      );
+  InlineWrapRule(this.delimiter, this.style, {RegExp? pattern})
+    : _pattern =
+          pattern ??
+          RegExp('${RegExp.escape(delimiter)}(.+?)${RegExp.escape(delimiter)}');
 
   final String delimiter;
   final Object style;
@@ -107,7 +107,12 @@ class BoldWrapRule extends InlineWrapRule {
 }
 
 class ItalicWrapRule extends InlineWrapRule {
-  ItalicWrapRule() : super('*', InlineStyle.italic);
+  ItalicWrapRule()
+    : super(
+        '*',
+        InlineStyle.italic,
+        pattern: RegExp(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)'),
+      );
 }
 
 class StrikethroughWrapRule extends InlineWrapRule {
@@ -129,7 +134,7 @@ class LinkWrapRule extends InputRule {
     EditorSchema schema,
   ) {
     final insertOp = _findInsertOp(pending);
-    if (insertOp == null || insertOp.text != ')') return null;
+    if (insertOp == null || !insertOp.text.endsWith(')')) return null;
 
     final resultDoc = pending.apply(doc);
     final i = insertOp.blockIndex;
