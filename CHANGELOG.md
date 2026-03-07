@@ -1,18 +1,35 @@
-## 0.1.12
+## 0.2.0
 
-### Features
-- Add `inlineEntitiesInSelection()` on `EditorController` so apps can resolve
-  the inline entity runs touched by the current selection without walking
-  document segments manually.
+### API changes
+- Generalize inline entities across the public API. `EditorController`,
+  `EditorSchema`, `InlineEntityDef`, `InlineEntityInfo`, and
+  `InlineEntityEditInfo` now use an explicit inline-entity key type so apps can
+  define custom entity types instead of being limited to built-in links.
+- Add `EditorController.inlineEntitiesInSelection()` to return the resolved
+  inline entity runs touched by the current selection. This lets host apps make
+  their own decisions when a selection touches zero, one, or multiple entities.
+- Refine inline entity editing around `setInlineEntity()` / `removeInlineEntity()`
+  and typed entity payloads such as `LinkData`.
 
 ### Improvements
-- Simplify the example app's link dialog flow to use resolved inline entities
-  from the controller instead of custom document traversal logic.
+- Move resolved entity-selection logic out of the example app and into the
+  package so host apps no longer need to walk document segments manually to
+  build link-editing flows.
+- The example app now uses the controller's resolved-entity API for link
+  editing, including partial selections inside links and adjacent-link cases.
+- Add regression coverage for mid-segment typing, adjacent-link replacement,
+  and resolved inline-entity selection.
 
 ### Bug fixes
-- Fix `setInlineEntity(..., text: ...)` replacing link text next to another
-  link. Replacement text is now inserted with its final entity styles/attrs
-  directly instead of inheriting a neighboring link and then toggling off.
+- Fix typing immediately after a markdown-generated link extending the link.
+- Fix typing inside an existing link dropping the link entity instead of
+  preserving it.
+- Fix `setInlineEntity(..., text: ...)` when replacing link text next to
+  another link. Replacement text is now inserted with its final entity
+  styles/attributes directly instead of inheriting a neighboring link and then
+  toggling off.
+- Fix markdown `**...**` input so bold wrapping wins over italic when typing
+  double-star delimiters incrementally.
 - Keep link markdown input rules ordered ahead of bold/italic wrap rules in
   `EditorSchema.inputRules`.
 
