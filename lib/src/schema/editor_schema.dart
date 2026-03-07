@@ -86,13 +86,14 @@ class EditorSchema<B extends Object, S extends Object, E extends Object> {
   /// Whether the block type identified by [key] is a heading.
   bool isHeading(Object key) => blocks[key]?.isHeading ?? false;
 
-  /// Collect all input rules from block defs, formatting styles, then inline
-  /// entities in map insertion order. This determines rule priority — specific
-  /// rules must come before general ones in the schema's map ordering.
+  /// Collect all input rules from block defs, inline entities, then formatting
+  /// styles in map insertion order. This determines rule priority — more
+  /// specific entity rules like links should run before general wrap-style
+  /// rules like bold/italic.
   List<InputRule> get inputRules => [
     for (final def in blocks.values) ...def.inputRules,
-    for (final def in inlineStyles.values) ...def.inputRules,
     for (final def in inlineEntities.values) ...def.style.inputRules,
+    for (final def in inlineStyles.values) ...def.inputRules,
   ];
 
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');

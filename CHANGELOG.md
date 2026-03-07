@@ -1,3 +1,21 @@
+## 0.1.12
+
+### Features
+- Add `inlineEntitiesInSelection()` on `EditorController` so apps can resolve
+  the inline entity runs touched by the current selection without walking
+  document segments manually.
+
+### Improvements
+- Simplify the example app's link dialog flow to use resolved inline entities
+  from the controller instead of custom document traversal logic.
+
+### Bug fixes
+- Fix `setInlineEntity(..., text: ...)` replacing link text next to another
+  link. Replacement text is now inserted with its final entity styles/attrs
+  directly instead of inheriting a neighboring link and then toggling off.
+- Keep link markdown input rules ordered ahead of bold/italic wrap rules in
+  `EditorSchema.inputRules`.
+
 ## 0.1.11
 
 ### Features
