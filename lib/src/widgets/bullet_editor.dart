@@ -247,13 +247,8 @@ class _BulletEditorState<B extends Object, S extends Object, E extends Object>
     if (editable == null) return true;
 
     final localPos = editable.globalToLocal(_lastPointerDown!);
-    final span = widget.controller.buildTextSpan(
-      context: context,
-      style: base,
-      withComposing: false,
-    );
     final painter = TextPainter(
-      text: span,
+      text: TextSpan(text: widget.controller.text, style: base),
       textDirection: Directionality.of(context),
       textScaler: MediaQuery.textScalerOf(context),
     );

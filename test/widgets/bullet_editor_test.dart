@@ -102,6 +102,50 @@ void main() {
       expect(tappedUrl, 'https://example.com');
     });
 
+    testWidgets('onInlineEntityTap works for link inside list item', (
+      tester,
+    ) async {
+      String? tappedUrl;
+
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.listItem,
+            segments: [
+              const StyledSegment(
+                'linked item',
+                {InlineEntityType.link},
+                {'url': 'https://example.com/list'},
+              ),
+            ],
+          ),
+        ]),
+        onInlineEntityTap: (entity) =>
+            tappedUrl = (entity.data as LinkData).url,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final textFieldFinder = find.byType(TextField);
+      final topLeft = tester.getTopLeft(textFieldFinder);
+      await tester.tapAt(topLeft + const Offset(70, 20));
+      await tester.pumpAndSettle();
+
+      expect(tappedUrl, 'https://example.com/list');
+    });
+
     testWidgets('segmentAtOffset returns correct segment for each block', (
       tester,
     ) async {
