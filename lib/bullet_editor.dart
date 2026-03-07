@@ -18,11 +18,13 @@ export 'src/editor/undo_manager.dart';
 export 'src/model/block.dart';
 export 'src/model/block_policies.dart';
 export 'src/model/document.dart';
+export 'src/model/inline_entity.dart';
 // InlineStyle is now exported from block.dart alongside BlockType.
 // Schema
 export 'src/schema/block_def.dart';
 export 'src/schema/default_schema.dart';
 export 'src/schema/editor_schema.dart';
+export 'src/schema/inline_entity_def.dart';
 export 'src/schema/inline_style_def.dart';
 // Widgets
 export 'src/widgets/bullet_editor.dart';

@@ -46,7 +46,8 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  late final EditorController<BlockType, InlineStyle> _controller;
+  late final EditorController<BlockType, InlineStyle, InlineEntityType>
+  _controller;
   late final FocusNode _focusNode;
 
   @override
@@ -165,7 +166,8 @@ class _EditorScreenState extends State<EditorScreen> {
     _controller = EditorController(
       schema: EditorSchema.standard(),
       document: doc,
-      onLinkTap: (url) => debugPrint('Link tapped: $url'),
+      onInlineEntityTap: (entity) =>
+          debugPrint('Inline entity tapped: ${entity.data}'),
       // Input rules come from the schema — no manual list needed.
     );
     _controller.addListener(() => setState(() {}));
@@ -184,14 +186,15 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!_controller.value.selection.isValid) return;
 
     // If cursor is inside an existing link, pre-fill its URL.
-    // setLink handles collapsed-cursor-inside-link natively.
-    final existingUrl = _controller.currentAttributes['url'] as String?;
-    final isEditing =
-        existingUrl != null &&
-        _controller.activeStyles.contains(InlineStyle.link);
+    // setInlineEntity handles collapsed-cursor-inside-link natively.
+    final entity = _controller.inlineEntityAtCursor;
+    final existingUrl = entity?.type == InlineEntityType.link
+        ? (entity!.data as LinkData).url
+        : null;
+    final isEditing = entity?.type == InlineEntityType.link;
 
     // For new links, require a selection. For editing, collapsed is fine
-    // (setLink updates the link segment at the cursor).
+    // (setInlineEntity updates the entity at the cursor).
     if (!isEditing && _controller.value.selection.isCollapsed) return;
 
     final urlController = TextEditingController(text: existingUrl ?? '');
@@ -213,7 +216,7 @@ class _EditorScreenState extends State<EditorScreen> {
             TextButton(
               onPressed: () {
                 // Remove the link style.
-                _controller.toggleStyle(InlineStyle.link);
+                _controller.removeInlineEntity(InlineEntityType.link);
                 Navigator.of(ctx).pop();
               },
               child: const Text('Remove Link'),
@@ -233,9 +236,9 @@ class _EditorScreenState extends State<EditorScreen> {
         // Cancelled — do nothing.
       } else if (url.isEmpty) {
         // Empty URL — remove the link.
-        _controller.toggleStyle(InlineStyle.link);
+        _controller.removeInlineEntity(InlineEntityType.link);
       } else {
-        _controller.setLink(url);
+        _controller.setInlineEntity(InlineEntityType.link, LinkData(url: url));
       }
       _focusNode.requestFocus();
     });

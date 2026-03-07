@@ -1,8 +1,10 @@
 import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
+import '../model/inline_entity.dart';
 import 'block_def.dart';
 import 'default_schema.dart';
+import 'inline_entity_def.dart';
 import 'inline_style_def.dart';
 
 /// Central configuration for the editor.
@@ -12,17 +14,18 @@ import 'inline_style_def.dart';
 /// [S] is the inline style key (typically an enum like [InlineStyle]).
 ///
 /// Use [EditorSchema.standard()] for the built-in block types and styles.
-class EditorSchema<B extends Object, S extends Object> {
+class EditorSchema<B extends Object, S extends Object, E extends Object> {
   EditorSchema({
     required this.defaultBlockType,
     required this.blocks,
     required this.inlineStyles,
+    this.inlineEntities = const {},
     this.prefixWidthFactor = 1.5,
     this.indentPerDepthFactor = 1.5,
   });
 
   /// Creates the standard schema with all built-in block types and inline styles.
-  static EditorSchema<BlockType, InlineStyle> standard() =>
+  static EditorSchema<BlockType, InlineStyle, InlineEntityType> standard() =>
       buildStandardSchema();
 
   /// The block type used for new blocks (Enter on non-list blocks, empty
@@ -34,6 +37,9 @@ class EditorSchema<B extends Object, S extends Object> {
 
   /// Inline style definitions keyed by style identifier.
   final Map<S, InlineStyleDef> inlineStyles;
+
+  /// Public inline entity definitions keyed by built-in entity type.
+  final Map<E, InlineEntityDef<E, S>> inlineEntities;
 
   /// Width of the prefix area (bullet/number/checkbox) as a multiplier of
   /// the block's resolved font size.
@@ -49,6 +55,17 @@ class EditorSchema<B extends Object, S extends Object> {
   /// Look up an inline style definition. Returns a no-op fallback if not found.
   InlineStyleDef inlineStyleDef(Object key) =>
       inlineStyles[key] ?? _fallbackInlineStyleDef;
+
+  /// Look up an inline entity definition by public entity type.
+  InlineEntityDef<E, S>? inlineEntityDef(E type) => inlineEntities[type];
+
+  /// Look up an inline entity definition by its backing internal style key.
+  InlineEntityDef<E, S>? inlineEntityDefForStyle(Object key) {
+    for (final def in inlineEntities.values) {
+      if (def.style == key) return def;
+    }
+    return null;
+  }
 
   /// Aggregate policies map from all registered block defs.
   /// Used by edit operations that need to check structural rules.
@@ -68,9 +85,9 @@ class EditorSchema<B extends Object, S extends Object> {
   /// in map insertion order. This determines rule priority — specific
   /// rules must come before general ones in the schema's map ordering.
   List<InputRule> get inputRules => [
-        for (final def in blocks.values) ...def.inputRules,
-        for (final def in inlineStyles.values) ...def.inputRules,
-      ];
+    for (final def in blocks.values) ...def.inputRules,
+    for (final def in inlineStyles.values) ...def.inputRules,
+  ];
 
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');
   static final _fallbackInlineStyleDef = InlineStyleDef(

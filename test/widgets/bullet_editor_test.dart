@@ -56,7 +56,7 @@ void main() {
       expect(segment, isNotNull);
     });
 
-    testWidgets('onLinkTap fires with URL when tapping link text', (
+    testWidgets('onInlineEntityTap fires with entity when tapping link text', (
       tester,
     ) async {
       String? tappedUrl;
@@ -76,7 +76,8 @@ void main() {
             ],
           ),
         ]),
-        onLinkTap: (url) => tappedUrl = url,
+        onInlineEntityTap: (entity) =>
+            tappedUrl = (entity.data as LinkData).url,
       );
 
       await tester.pumpWidget(
@@ -140,7 +141,7 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('tapping plain text does not trigger onLinkTap', (
+    testWidgets('tapping plain text does not trigger onInlineEntityTap', (
       tester,
     ) async {
       String? tappedUrl;
@@ -156,7 +157,8 @@ void main() {
             ],
           ),
         ]),
-        onLinkTap: (url) => tappedUrl = url,
+        onInlineEntityTap: (entity) =>
+            tappedUrl = (entity.data as LinkData).url,
       );
 
       await tester.pumpWidget(
@@ -175,7 +177,7 @@ void main() {
       await tester.tapAt(tester.getCenter(textFieldFinder));
       await tester.pumpAndSettle();
 
-      // Plain text should not trigger onLinkTap.
+      // Plain text should not trigger onInlineEntityTap.
       expect(tappedUrl, isNull);
 
       // But the segment at the cursor should be valid plain text.

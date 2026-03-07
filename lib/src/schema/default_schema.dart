@@ -8,8 +8,10 @@ import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
+import '../model/inline_entity.dart';
 import 'block_def.dart';
 import 'editor_schema.dart';
+import 'inline_entity_def.dart';
 import 'inline_style_def.dart';
 
 /// Style overrides for a heading level. All fields are nullable — `null`
@@ -331,13 +333,13 @@ abstract final class Blocks {
           decode: (line) {
             final markers = ['- ', '* ', '+ '];
             for (final m in markers) {
-              if (line.startsWith('${m}[x] ')) {
+              if (line.startsWith('$m[x] ')) {
                 return DecodeMatch(
                   line.substring(m.length + 4),
                   metadata: {kCheckedKey: true},
                 );
               }
-              if (line.startsWith('${m}[ ] ')) {
+              if (line.startsWith('$m[ ] ')) {
                 return DecodeMatch(
                   line.substring(m.length + 4),
                   metadata: {kCheckedKey: false},
@@ -770,7 +772,10 @@ abstract final class Inlines {
 /// **Block ordering matters for input rules and codec decode.** More-specific
 /// prefixes must come before shorter ones (h3 before h2 before h1, taskItem
 /// before listItem) so they are tried first.
-EditorSchema<BlockType, InlineStyle> buildStandardSchema({
+///
+/// The `additional*` maps are merged after built-ins, so they can override
+/// standard definitions.
+EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
   // Per-heading overrides (null fields keep defaults).
   HeadingStyle? h1,
   HeadingStyle? h2,
@@ -789,10 +794,12 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
   // Extensions — merged after built-ins.
   Map<BlockType, BlockDef>? additionalBlocks,
   Map<InlineStyle, InlineStyleDef>? additionalInlineStyles,
+  Map<InlineEntityType, InlineEntityDef<InlineEntityType, InlineStyle>>?
+  additionalInlineEntities,
 }) {
   final pwf = prefixWidthFactor ?? 1.5;
 
-  return EditorSchema<BlockType, InlineStyle>(
+  return EditorSchema<BlockType, InlineStyle, InlineEntityType>(
     defaultBlockType: BlockType.paragraph,
     prefixWidthFactor: pwf,
     indentPerDepthFactor: indentPerDepthFactor ?? 1.5,
@@ -827,6 +834,18 @@ EditorSchema<BlockType, InlineStyle> buildStandardSchema({
       InlineStyle.italic: Inlines.italic(),
       InlineStyle.strikethrough: Inlines.strikethrough(),
       if (additionalInlineStyles != null) ...additionalInlineStyles,
+    },
+    inlineEntities: {
+      InlineEntityType.link: InlineEntityDef(
+        type: InlineEntityType.link,
+        style: InlineStyle.link,
+        label: 'Link',
+        decode: (attributes) =>
+            LinkData(url: attributes['url'] as String? ?? ''),
+        encode: (data) => {'url': (data as LinkData).url},
+        defaultText: (data) => (data as LinkData).url,
+      ),
+      if (additionalInlineEntities != null) ...additionalInlineEntities,
     },
   );
 }

@@ -15,8 +15,10 @@ import '../editor/editor_controller.dart';
 /// This avoids issues with `FocusNode.onKeyEvent` being overwritten by
 /// Flutter's `EditableText` internals.
 ///
-/// [B] is the block type key, [S] is the inline style key.
-class BulletEditor<B extends Object, S extends Object> extends StatefulWidget {
+/// [B] is the block type key, [S] is the inline style key, and [E] is the
+/// inline entity key.
+class BulletEditor<B extends Object, S extends Object, E extends Object>
+    extends StatefulWidget {
   const BulletEditor({
     super.key,
     required this.controller,
@@ -30,7 +32,7 @@ class BulletEditor<B extends Object, S extends Object> extends StatefulWidget {
     this.expands = false,
   });
 
-  final EditorController<B, S> controller;
+  final EditorController<B, S, E> controller;
   final FocusNode? focusNode;
 
   /// Optional decoration for the TextField.
@@ -46,11 +48,11 @@ class BulletEditor<B extends Object, S extends Object> extends StatefulWidget {
   final bool expands;
 
   @override
-  State<BulletEditor<B, S>> createState() => _BulletEditorState<B, S>();
+  State<BulletEditor<B, S, E>> createState() => _BulletEditorState<B, S, E>();
 }
 
-class _BulletEditorState<B extends Object, S extends Object>
-    extends State<BulletEditor<B, S>> {
+class _BulletEditorState<B extends Object, S extends Object, E extends Object>
+    extends State<BulletEditor<B, S, E>> {
   late final UndoHistoryController _undoHistoryController;
   late FocusNode _focusNode;
   bool _ownsNode = false;
@@ -65,7 +67,7 @@ class _BulletEditorState<B extends Object, S extends Object>
   }
 
   @override
-  void didUpdateWidget(covariant BulletEditor<B, S> oldWidget) {
+  void didUpdateWidget(covariant BulletEditor<B, S, E> oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.focusNode != oldWidget.focusNode) {
       _disposeFocusNode();
@@ -138,8 +140,7 @@ class _BulletEditorState<B extends Object, S extends Object>
             },
           ),
           // Inline style toggle (bold, italic, strikethrough, etc.).
-          _ToggleInlineStyleIntent:
-              CallbackAction<_ToggleInlineStyleIntent>(
+          _ToggleInlineStyleIntent: CallbackAction<_ToggleInlineStyleIntent>(
             onInvoke: (intent) {
               widget.controller.toggleStyle(intent.style as S);
               return null;
@@ -211,13 +212,11 @@ class _BulletEditorState<B extends Object, S extends Object>
                   ),
                   hintText: 'Start writing...',
                   hintStyle: base.copyWith(
-                    color:
-                        (base.color ?? theme.colorScheme.onSurface).withValues(
-                      alpha: 0.35,
-                    ),
+                    color: (base.color ?? theme.colorScheme.onSurface)
+                        .withValues(alpha: 0.35),
                   ),
                 ),
-            onTap: () => _handleLinkTap(base),
+            onTap: () => _handleInlineEntityTap(base),
             scrollController: ScrollController(),
           ),
         ),
@@ -225,15 +224,18 @@ class _BulletEditorState<B extends Object, S extends Object>
     );
   }
 
-  void _handleLinkTap(TextStyle base) {
+  void _handleInlineEntityTap(TextStyle base) {
     final ctrl = widget.controller;
-    if (ctrl.onLinkTap == null || !ctrl.value.selection.isValid) return;
-
-    final url = ctrl.linkAtDisplayOffset(ctrl.value.selection.baseOffset);
-    if (url == null) return;
+    if (!ctrl.value.selection.isValid) return;
+    final entity = ctrl.inlineEntityAtDisplayOffset(
+      ctrl.value.selection.baseOffset,
+    );
+    if (entity == null) return;
 
     if (!_isTapOnText(base)) return;
-    ctrl.onLinkTap!(url);
+    if (ctrl.onInlineEntityTap != null) {
+      ctrl.onInlineEntityTap!(entity);
+    }
   }
 
   /// Verify the last pointer-down was on actual text, not empty space
@@ -281,6 +283,7 @@ class _BulletEditorState<B extends Object, S extends Object>
       }
       obj.visitChildren(visit);
     }
+
     visit(renderObj);
     return result;
   }
@@ -298,8 +301,12 @@ class _ToggleInlineStyleIntent extends Intent {
 }
 
 /// Extension on EditorController for markdown import/export convenience.
-extension MarkdownExtension<B extends Object, S extends Object>
-    on EditorController<B, S> {
+extension MarkdownExtension<
+  B extends Object,
+  S extends Object,
+  E extends Object
+>
+    on EditorController<B, S, E> {
   /// Convenience: get the markdown text for the current document.
   String get markdown {
     final codec = MarkdownCodec(schema: schema);

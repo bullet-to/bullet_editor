@@ -28,7 +28,8 @@ class MinimalEditor extends StatefulWidget {
 }
 
 class _MinimalEditorState extends State<MinimalEditor> {
-  late final EditorController<BlockType, InlineStyle> _controller;
+  late final EditorController<BlockType, InlineStyle, InlineEntityType>
+  _controller;
 
   @override
   void initState() {

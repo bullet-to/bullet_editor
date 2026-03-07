@@ -11,7 +11,11 @@ void main() {
       // Simulate: document has "hello " and user has typed "**world**"
       // so the pending transaction inserts the final "*" making it "hello **world**"
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello **world*')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello **world*')],
+        ),
       ]);
 
       // The pending transaction adds the closing "*"
@@ -105,7 +109,11 @@ void main() {
 
       // Two blocks: block 0 = "first", block 1 = "abc **trigger* bold"
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('first')],
+        ),
         TextBlock(
           id: 'b',
           blockType: BlockType.paragraph,
@@ -134,7 +142,11 @@ void main() {
     test('returns null when no pattern found', () {
       final rule = BoldWrapRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello world')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello world')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 11, '!')],
@@ -149,7 +161,11 @@ void main() {
     test('# followed by space converts to H1', () {
       final rule = HeadingRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('#')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('#')],
+        ),
       ]);
 
       final pending = Transaction(
@@ -169,7 +185,11 @@ void main() {
       final rule = HeadingRule();
       // User typed # at the start of "hello", then space. Block has "# hello".
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('#hello')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('#hello')],
+        ),
       ]);
 
       final pending = Transaction(
@@ -188,7 +208,11 @@ void main() {
     test('does not fire on # mid-text', () {
       final rule = HeadingRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello #')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello #')],
+        ),
       ]);
 
       final pending = Transaction(
@@ -222,7 +246,11 @@ void main() {
     test('backspace at start of H3 converts to paragraph', () {
       final rule = HeadingBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
         TextBlock(
           id: 'b',
           blockType: BlockType.h3,
@@ -241,7 +269,11 @@ void main() {
     test('backspace at start of H1 converts to paragraph', () {
       final rule = HeadingBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
         TextBlock(
           id: 'b',
           blockType: BlockType.h1,
@@ -259,8 +291,16 @@ void main() {
     test('does not fire on paragraph', () {
       final rule = HeadingBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('below')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('below')],
+        ),
       ]);
 
       final pending = Transaction(operations: [MergeBlocks(1)]);
@@ -269,7 +309,7 @@ void main() {
 
     test('uses schema.isHeading — fires for custom heading block', () {
       // Build a custom schema where 'myHeading' has isHeading: true.
-      final customSchema = EditorSchema<String, String>(
+      final customSchema = EditorSchema<String, String, Object>(
         defaultBlockType: 'para',
         blocks: {
           'para': const BlockDef(label: 'P'),
@@ -280,8 +320,16 @@ void main() {
 
       final rule = HeadingBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: 'para', segments: [const StyledSegment('above')]),
-        TextBlock(id: 'b', blockType: 'myHeading', segments: [const StyledSegment('title')]),
+        TextBlock(
+          id: 'a',
+          blockType: 'para',
+          segments: [const StyledSegment('above')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: 'myHeading',
+          segments: [const StyledSegment('title')],
+        ),
       ]);
 
       final pending = Transaction(operations: [MergeBlocks(1)]);
@@ -298,7 +346,11 @@ void main() {
     test('- followed by space converts to list item', () {
       final rule = ListItemRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('-')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('-')],
+        ),
       ]);
 
       final pending = Transaction(
@@ -323,7 +375,14 @@ void main() {
       ]);
 
       final pending = Transaction(
-        operations: [SplitBlock(0, 0, defaultBlockType: BlockType.paragraph, isListLikeFn: schema.isListLike)],
+        operations: [
+          SplitBlock(
+            0,
+            0,
+            defaultBlockType: BlockType.paragraph,
+            isListLikeFn: schema.isListLike,
+          ),
+        ],
         selectionAfter: const TextSelection.collapsed(offset: 1),
       );
 
@@ -345,7 +404,14 @@ void main() {
       ]);
 
       final pending = Transaction(
-        operations: [SplitBlock(0, 7, defaultBlockType: BlockType.paragraph, isListLikeFn: schema.isListLike)],
+        operations: [
+          SplitBlock(
+            0,
+            7,
+            defaultBlockType: BlockType.paragraph,
+            isListLikeFn: schema.isListLike,
+          ),
+        ],
         selectionAfter: const TextSelection.collapsed(offset: 8),
       );
 
@@ -357,7 +423,11 @@ void main() {
     test('backspace at start of list item converts to paragraph', () {
       final rule = ListItemBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
         TextBlock(
           id: 'b',
           blockType: BlockType.listItem,
@@ -382,8 +452,16 @@ void main() {
     test('does not fire on non-list-item merge', () {
       final rule = ListItemBackspaceRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('above')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('below')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('above')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('below')],
+        ),
       ]);
 
       final pending = Transaction(
@@ -399,7 +477,11 @@ void main() {
     test('*text* converts to italic', () {
       final rule = ItalicWrapRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello *world')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello *world')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 12, '*')],
@@ -422,7 +504,11 @@ void main() {
     test('~~text~~ converts to strikethrough', () {
       final rule = StrikethroughWrapRule();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('hello ~~world~')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('hello ~~world~')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 14, '~')],
@@ -445,7 +531,11 @@ void main() {
   group('NumberedListRule', () {
     test('1. followed by space converts to numbered list', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('1.')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('1.')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 2, ' ')],
@@ -463,7 +553,11 @@ void main() {
   group('TaskItemRule', () {
     test('- [ ] followed by space creates unchecked task', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('- [ ]')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('- [ ]')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 5, ' ')],
@@ -480,7 +574,11 @@ void main() {
 
     test('- [x] followed by space creates checked task', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('- [x]')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('- [x]')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 5, ' ')],
@@ -568,7 +666,14 @@ void main() {
         ),
       ]);
       final pending = Transaction(
-        operations: [SplitBlock(0, 0, defaultBlockType: BlockType.paragraph, isListLikeFn: schema.isListLike)],
+        operations: [
+          SplitBlock(
+            0,
+            0,
+            defaultBlockType: BlockType.paragraph,
+            isListLikeFn: schema.isListLike,
+          ),
+        ],
         selectionAfter: const TextSelection.collapsed(offset: 0),
       );
       final rule = EmptyListItemRule();
@@ -588,7 +693,14 @@ void main() {
         ),
       ]);
       final pending = Transaction(
-        operations: [SplitBlock(0, 0, defaultBlockType: BlockType.paragraph, isListLikeFn: schema.isListLike)],
+        operations: [
+          SplitBlock(
+            0,
+            0,
+            defaultBlockType: BlockType.paragraph,
+            isListLikeFn: schema.isListLike,
+          ),
+        ],
         selectionAfter: const TextSelection.collapsed(offset: 0),
       );
       final rule = EmptyListItemRule();
@@ -603,7 +715,11 @@ void main() {
       () {
         // Doc has "--" typed; user types the third "-".
         final doc = Document([
-          TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('--')]),
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('--')],
+          ),
         ]);
         final pending = Transaction(
           operations: [InsertText(0, 2, '-')],
@@ -641,7 +757,11 @@ void main() {
     test('does not fire when text is not exactly ---', () {
       // Doc has "a-" typed; user types "-".
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('a-')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('a-')],
+        ),
       ]);
       final pending = Transaction(
         operations: [InsertText(0, 2, '-')],
@@ -656,7 +776,11 @@ void main() {
     test('backspace at start of block after divider removes divider', () {
       final doc = Document([
         TextBlock(id: 'a', blockType: BlockType.divider),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('Hello')]),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('Hello')],
+        ),
       ]);
       final pending = Transaction(
         operations: [MergeBlocks(1)],
@@ -674,8 +798,16 @@ void main() {
 
     test('does not fire when preceding block is not a divider', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first')]),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: [const StyledSegment('second')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('first')],
+        ),
+        TextBlock(
+          id: 'b',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('second')],
+        ),
       ]);
       final pending = Transaction(
         operations: [MergeBlocks(1)],
@@ -689,9 +821,17 @@ void main() {
   group('RemoveBlock', () {
     test('removes a block from document', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('first')]),
+        TextBlock(
+          id: 'a',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('first')],
+        ),
         TextBlock(id: 'b', blockType: BlockType.divider),
-        TextBlock(id: 'c', blockType: BlockType.paragraph, segments: [const StyledSegment('third')]),
+        TextBlock(
+          id: 'c',
+          blockType: BlockType.paragraph,
+          segments: [const StyledSegment('third')],
+        ),
       ]);
       final result = RemoveBlock(1).apply(doc);
       expect(result.allBlocks.length, 2);
@@ -763,10 +903,12 @@ void main() {
       final segs = applied.allBlocks[0].segments;
       expect(segs.any((s) => s.text == 'Visit '), isTrue);
       expect(
-        segs.any((s) =>
-            s.text == 'Google' &&
-            s.styles.contains(InlineStyle.link) &&
-            s.attributes['url'] == 'https://g.co'),
+        segs.any(
+          (s) =>
+              s.text == 'Google' &&
+              s.styles.contains(InlineStyle.link) &&
+              s.attributes['url'] == 'https://g.co',
+        ),
         isTrue,
       );
     });

@@ -43,15 +43,16 @@ String escapeMarkdown(String text) {
 /// This class owns the format-level grammar: paragraph splitting (`\n\n`),
 /// indentation (2-space nesting), and tree building.
 class MarkdownCodec<B extends Object> {
-  MarkdownCodec({EditorSchema<B, Object>? schema})
-    : _schema = schema ?? EditorSchema.standard() as EditorSchema<B, Object>;
+  MarkdownCodec({EditorSchema<B, Object, Object>? schema})
+    : _schema =
+          schema ?? EditorSchema.standard() as EditorSchema<B, Object, Object>;
 
   /// Convenience constructor that returns a codec typed for the built-in
   /// [BlockType] enum using the standard schema.
   static MarkdownCodec<BlockType> standard() =>
       MarkdownCodec<BlockType>(schema: EditorSchema.standard());
 
-  final EditorSchema<B, Object> _schema;
+  final EditorSchema<B, Object, Object> _schema;
 
   // -----------------------------------------------------------------------
   // Encode
@@ -342,8 +343,7 @@ class MarkdownCodec<B extends Object> {
   /// When collapsing a block, the entire subsequent group at depth >= the
   /// original depth is shifted down by 1, preserving sibling relationships.
   /// Iterates until stable (typically 1-2 passes).
-  List<(int, TextBlock<B>)> _normalizeDepths(
-      List<(int, TextBlock<B>)> parsed) {
+  List<(int, TextBlock<B>)> _normalizeDepths(List<(int, TextBlock<B>)> parsed) {
     final adj = List<(int, TextBlock<B>)>.of(parsed);
     var changed = true;
     while (changed) {

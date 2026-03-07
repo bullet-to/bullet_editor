@@ -8,7 +8,9 @@ void main() {
       // Simulates: EditorController _ctrl = EditorController(schema: ...);
       // where the field type forces <Object, Object>.
       expect(
-        () => EditorController<Object, Object>(schema: EditorSchema.standard()),
+        () => EditorController<Object, Object, Object>(
+          schema: EditorSchema.standard(),
+        ),
         throwsA(isA<AssertionError>()),
       );
     });
@@ -1748,7 +1750,10 @@ void main() {
           selection: const TextSelection(baseOffset: 6, extentOffset: 10),
         );
 
-        controller.setLink('https://example.com');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://example.com'),
+        );
 
         final segs = controller.document.allBlocks[0].segments;
         final linkSeg = segs.firstWhere((s) => s.text == 'here');
@@ -1760,7 +1765,7 @@ void main() {
         expect(plainSeg.styles, isEmpty);
       });
 
-      test('setLink is no-op on collapsed cursor', () {
+      test('setInlineEntity inserts default text on collapsed cursor', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -1776,10 +1781,15 @@ void main() {
           selection: const TextSelection.collapsed(offset: 3),
         );
 
-        controller.setLink('https://example.com');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://example.com'),
+        );
 
-        // No link applied — all segments unchanged.
-        expect(controller.document.allBlocks[0].segments[0].styles, isEmpty);
+        final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
+          (s) => s.styles.contains(InlineStyle.link),
+        );
+        expect(linkSeg.text, 'https://example.com');
       });
     });
 
@@ -1813,7 +1823,7 @@ void main() {
           );
 
           // No recognizers on any span — link taps are detected via
-          // segmentAtOffset / linkAtDisplayOffset instead.
+          // segmentAtOffset / inlineEntityAtDisplayOffset instead.
           final linkSpan = _findSpanWithText(span, 'Google');
           expect(linkSpan, isNotNull);
           expect(linkSpan!.recognizer, isNull);
@@ -1855,7 +1865,7 @@ void main() {
         expect(midSeg!.text, 'Google');
 
         // Model offset 12 = end of 'Google' — forward-match returns ' today'
-        // but linkAtDisplayOffset checks both sides and finds the link
+        // but inlineEntityAtDisplayOffset checks both sides and finds the link
         final endSeg = controller.segmentAtOffset(12);
         expect(endSeg, isNotNull);
         expect(endSeg!.text, ' today'); // forward-match at boundary
@@ -1868,36 +1878,48 @@ void main() {
         controller.dispose();
       });
 
-      test('linkAtDisplayOffset returns URL for link, null for plain text', () {
-        final controller = EditorController(
-          schema: EditorSchema.standard(),
-          document: Document([
-            TextBlock(
-              id: 'a',
-              blockType: BlockType.paragraph,
-              segments: [
-                const StyledSegment('Hi '),
-                const StyledSegment(
-                  'link',
-                  {InlineStyle.link},
-                  {'url': 'https://x.com'},
-                ),
-              ],
-            ),
-          ]),
-        );
+      test(
+        'inlineEntityAtDisplayOffset returns link entity, null for plain text',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment('Hi '),
+                  const StyledSegment(
+                    'link',
+                    {InlineStyle.link},
+                    {'url': 'https://x.com'},
+                  ),
+                ],
+              ),
+            ]),
+          );
 
-        // Display offset 3 = model offset 3 = start of 'link' (forward-match)
-        expect(controller.linkAtDisplayOffset(3), 'https://x.com');
-        // Display offset 5 = model offset 5 = inside 'link'
-        expect(controller.linkAtDisplayOffset(5), 'https://x.com');
-        // Display offset 7 = model offset 7 = end of 'link' (backward check)
-        expect(controller.linkAtDisplayOffset(7), 'https://x.com');
-        // Display offset 1 = model offset 1 = inside 'Hi ' (no link)
-        expect(controller.linkAtDisplayOffset(1), isNull);
+          // Display offset 3 = model offset 3 = start of 'link' (forward-match)
+          expect(
+            controller.inlineEntityAtDisplayOffset(3)?.data,
+            const LinkData(url: 'https://x.com'),
+          );
+          // Display offset 5 = model offset 5 = inside 'link'
+          expect(
+            controller.inlineEntityAtDisplayOffset(5)?.data,
+            const LinkData(url: 'https://x.com'),
+          );
+          // Display offset 7 = model offset 7 = end of 'link' (backward check)
+          expect(
+            controller.inlineEntityAtDisplayOffset(7)?.data,
+            const LinkData(url: 'https://x.com'),
+          );
+          // Display offset 1 = model offset 1 = inside 'Hi ' (no link)
+          expect(controller.inlineEntityAtDisplayOffset(1), isNull);
 
-        controller.dispose();
-      });
+          controller.dispose();
+        },
+      );
     });
 
     group('currentAttributes', () {
@@ -2050,51 +2072,66 @@ void main() {
         controller.value = controller.value.copyWith(
           selection: const TextSelection(baseOffset: 0, extentOffset: 5),
         );
-        controller.setLink('https://new.com');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://new.com'),
+        );
 
         final seg = controller.document.allBlocks[0].segments[0];
         expect(seg.styles, contains(InlineStyle.link));
         expect(seg.attributes['url'], 'https://new.com');
       });
 
-      test('setLink with non-collapsed selection replaces text and URL', () {
-        final controller = EditorController(
-          schema: EditorSchema.standard(),
-          document: Document([
-            TextBlock(
-              id: 'a',
-              blockType: BlockType.paragraph,
-              segments: [
-                const StyledSegment('see '),
-                const StyledSegment(
-                  'here',
-                  {InlineStyle.link},
-                  {'url': 'https://old.com'},
-                ),
-                const StyledSegment(' end'),
-              ],
+      test(
+        'setInlineEntity with non-collapsed selection replaces text and URL',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment('see '),
+                  const StyledSegment(
+                    'here',
+                    {InlineStyle.link},
+                    {'url': 'https://old.com'},
+                  ),
+                  const StyledSegment(' end'),
+                ],
+              ),
+            ]),
+          );
+
+          // Select the "here" link text.
+          final hereStart = controller.text.indexOf('here');
+          controller.value = controller.value.copyWith(
+            selection: TextSelection(
+              baseOffset: hereStart,
+              extentOffset: hereStart + 4,
             ),
-          ]),
-        );
+          );
 
-        // Select the "here" link text.
-        final hereStart = controller.text.indexOf('here');
-        controller.value = controller.value.copyWith(
-          selection:
-              TextSelection(baseOffset: hereStart, extentOffset: hereStart + 4),
-        );
+          controller.setInlineEntity(
+            InlineEntityType.link,
+            const LinkData(url: 'https://new.com'),
+            text: 'click me',
+          );
 
-        controller.setLink('https://new.com', text: 'click me');
+          expect(
+            controller.document.allBlocks[0].plainText,
+            'see click me end',
+          );
+          final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
+            (s) => s.styles.contains(InlineStyle.link),
+          );
+          expect(linkSeg.text, 'click me');
+          expect(linkSeg.attributes['url'], 'https://new.com');
+        },
+      );
 
-        expect(controller.document.allBlocks[0].plainText, 'see click me end');
-        final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-          (s) => s.styles.contains(InlineStyle.link),
-        );
-        expect(linkSeg.text, 'click me');
-        expect(linkSeg.attributes['url'], 'https://new.com');
-      });
-
-      test('setLink with collapsed cursor inside link updates URL', () {
+      test('setInlineEntity with collapsed cursor inside link updates URL', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2120,7 +2157,10 @@ void main() {
           selection: TextSelection.collapsed(offset: hereStart + 2),
         );
 
-        controller.setLink('https://updated.com');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://updated.com'),
+        );
 
         // The link segment should have the new URL.
         final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
@@ -2130,7 +2170,7 @@ void main() {
         expect(linkSeg.attributes['url'], 'https://updated.com');
       });
 
-      test('setLink with collapsed cursor inserts linked text', () {
+      test('setInlineEntity with collapsed cursor inserts linked text', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2149,7 +2189,11 @@ void main() {
           ),
         );
 
-        controller.setLink('https://example.com', text: 'link');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://example.com'),
+          text: 'link',
+        );
 
         // "link" inserted at cursor with link style.
         expect(controller.document.allBlocks[0].plainText, 'pllinkain');
@@ -2160,35 +2204,41 @@ void main() {
         expect(linkSeg.attributes['url'], 'https://example.com');
       });
 
-      test('setLink with collapsed cursor and no text uses URL as text', () {
-        final controller = EditorController(
-          schema: EditorSchema.standard(),
-          document: Document([
-            TextBlock(
-              id: 'a',
-              blockType: BlockType.paragraph,
-              segments: [const StyledSegment('hello')],
-            ),
-          ]),
-        );
+      test(
+        'setInlineEntity with collapsed cursor and no text uses URL as text',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [const StyledSegment('hello')],
+              ),
+            ]),
+          );
 
-        controller.value = controller.value.copyWith(
-          selection: const TextSelection.collapsed(offset: 5),
-        );
+          controller.value = controller.value.copyWith(
+            selection: const TextSelection.collapsed(offset: 5),
+          );
 
-        controller.setLink('https://x.com');
+          controller.setInlineEntity(
+            InlineEntityType.link,
+            const LinkData(url: 'https://x.com'),
+          );
 
-        expect(
-          controller.document.allBlocks[0].plainText,
-          'hellohttps://x.com',
-        );
-        final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-          (s) => s.styles.contains(InlineStyle.link),
-        );
-        expect(linkSeg.text, 'https://x.com');
-      });
+          expect(
+            controller.document.allBlocks[0].plainText,
+            'hellohttps://x.com',
+          );
+          final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
+            (s) => s.styles.contains(InlineStyle.link),
+          );
+          expect(linkSeg.text, 'https://x.com');
+        },
+      );
 
-      test('setLink on plain text applies link', () {
+      test('setInlineEntity on plain text applies link', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2202,7 +2252,10 @@ void main() {
         controller.value = controller.value.copyWith(
           selection: const TextSelection(baseOffset: 0, extentOffset: 5),
         );
-        controller.setLink('https://example.com');
+        controller.setInlineEntity(
+          InlineEntityType.link,
+          const LinkData(url: 'https://example.com'),
+        );
 
         final seg = controller.document.allBlocks[0].segments[0];
         expect(seg.styles, contains(InlineStyle.link));
@@ -2210,7 +2263,7 @@ void main() {
       });
     });
 
-    group('linkInfo', () {
+    group('inlineEntityEditInfo', () {
       test('returns null for invalid selection', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
@@ -2225,10 +2278,10 @@ void main() {
         controller.value = controller.value.copyWith(
           selection: const TextSelection(baseOffset: -1, extentOffset: -1),
         );
-        expect(controller.linkInfo, isNull);
+        expect(controller.inlineEntityEditInfo, isNull);
       });
 
-      test('collapsed cursor in plain text returns empty LinkInfo', () {
+      test('collapsed cursor in plain text returns empty edit info', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2242,7 +2295,10 @@ void main() {
         controller.value = controller.value.copyWith(
           selection: const TextSelection.collapsed(offset: 3),
         );
-        expect(controller.linkInfo, const LinkInfo());
+        expect(
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(),
+        );
       });
 
       test('collapsed cursor in a link returns segment text and URL', () {
@@ -2269,12 +2325,16 @@ void main() {
           selection: TextSelection.collapsed(offset: hereStart + 2),
         );
         expect(
-          controller.linkInfo,
-          const LinkInfo(text: 'here', url: 'https://example.com'),
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(
+            text: 'here',
+            type: InlineEntityType.link,
+            data: LinkData(url: 'https://example.com'),
+          ),
         );
       });
 
-      test('selection in plain text returns selected text, no URL', () {
+      test('selection in plain text returns selected text, no entity', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2288,7 +2348,10 @@ void main() {
         controller.value = controller.value.copyWith(
           selection: const TextSelection(baseOffset: 6, extentOffset: 11),
         );
-        expect(controller.linkInfo, const LinkInfo(text: 'world'));
+        expect(
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(text: 'world'),
+        );
       });
 
       test('selection fully inside a link returns text and URL', () {
@@ -2312,16 +2375,22 @@ void main() {
         );
         final linkStart = controller.text.indexOf('click');
         controller.value = controller.value.copyWith(
-          selection:
-              TextSelection(baseOffset: linkStart, extentOffset: linkStart + 5),
+          selection: TextSelection(
+            baseOffset: linkStart,
+            extentOffset: linkStart + 5,
+          ),
         );
         expect(
-          controller.linkInfo,
-          const LinkInfo(text: 'click', url: 'https://example.com'),
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(
+            text: 'click',
+            type: InlineEntityType.link,
+            data: LinkData(url: 'https://example.com'),
+          ),
         );
       });
 
-      test('selection spanning link and plain text returns one URL', () {
+      test('selection spanning link and plain text returns one entity', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
           document: Document([
@@ -2344,72 +2413,88 @@ void main() {
           selection: const TextSelection(baseOffset: 0, extentOffset: 4),
         );
         expect(
-          controller.linkInfo,
-          const LinkInfo(text: 'link', url: 'https://example.com'),
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(
+            text: 'link',
+            type: InlineEntityType.link,
+            data: LinkData(url: 'https://example.com'),
+          ),
         );
       });
 
-      test('selection spanning two links with same URL returns that URL', () {
-        final controller = EditorController(
-          schema: EditorSchema.standard(),
-          document: Document([
-            TextBlock(
-              id: 'a',
-              blockType: BlockType.paragraph,
-              segments: [
-                const StyledSegment(
-                  'aaa',
-                  {InlineStyle.link},
-                  {'url': 'https://example.com'},
-                ),
-                const StyledSegment(' '),
-                const StyledSegment(
-                  'bbb',
-                  {InlineStyle.link},
-                  {'url': 'https://example.com'},
-                ),
-              ],
+      test(
+        'selection spanning two links with same URL returns that entity',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment(
+                    'aaa',
+                    {InlineStyle.link},
+                    {'url': 'https://example.com'},
+                  ),
+                  const StyledSegment(' '),
+                  const StyledSegment(
+                    'bbb',
+                    {InlineStyle.link},
+                    {'url': 'https://example.com'},
+                  ),
+                ],
+              ),
+            ]),
+          );
+          controller.value = controller.value.copyWith(
+            selection: const TextSelection(baseOffset: 0, extentOffset: 7),
+          );
+          expect(
+            controller.inlineEntityEditInfo,
+            const InlineEntityEditInfo<InlineEntityType>(
+              text: 'aaa bbb',
+              type: InlineEntityType.link,
+              data: LinkData(url: 'https://example.com'),
             ),
-          ]),
-        );
-        controller.value = controller.value.copyWith(
-          selection: const TextSelection(baseOffset: 0, extentOffset: 7),
-        );
-        expect(
-          controller.linkInfo,
-          const LinkInfo(text: 'aaa bbb', url: 'https://example.com'),
-        );
-      });
+          );
+        },
+      );
 
-      test('selection spanning two links with different URLs returns no URL',
-          () {
-        final controller = EditorController(
-          schema: EditorSchema.standard(),
-          document: Document([
-            TextBlock(
-              id: 'a',
-              blockType: BlockType.paragraph,
-              segments: [
-                const StyledSegment(
-                  'aaa',
-                  {InlineStyle.link},
-                  {'url': 'https://first.com'},
-                ),
-                const StyledSegment(' '),
-                const StyledSegment(
-                  'bbb',
-                  {InlineStyle.link},
-                  {'url': 'https://second.com'},
-                ),
-              ],
-            ),
-          ]),
-        );
-        controller.value = controller.value.copyWith(
-          selection: const TextSelection(baseOffset: 0, extentOffset: 7),
-        );
-        expect(controller.linkInfo, const LinkInfo(text: 'aaa bbb'));
-      });
+      test(
+        'selection spanning two links with different URLs returns no entity',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment(
+                    'aaa',
+                    {InlineStyle.link},
+                    {'url': 'https://first.com'},
+                  ),
+                  const StyledSegment(' '),
+                  const StyledSegment(
+                    'bbb',
+                    {InlineStyle.link},
+                    {'url': 'https://second.com'},
+                  ),
+                ],
+              ),
+            ]),
+          );
+          controller.value = controller.value.copyWith(
+            selection: const TextSelection(baseOffset: 0, extentOffset: 7),
+          );
+          expect(
+            controller.inlineEntityEditInfo,
+            const InlineEntityEditInfo<InlineEntityType>(text: 'aaa bbb'),
+          );
+        },
+      );
 
       test('cross-block selection collects text with newline', () {
         final controller = EditorController(
@@ -2435,12 +2520,18 @@ void main() {
         );
         // Select all text across both blocks.
         controller.value = controller.value.copyWith(
-          selection:
-              TextSelection(baseOffset: 0, extentOffset: controller.text.length),
+          selection: TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          ),
         );
         expect(
-          controller.linkInfo,
-          const LinkInfo(text: 'hello\nworld', url: 'https://example.com'),
+          controller.inlineEntityEditInfo,
+          const InlineEntityEditInfo<InlineEntityType>(
+            text: 'hello\nworld',
+            type: InlineEntityType.link,
+            data: LinkData(url: 'https://example.com'),
+          ),
         );
       });
     });

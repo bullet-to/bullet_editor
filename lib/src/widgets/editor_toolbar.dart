@@ -4,11 +4,13 @@ import '../editor/editor_controller.dart';
 
 /// A toolbar that provides block type selection and inline style toggles.
 ///
-/// [B] is the block type key, [S] is the inline style key.
+/// [B] is the block type key, [S] is the inline style key, and [E] is the
+/// inline entity key.
 ///
 /// Connects to an [EditorController] via [ListenableBuilder] so it
 /// rebuilds automatically when the cursor/selection changes.
-class EditorToolbar<B extends Object, S extends Object> extends StatelessWidget {
+class EditorToolbar<B extends Object, S extends Object, E extends Object>
+    extends StatelessWidget {
   const EditorToolbar({
     super.key,
     required this.controller,
@@ -19,14 +21,14 @@ class EditorToolbar<B extends Object, S extends Object> extends StatelessWidget 
     this.decoration,
   });
 
-  final EditorController<B, S> controller;
+  final EditorController<B, S, E> controller;
 
   /// The block type selector dropdown (or custom widget).
   /// If null, no block type selector is shown.
   final Widget? blockTypeSelector;
 
   /// Inline style toggle buttons.
-  final List<StyleToggleButton<B, S>> styleButtons;
+  final List<StyleToggleButton<B, S, E>> styleButtons;
 
   /// Additional action widgets (divider insert, undo/redo, etc.).
   final List<Widget> extraActions;
@@ -44,23 +46,28 @@ class EditorToolbar<B extends Object, S extends Object> extends StatelessWidget 
       builder: (context, _) {
         return Container(
           decoration: decoration,
-          padding: padding ?? const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding:
+              padding ?? const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Row(
             children: [
               if (blockTypeSelector != null) ...[
                 blockTypeSelector!,
                 const SizedBox(width: 8),
               ],
-              ...styleButtons.map((btn) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: btn,
-              )),
+              ...styleButtons.map(
+                (btn) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: btn,
+                ),
+              ),
               if (extraActions.isNotEmpty) ...[
                 const SizedBox(width: 8),
-                ...extraActions.map((a) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  child: a,
-                )),
+                ...extraActions.map(
+                  (a) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: a,
+                  ),
+                ),
               ],
             ],
           ),
@@ -73,7 +80,8 @@ class EditorToolbar<B extends Object, S extends Object> extends StatelessWidget 
 /// A toggle button for an inline style.
 ///
 /// Highlights when the style is active at the cursor/selection.
-class StyleToggleButton<B extends Object, S extends Object> extends StatelessWidget {
+class StyleToggleButton<B extends Object, S extends Object, E extends Object>
+    extends StatelessWidget {
   const StyleToggleButton({
     super.key,
     required this.controller,
@@ -82,7 +90,7 @@ class StyleToggleButton<B extends Object, S extends Object> extends StatelessWid
     this.tooltip,
   });
 
-  final EditorController<B, S> controller;
+  final EditorController<B, S, E> controller;
   final S style;
   final IconData icon;
   final String? tooltip;
@@ -108,14 +116,15 @@ class StyleToggleButton<B extends Object, S extends Object> extends StatelessWid
 /// A dropdown for selecting block types.
 ///
 /// [B] is the block type key.
-class BlockTypeSelector<B extends Object, S extends Object> extends StatelessWidget {
+class BlockTypeSelector<B extends Object, S extends Object, E extends Object>
+    extends StatelessWidget {
   const BlockTypeSelector({
     super.key,
     required this.controller,
     required this.items,
   });
 
-  final EditorController<B, S> controller;
+  final EditorController<B, S, E> controller;
 
   /// The block types to show in the dropdown, with display labels.
   final List<BlockTypeSelectorItem<B>> items;

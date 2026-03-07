@@ -4,7 +4,10 @@ import 'package:flutter/widgets.dart';
 import '../codec/markdown_codec.dart';
 import '../model/block.dart';
 import '../model/document.dart';
+
+import '../model/inline_entity.dart';
 import '../schema/editor_schema.dart';
+import '../schema/inline_entity_def.dart';
 import 'edit_operation.dart';
 import 'input_rule.dart';
 import 'offset_mapper.dart' as mapper;
@@ -13,8 +16,12 @@ import 'text_diff.dart';
 import 'transaction.dart';
 import 'undo_manager.dart';
 
-/// Callback for link taps. Receives the URL from the segment's attributes.
-typedef LinkTapCallback = void Function(String url);
+/// Callback for inline entity taps.
+///
+/// Inline entities are data-carrying inline styles such as links, mentions,
+/// or tags. The callback receives the resolved entity info at the tapped range.
+typedef InlineEntityTapCallback<E extends Object> =
+    void Function(InlineEntityInfo<E> entity);
 
 /// A concrete contiguous segment occurrence with resolved offsets.
 ///
@@ -44,30 +51,73 @@ final class SegmentRun<B extends Object> {
   final int displayEnd;
 }
 
-/// Pre-fill info for a link dialog.
+/// Resolved info for a data-carrying inline entity at a concrete range.
 ///
-/// Returned by [EditorController.linkInfo] to provide the text and URL
-/// that should populate the dialog fields.
-class LinkInfo {
-  const LinkInfo({this.text = '', this.url});
+/// This is the public, editor-level counterpart to [SegmentRun]. It exposes
+/// the entity type, payload, text, and ranges without leaking block-local
+/// document structure to callers.
+class InlineEntityInfo<E extends Object> {
+  const InlineEntityInfo({
+    required this.type,
+    required this.text,
+    required this.data,
+    required this.modelStart,
+    required this.modelEnd,
+    required this.displayStart,
+    required this.displayEnd,
+  });
 
-  /// Text to pre-fill. Selected text, or the full link segment text
-  /// when the cursor is collapsed inside a link.
+  /// Public entity key, e.g. [InlineEntityType.link] in the standard schema.
+  final E type;
+
+  /// Visible text covered by the entity.
   final String text;
 
-  /// URL to pre-fill, or null when creating a new link.
-  final String? url;
+  /// Typed entity payload, e.g. [LinkData] for a link.
+  final InlineEntityData data;
+
+  /// Entity range in model/document coordinates.
+  final int modelStart;
+  final int modelEnd;
+
+  /// Entity range in display/TextField coordinates.
+  final int displayStart;
+  final int displayEnd;
+}
+
+/// Pre-fill info for an inline entity edit UI.
+///
+/// For a collapsed cursor inside an entity this contains the entity's full text
+/// and payload. For a non-collapsed selection it contains the selected text and,
+/// only when every entity touched by the selection is the same type with the
+/// same attributes, that shared entity payload.
+class InlineEntityEditInfo<E extends Object> {
+  const InlineEntityEditInfo({this.text = '', this.type, this.data});
+
+  /// Text to pre-fill. Selected text, or the full entity text when the cursor
+  /// is collapsed inside an entity.
+  final String text;
+
+  /// Entity key when the current selection resolves to exactly one entity.
+  final E? type;
+
+  /// Entity payload when the current selection resolves to exactly one entity.
+  final InlineEntityData? data;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is LinkInfo && text == other.text && url == other.url;
+      other is InlineEntityEditInfo<E> &&
+          text == other.text &&
+          type == other.type &&
+          data == other.data;
 
   @override
-  int get hashCode => Object.hash(text, url);
+  int get hashCode => Object.hash(text, type, data);
 
   @override
-  String toString() => 'LinkInfo(text: "$text", url: $url)';
+  String toString() =>
+      'InlineEntityEditInfo(text: "$text", type: $type, data: $data)';
 }
 
 /// The bridge between Flutter's TextField and our document model.
@@ -77,24 +127,24 @@ class LinkInfo {
 /// Offset translation is handled by [offset_mapper.dart].
 /// Rendering is handled by [span_builder.dart].
 /// This class owns the edit pipeline, undo/redo, and public actions.
-class EditorController<B extends Object, S extends Object>
+class EditorController<B extends Object, S extends Object, E extends Object>
     extends TextEditingController {
   EditorController({
     Document<B>? document,
-    required EditorSchema<B, S> schema,
+    required EditorSchema<B, S, E> schema,
     List<InputRule>? additionalInputRules,
-    LinkTapCallback? onLinkTap,
+    InlineEntityTapCallback<E>? onInlineEntityTap,
     ShouldGroupUndo? undoGrouping,
     int maxUndoStack = 100,
   }) : assert(
-         B != Object && S != Object,
+         B != Object && S != Object && E != Object,
          'EditorController requires explicit type parameters.\n'
-         'Use EditorController<BlockType, InlineStyle>(...) '
+         'Use EditorController<BlockType, InlineStyle, InlineEntityType>(...) '
          'instead of EditorController(...).',
        ),
        _document = document ?? Document.empty(schema.defaultBlockType),
        _schema = schema,
-       _onLinkTap = onLinkTap,
+       _onInlineEntityTap = onInlineEntityTap,
        _undoManager = UndoManager(
          grouping: undoGrouping,
          maxStackSize: maxUndoStack,
@@ -112,9 +162,9 @@ class EditorController<B extends Object, S extends Object>
 
   Document<B> _document;
   late final List<InputRule> _inputRules;
-  final EditorSchema<B, S> _schema;
+  final EditorSchema<B, S, E> _schema;
   final UndoManager _undoManager;
-  LinkTapCallback? _onLinkTap;
+  InlineEntityTapCallback<E>? _onInlineEntityTap;
   bool _isSyncing = false;
 
   /// The cursor offset at which _activeStyles was manually set (by toggleStyle).
@@ -135,15 +185,20 @@ class EditorController<B extends Object, S extends Object>
   Set<Object> _activeStyles = {};
 
   Document<B> get document => _document;
-  EditorSchema<B, S> get schema => _schema;
+  EditorSchema<B, S, E> get schema => _schema;
 
   /// Active inline styles at the cursor. Typed as `Set<S>` for exhaustive
-  /// switch. The internal set uses `Set<Object>` — the cast is safe because
-  /// only S values are ever added.
-  Set<S> get activeStyles => _activeStyles.cast<S>();
+  /// switch. Data-carrying entity styles are intentionally excluded from the
+  /// public set so this remains a formatting-style API.
+  Set<S> get activeStyles => _activeStyles
+      .where((style) => !_schema.inlineStyleDef(style).isDataCarrying)
+      .cast<S>()
+      .toSet();
 
-  LinkTapCallback? get onLinkTap => _onLinkTap;
-  set onLinkTap(LinkTapCallback? value) => _onLinkTap = value;
+  /// Called when the editor detects a tap on a data-carrying inline entity.
+  InlineEntityTapCallback<E>? get onInlineEntityTap => _onInlineEntityTap;
+  set onInlineEntityTap(InlineEntityTapCallback<E>? value) =>
+      _onInlineEntityTap = value;
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
 
@@ -165,32 +220,29 @@ class EditorController<B extends Object, S extends Object>
         const {};
   }
 
-  /// Pre-fill info for a link dialog, or null if the selection is invalid.
-  ///
-  /// - Collapsed cursor in a link: segment text and URL.
-  /// - Collapsed cursor in plain text: empty text, no URL.
-  /// - Selection with exactly one link URL: selected text and that URL.
-  /// - Selection with 0 or 2+ different URLs: selected text, no URL.
-  LinkInfo? get linkInfo {
+  /// Pre-fill info for an inline entity edit UI, or null if selection is invalid.
+  InlineEntityEditInfo<E>? get inlineEntityEditInfo {
     final sel = value.selection;
     if (!sel.isValid) return null;
 
     if (sel.isCollapsed) {
-      final run = _linkRunAtModelOffset(
-        displayToModel(sel.baseOffset),
-        boundary: SegmentBoundary.backward,
-      );
-      if (run != null) {
-        return LinkInfo(text: run.segment.text, url: _linkUrl(run.segment)!);
+      final entity = inlineEntityAtCursor;
+      if (entity != null) {
+        return InlineEntityEditInfo<E>(
+          text: entity.text,
+          type: entity.type,
+          data: entity.data,
+        );
       }
-      return const LinkInfo();
+      return InlineEntityEditInfo<E>();
     }
 
     final (start, end) = _orderedRange(sel);
     final modelStart = displayToModel(start);
     final modelEnd = displayToModel(end);
 
-    String? foundUrl;
+    E? foundType;
+    InlineEntityData? foundData;
     var multiple = false;
     final textBuf = StringBuffer();
 
@@ -207,11 +259,13 @@ class EditorController<B extends Object, S extends Object>
       for (final seg in block.segments) {
         final segEnd = offset + seg.text.length;
         if (segEnd > localStart && offset < localEnd) {
-          final url = _linkUrl(seg);
-          if (url != null) {
-            if (foundUrl == null) {
-              foundUrl = url;
-            } else if (foundUrl != url) {
+          final def = _inlineEntityDefOf(seg);
+          if (def != null) {
+            final data = def.decode(seg.attributes);
+            if (foundType == null) {
+              foundType = def.type;
+              foundData = data;
+            } else if (foundType != def.type || foundData != data) {
               multiple = true;
             }
           }
@@ -220,24 +274,25 @@ class EditorController<B extends Object, S extends Object>
       }
     });
 
-    return LinkInfo(text: textBuf.toString(), url: multiple ? null : foundUrl);
+    return InlineEntityEditInfo<E>(
+      text: textBuf.toString(),
+      type: multiple ? null : foundType,
+      data: multiple ? null : foundData,
+    );
   }
 
-  /// Display (TextField) range of the link segment at the cursor, or null.
+  /// Resolved inline entity at the collapsed cursor, or null.
   ///
-  /// When [value.selection] is valid and collapsed and the cursor is inside
-  /// a link segment, returns `(start, end)` in display coordinates. Use this
-  /// to set the selection and call [toggleStyle] to remove the link, or for
-  /// UI (e.g. highlighting). Otherwise returns null.
-  (int, int)? get linkSegmentDisplayRangeAtCursor {
+  /// Only returns entities for data-carrying inline styles.
+  InlineEntityInfo<E>? get inlineEntityAtCursor {
     final sel = value.selection;
     if (!sel.isValid || !sel.isCollapsed) return null;
-
-    final run = _linkRunAtModelOffset(
-      displayToModel(sel.baseOffset),
-      boundary: SegmentBoundary.backward,
+    return _inlineEntityInfoFromRun(
+      _inlineEntityRunAtModelOffset(
+        displayToModel(sel.baseOffset),
+        boundary: SegmentBoundary.backward,
+      ),
     );
-    return run != null ? (run.displayStart, run.displayEnd) : null;
   }
 
   // -- Offset helpers (delegate to offset_mapper) --
@@ -276,6 +331,11 @@ class EditorController<B extends Object, S extends Object>
     }
   }
 
+  /// Resolve the concrete segment occurrence at a model offset.
+  ///
+  /// This mirrors [Document.segmentAt] boundary semantics, but returns the
+  /// full resolved run so callers can edit or report ranges without repeating
+  /// block/offset math.
   SegmentRun<B>? _segmentRunAtModelOffset(
     int modelOffset, {
     SegmentBoundary boundary = SegmentBoundary.forward,
@@ -319,12 +379,12 @@ class EditorController<B extends Object, S extends Object>
     return null;
   }
 
-  SegmentRun<B>? _linkRunAtModelOffset(
+  SegmentRun<B>? _inlineEntityRunAtModelOffset(
     int modelOffset, {
     SegmentBoundary boundary = SegmentBoundary.backward,
   }) {
     final run = _segmentRunAtModelOffset(modelOffset, boundary: boundary);
-    return run != null && _linkUrl(run.segment) != null ? run : null;
+    return run != null && _inlineEntityDefOf(run.segment) != null ? run : null;
   }
 
   SegmentRun<B>? _segmentRunAtDisplayOffset(
@@ -335,11 +395,48 @@ class EditorController<B extends Object, S extends Object>
     boundary: boundary,
   );
 
-  SegmentRun<B>? _linkRunAtDisplayOffset(
+  SegmentRun<B>? _inlineEntityRunAtDisplayOffset(
     int displayOffset, {
     SegmentBoundary boundary = SegmentBoundary.backward,
-  }) =>
-      _linkRunAtModelOffset(displayToModel(displayOffset), boundary: boundary);
+  }) => _inlineEntityRunAtModelOffset(
+    displayToModel(displayOffset),
+    boundary: boundary,
+  );
+
+  InlineEntityDef<E, S>? _inlineEntityDefOf(StyledSegment seg) {
+    if (seg.attributes.isEmpty) return null;
+    for (final style in seg.styles) {
+      final def = _schema.inlineEntityDefForStyle(style);
+      if (def != null) return def;
+    }
+    return null;
+  }
+
+  /// Return the public entity type for this segment, if any.
+  E? _inlineEntityTypeOf(StyledSegment seg) => _inlineEntityDefOf(seg)?.type;
+
+  /// Convert an internal [SegmentRun] into the public entity representation.
+  InlineEntityInfo<E>? _inlineEntityInfoFromRun(SegmentRun<B>? run) {
+    if (run == null) return null;
+    final def = _inlineEntityDefOf(run.segment);
+    if (def == null) return null;
+    return InlineEntityInfo<E>(
+      type: def.type,
+      text: run.segment.text,
+      data: def.decode(run.segment.attributes),
+      modelStart: run.globalStart,
+      modelEnd: run.globalEnd,
+      displayStart: run.displayStart,
+      displayEnd: run.displayEnd,
+    );
+  }
+
+  /// Fallback visible text when inserting a collapsed entity without explicit text.
+  ///
+  /// Links default to their URL. Other entity types should supply [text] until
+  /// they define a better default representation.
+  String? _defaultInlineEntityText(E type, InlineEntityData data) =>
+      _schema.inlineEntityDef(type)?.defaultText?.call(data);
 
   /// Convert a display offset (TextField position) to a model offset.
   int displayToModel(int displayOffset) =>
@@ -734,37 +831,13 @@ class EditorController<B extends Object, S extends Object>
   /// - Non-collapsed selection: applies [ToggleStyle] to the selected range.
   void toggleStyle(S style) {
     if (!value.selection.isValid) return;
+    assert(
+      !_schema.inlineStyleDef(style).isDataCarrying,
+      'toggleStyle only supports formatting styles. Use setInlineEntity or removeInlineEntity for data-carrying inline entities.',
+    );
+    if (_schema.inlineStyleDef(style).isDataCarrying) return;
 
     if (value.selection.isCollapsed) {
-      // When cursor is inside a link, toggling link removes the link from that segment.
-      if (style == InlineStyle.link) {
-        final modelOffset = displayToModel(value.selection.baseOffset);
-        final run = _linkRunAtModelOffset(
-          modelOffset,
-          boundary: SegmentBoundary.backward,
-        );
-        if (run != null) {
-          _pushUndo();
-          final tx = Transaction(
-            operations: [
-              ToggleStyle(
-                run.blockIndex,
-                run.localStart,
-                run.localEnd,
-                InlineStyle.link,
-                attributes: run.segment.attributes,
-              ),
-            ],
-            selectionAfter: TextSelection.collapsed(offset: modelOffset),
-          );
-          _document = tx.apply(_document);
-          _syncToTextField(
-            modelSelection: TextSelection.collapsed(offset: modelOffset),
-          );
-          return;
-        }
-      }
-
       if (_activeStyles.contains(style)) {
         _activeStyles = Set.of(_activeStyles)..remove(style);
       } else {
@@ -795,32 +868,35 @@ class EditorController<B extends Object, S extends Object>
     _syncToTextField(modelSelection: modelSel);
   }
 
-  /// Apply a link to the current selection, or insert/update a link at the cursor.
+  /// Apply a data-carrying inline entity to the current selection.
   ///
-  /// - **Non-collapsed selection:** applies [InlineStyle.link] with [url].
-  /// - **Collapsed cursor inside an existing link:** updates that link's URL
-  ///   (and optionally its display [text]).
-  /// - **Collapsed cursor not on a link:** inserts [text] (or [url] if [text]
-  ///   is null) as a new linked segment at the cursor position.
-  void setLink(String url, {String? text}) {
+  /// - **Non-collapsed selection:** applies [type] with [data].
+  /// - **Collapsed cursor inside an entity of the same type:** updates that
+  ///   entity's payload (and optionally its display [text]).
+  /// - **Collapsed cursor not on that entity type:** inserts a new entity at
+  ///   the cursor using [text], or the entity's default display string.
+  void setInlineEntity(E type, InlineEntityData data, {String? text}) {
     if (!value.selection.isValid) return;
+    final def = _schema.inlineEntityDef(type);
+    assert(def != null, 'No inline entity definition registered for $type.');
+    if (def == null) return;
+    final style = def.style;
+    final attributes = def.encode(data);
 
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
-      final run = _linkRunAtModelOffset(
+      final run = _segmentRunAtModelOffset(
         modelOffset,
         boundary: SegmentBoundary.backward,
       );
-      if (run != null) {
-        // Inside an existing link → update its URL (and text if provided).
+      if (run != null && _inlineEntityTypeOf(run.segment) == type) {
         _pushUndo();
-        final attrs = {'url': url};
         final ops = <EditOperation>[
           ToggleStyle(
             run.blockIndex,
             run.localStart,
             run.localEnd,
-            InlineStyle.link,
+            style,
             attributes: run.segment.attributes,
           ),
           if (text != null) ...[
@@ -835,8 +911,8 @@ class EditorController<B extends Object, S extends Object>
             run.blockIndex,
             run.localStart,
             text != null ? run.localStart + text.length : run.localEnd,
-            InlineStyle.link,
-            attributes: attrs,
+            style,
+            attributes: attributes,
           ),
         ];
         final cursorAfter =
@@ -851,20 +927,18 @@ class EditorController<B extends Object, S extends Object>
         return;
       }
 
-      // Collapsed, not inside a link → insert new linked text.
       final pos = _document.blockAt(modelOffset);
-      final displayText = text ?? url;
-      if (displayText.isEmpty) return;
+      final displayText = text ?? _defaultInlineEntityText(type, data);
+      if (displayText == null || displayText.isEmpty) return;
       _pushUndo();
-      final attrs = {'url': url};
       final ops = <EditOperation>[
         InsertText(pos.blockIndex, pos.localOffset, displayText),
         ToggleStyle(
           pos.blockIndex,
           pos.localOffset,
           pos.localOffset + displayText.length,
-          InlineStyle.link,
-          attributes: attrs,
+          style,
+          attributes: attributes,
         ),
       ];
       final cursorAfter = modelOffset + displayText.length;
@@ -880,29 +954,26 @@ class EditorController<B extends Object, S extends Object>
 
     final modelSel = _selectionToModel(value.selection);
     final (start, end) = _orderedRange(modelSel);
-    final attrs = {'url': url};
 
-    // When text is provided, replace the selected content then apply the link.
     if (text != null) {
       final startPos = _document.blockAt(start);
       final endPos = _document.blockAt(end);
       _pushUndo();
       final ops = <EditOperation>[];
 
-      // Remove existing link styles in the range first.
       _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
         var offset = 0;
         for (final seg in block.segments) {
           final segEnd = offset + seg.text.length;
           if (segEnd > localStart &&
               offset < localEnd &&
-              _linkUrl(seg) != null) {
+              seg.styles.contains(style)) {
             ops.add(
               ToggleStyle(
                 i,
                 localStart,
                 localEnd,
-                InlineStyle.link,
+                style,
                 attributes: seg.attributes,
               ),
             );
@@ -912,7 +983,6 @@ class EditorController<B extends Object, S extends Object>
         }
       });
 
-      // Delete selected range.
       if (startPos.blockIndex == endPos.blockIndex) {
         ops.add(
           DeleteText(startPos.blockIndex, startPos.localOffset, end - start),
@@ -928,15 +998,14 @@ class EditorController<B extends Object, S extends Object>
         );
       }
 
-      // Insert new text and apply link style.
       ops.add(InsertText(startPos.blockIndex, startPos.localOffset, text));
       ops.add(
         ToggleStyle(
           startPos.blockIndex,
           startPos.localOffset,
           startPos.localOffset + text.length,
-          InlineStyle.link,
-          attributes: attrs,
+          style,
+          attributes: attributes,
         ),
       );
 
@@ -951,53 +1020,114 @@ class EditorController<B extends Object, S extends Object>
       return;
     }
 
-    // text is null — just toggle the link style on the existing selection.
     final removeOps = <EditOperation>[];
     final addOps = <EditOperation>[];
     _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
-      var hasLink = false;
+      var hasEntity = false;
       var offset = 0;
       for (final seg in block.segments) {
         final segEnd = offset + seg.text.length;
-        if (segEnd > localStart && offset < localEnd && _linkUrl(seg) != null) {
-          hasLink = true;
+        if (segEnd > localStart &&
+            offset < localEnd &&
+            seg.styles.contains(style)) {
+          hasEntity = true;
           break;
         }
         offset = segEnd;
       }
-      if (hasLink) {
+      if (hasEntity) {
         removeOps.add(
-          ToggleStyle(
-            i,
-            localStart,
-            localEnd,
-            InlineStyle.link,
-            attributes: attrs,
-          ),
+          ToggleStyle(i, localStart, localEnd, style, attributes: attributes),
         );
       }
       addOps.add(
-        ToggleStyle(
-          i,
-          localStart,
-          localEnd,
-          InlineStyle.link,
-          attributes: attrs,
-        ),
+        ToggleStyle(i, localStart, localEnd, style, attributes: attributes),
       );
     });
 
     if (addOps.isEmpty) return;
 
     _pushUndo();
-    final tx = Transaction(
+    _document = Transaction(
       operations: [...removeOps, ...addOps],
       selectionAfter: modelSel,
-    );
-    _document = tx.apply(_document);
+    ).apply(_document);
     _activeStyles = _stylesForSelection(
       TextSelection(baseOffset: start, extentOffset: end),
     );
+    _syncToTextField(modelSelection: modelSel);
+  }
+
+  /// Remove an inline entity from the current cursor or selection.
+  ///
+  /// - **Collapsed cursor inside an entity of [type]:** removes that whole entity.
+  /// - **Non-collapsed selection:** removes [type] anywhere in the selection.
+  void removeInlineEntity(E type) {
+    if (!value.selection.isValid) return;
+    final def = _schema.inlineEntityDef(type);
+    assert(def != null, 'No inline entity definition registered for $type.');
+    if (def == null) return;
+    final style = def.style;
+
+    if (value.selection.isCollapsed) {
+      final modelOffset = displayToModel(value.selection.baseOffset);
+      final run = _segmentRunAtModelOffset(
+        modelOffset,
+        boundary: SegmentBoundary.backward,
+      );
+      if (run == null || _inlineEntityTypeOf(run.segment) != type) return;
+
+      _pushUndo();
+      _document = Transaction(
+        operations: [
+          ToggleStyle(
+            run.blockIndex,
+            run.localStart,
+            run.localEnd,
+            style,
+            attributes: run.segment.attributes,
+          ),
+        ],
+        selectionAfter: TextSelection.collapsed(offset: modelOffset),
+      ).apply(_document);
+      _syncToTextField(
+        modelSelection: TextSelection.collapsed(offset: modelOffset),
+      );
+      return;
+    }
+
+    final modelSel = _selectionToModel(value.selection);
+    final (start, end) = _orderedRange(modelSel);
+    final ops = <EditOperation>[];
+    _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
+      var offset = 0;
+      for (final seg in block.segments) {
+        final segEnd = offset + seg.text.length;
+        if (segEnd > localStart &&
+            offset < localEnd &&
+            _inlineEntityTypeOf(seg) == type) {
+          ops.add(
+            ToggleStyle(
+              i,
+              localStart,
+              localEnd,
+              style,
+              attributes: seg.attributes,
+            ),
+          );
+          break;
+        }
+        offset = segEnd;
+      }
+    });
+
+    if (ops.isEmpty) return;
+
+    _pushUndo();
+    _document = Transaction(
+      operations: ops,
+      selectionAfter: modelSel,
+    ).apply(_document);
     _syncToTextField(modelSelection: modelSel);
   }
 
@@ -1621,31 +1751,22 @@ class EditorController<B extends Object, S extends Object>
   StyledSegment? segmentAtOffset(int modelOffset) =>
       _segmentRunAtModelOffset(modelOffset)?.segment;
 
-  /// Get the link URL at a display offset, or null if not on a link.
+  /// Get the inline entity at a display offset, or null if not on one.
   /// Checks both forward and backward boundaries so tapping at either
-  /// edge of a link detects it.
-  String? linkAtDisplayOffset(int displayOffset) =>
-      _linkUrl(
-        _linkRunAtDisplayOffset(
+  /// edge of an entity detects it.
+  InlineEntityInfo<E>? inlineEntityAtDisplayOffset(int displayOffset) =>
+      _inlineEntityInfoFromRun(
+        _inlineEntityRunAtDisplayOffset(
           displayOffset,
           boundary: SegmentBoundary.forward,
-        )?.segment,
+        ),
       ) ??
-      _linkUrl(
-        _linkRunAtDisplayOffset(
+      _inlineEntityInfoFromRun(
+        _inlineEntityRunAtDisplayOffset(
           displayOffset,
           boundary: SegmentBoundary.backward,
-        )?.segment,
+        ),
       );
-
-  static String? _linkUrl(StyledSegment? seg) {
-    if (seg != null &&
-        seg.styles.contains(InlineStyle.link) &&
-        seg.attributes['url'] != null) {
-      return seg.attributes['url'] as String;
-    }
-    return null;
-  }
 
   // -- Rendering --
 
