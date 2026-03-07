@@ -665,6 +665,12 @@ class MarkdownCodec<B extends Object> {
         map[entry.key] = codec!.wrap!;
       }
     }
+    for (final entry in _schema.inlineEntities.entries) {
+      final codec = entry.value.style.codecs?[Format.markdown];
+      if (codec?.wrap != null) {
+        map[entry.key] = codec!.wrap!;
+      }
+    }
     return map;
   }
 
@@ -674,6 +680,12 @@ class MarkdownCodec<B extends Object> {
     final map = <Object, String Function(String, Map<String, dynamic>)>{};
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.encode != null) {
+        map[entry.key] = codec!.encode!;
+      }
+    }
+    for (final entry in _schema.inlineEntities.entries) {
+      final codec = entry.value.style.codecs?[Format.markdown];
       if (codec?.encode != null) {
         map[entry.key] = codec!.encode!;
       }
@@ -690,6 +702,12 @@ class MarkdownCodec<B extends Object> {
         entries.add(_InlineWrapEntry(entry.key, codec!.wrap!));
       }
     }
+    for (final entry in _schema.inlineEntities.entries) {
+      final codec = entry.value.style.codecs?[Format.markdown];
+      if (codec?.wrap != null) {
+        entries.add(_InlineWrapEntry(entry.key, codec!.wrap!));
+      }
+    }
     return entries;
   }
 
@@ -698,6 +716,12 @@ class MarkdownCodec<B extends Object> {
     final entries = <_InlineDecodeEntry>[];
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.decode != null) {
+        entries.add(_InlineDecodeEntry(entry.key, codec!.decode!));
+      }
+    }
+    for (final entry in _schema.inlineEntities.entries) {
+      final codec = entry.value.style.codecs?[Format.markdown];
       if (codec?.decode != null) {
         entries.add(_InlineDecodeEntry(entry.key, codec!.decode!));
       }

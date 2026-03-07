@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import '../codec/markdown_codec.dart';
 import '../model/block.dart';
 import '../model/document.dart';
-
 import '../model/inline_entity.dart';
 import '../schema/editor_schema.dart';
 import '../schema/inline_entity_def.dart';
@@ -187,10 +186,12 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   Document<B> get document => _document;
   EditorSchema<B, S, E> get schema => _schema;
 
-  /// Active inline styles at the cursor. Typed as `Set<S>` for exhaustive
-  /// switch. Data-carrying entity styles are intentionally excluded from the
-  /// public set so this remains a formatting-style API.
+  /// Active formatting styles at the cursor. Typed as `Set<S>` for exhaustive
+  /// switch. Inline entity keys are excluded so this remains a formatting-style
+  /// API. Inline styles marked `isDataCarrying` are also excluded to preserve
+  /// compatibility with custom schemas that still model entities that way.
   Set<S> get activeStyles => _activeStyles
+      .where((style) => _schema.isInlineStyleKey(style))
       .where((style) => !_schema.inlineStyleDef(style).isDataCarrying)
       .cast<S>()
       .toSet();
@@ -403,10 +404,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     boundary: boundary,
   );
 
-  InlineEntityDef<E, S>? _inlineEntityDefOf(StyledSegment seg) {
+  InlineEntityDef<E>? _inlineEntityDefOf(StyledSegment seg) {
     if (seg.attributes.isEmpty) return null;
     for (final style in seg.styles) {
-      final def = _schema.inlineEntityDefForStyle(style);
+      final def = _schema.inlineEntityDefForKey(style);
       if (def != null) return def;
     }
     return null;
@@ -880,7 +881,6 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     final def = _schema.inlineEntityDef(type);
     assert(def != null, 'No inline entity definition registered for $type.');
     if (def == null) return;
-    final style = def.style;
     final attributes = def.encode(data);
 
     if (value.selection.isCollapsed) {
@@ -896,7 +896,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
             run.blockIndex,
             run.localStart,
             run.localEnd,
-            style,
+            type,
             attributes: run.segment.attributes,
           ),
           if (text != null) ...[
@@ -911,7 +911,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
             run.blockIndex,
             run.localStart,
             text != null ? run.localStart + text.length : run.localEnd,
-            style,
+            type,
             attributes: attributes,
           ),
         ];
@@ -937,7 +937,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
           pos.blockIndex,
           pos.localOffset,
           pos.localOffset + displayText.length,
-          style,
+          type,
           attributes: attributes,
         ),
       ];
@@ -967,13 +967,13 @@ class EditorController<B extends Object, S extends Object, E extends Object>
           final segEnd = offset + seg.text.length;
           if (segEnd > localStart &&
               offset < localEnd &&
-              seg.styles.contains(style)) {
+              seg.styles.contains(type)) {
             ops.add(
               ToggleStyle(
                 i,
                 localStart,
                 localEnd,
-                style,
+                type,
                 attributes: seg.attributes,
               ),
             );
@@ -1004,7 +1004,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
           startPos.blockIndex,
           startPos.localOffset,
           startPos.localOffset + text.length,
-          style,
+          type,
           attributes: attributes,
         ),
       );
@@ -1029,7 +1029,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
         final segEnd = offset + seg.text.length;
         if (segEnd > localStart &&
             offset < localEnd &&
-            seg.styles.contains(style)) {
+            seg.styles.contains(type)) {
           hasEntity = true;
           break;
         }
@@ -1037,11 +1037,11 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       }
       if (hasEntity) {
         removeOps.add(
-          ToggleStyle(i, localStart, localEnd, style, attributes: attributes),
+          ToggleStyle(i, localStart, localEnd, type, attributes: attributes),
         );
       }
       addOps.add(
-        ToggleStyle(i, localStart, localEnd, style, attributes: attributes),
+        ToggleStyle(i, localStart, localEnd, type, attributes: attributes),
       );
     });
 
@@ -1067,8 +1067,6 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     final def = _schema.inlineEntityDef(type);
     assert(def != null, 'No inline entity definition registered for $type.');
     if (def == null) return;
-    final style = def.style;
-
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
       final run = _segmentRunAtModelOffset(
@@ -1084,7 +1082,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
             run.blockIndex,
             run.localStart,
             run.localEnd,
-            style,
+            type,
             attributes: run.segment.attributes,
           ),
         ],
@@ -1111,7 +1109,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
               i,
               localStart,
               localEnd,
-              style,
+              type,
               attributes: seg.attributes,
             ),
           );

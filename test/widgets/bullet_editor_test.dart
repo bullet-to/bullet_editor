@@ -18,7 +18,7 @@ void main() {
               const StyledSegment('Visit '),
               const StyledSegment(
                 'Google',
-                {InlineStyle.link},
+                {InlineEntityType.link},
                 {'url': 'https://google.com'},
               ),
               const StyledSegment(' today'),
@@ -70,7 +70,7 @@ void main() {
             segments: [
               const StyledSegment(
                 'click here',
-                {InlineStyle.link},
+                {InlineEntityType.link},
                 {'url': 'https://example.com'},
               ),
             ],
@@ -186,7 +186,7 @@ void main() {
         controller.value.selection.baseOffset,
       );
       expect(segment, isNotNull);
-      expect(segment!.styles, isNot(contains(InlineStyle.link)));
+      expect(segment!.styles, isNot(contains(InlineEntityType.link)));
     });
   });
 

@@ -75,7 +75,11 @@ TextSpan buildDocumentSpan(
       children.add(
         TextSpan(
           text: '$spacerChar\n',
-          style: TextStyle(fontSize: spacerSize, height: 1.0, color: const Color(0x00000000)),
+          style: TextStyle(
+            fontSize: spacerSize,
+            height: 1.0,
+            color: const Color(0x00000000),
+          ),
         ),
       );
     }
@@ -218,7 +222,7 @@ TextStyle? _resolveStyle(
   if (styles.isEmpty) return base;
   var result = base ?? const TextStyle();
   for (final style in styles) {
-    final def = schema.inlineStyleDef(style);
+    final def = schema.inlinePresentationDef(style);
     result = def.applyStyle(result, attributes: attributes);
   }
   return result;

@@ -608,13 +608,18 @@ abstract final class Blocks {
 // Inlines — built-in inline style definitions.
 // ---------------------------------------------------------------------------
 
-/// Built-in [InlineStyleDef] factories.
+/// Built-in inline presentation factories.
 ///
 /// ```dart
 /// EditorSchema(
-///   inlineStyles: {
-///     InlineStyle.bold: Inlines.bold(),
-///     InlineStyle.link: Inlines.link(color: Colors.teal),
+///   inlineEntities: {
+///     InlineEntityType.link: InlineEntityDef(
+///       type: InlineEntityType.link,
+///       style: Inlines.link(color: Colors.teal),
+///       label: 'Link',
+///       decode: _decodeLink,
+///       encode: _encodeLink,
+///     ),
 ///   },
 ///   ...
 /// );
@@ -794,7 +799,7 @@ EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
   // Extensions — merged after built-ins.
   Map<BlockType, BlockDef>? additionalBlocks,
   Map<InlineStyle, InlineStyleDef>? additionalInlineStyles,
-  Map<InlineEntityType, InlineEntityDef<InlineEntityType, InlineStyle>>?
+  Map<InlineEntityType, InlineEntityDef<InlineEntityType>>?
   additionalInlineEntities,
 }) {
   final pwf = prefixWidthFactor ?? 1.5;
@@ -828,7 +833,6 @@ EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
       if (additionalBlocks != null) ...additionalBlocks,
     },
     inlineStyles: {
-      InlineStyle.link: Inlines.link(color: linkColor),
       InlineStyle.code: Inlines.code(),
       InlineStyle.bold: Inlines.bold(),
       InlineStyle.italic: Inlines.italic(),
@@ -838,7 +842,7 @@ EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
     inlineEntities: {
       InlineEntityType.link: InlineEntityDef(
         type: InlineEntityType.link,
-        style: InlineStyle.link,
+        style: Inlines.link(color: linkColor),
         label: 'Link',
         decode: (attributes) =>
             LinkData(url: attributes['url'] as String? ?? ''),

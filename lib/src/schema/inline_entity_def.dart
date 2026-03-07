@@ -1,10 +1,11 @@
 import '../model/inline_entity.dart';
+import 'inline_style_def.dart';
 
-/// Schema definition for a public inline entity backed by an internal style.
+/// Schema definition for a public inline entity.
 ///
-/// This lets the editor expose entity-first APIs while continuing to store
-/// entities as styled segments with attributes internally.
-class InlineEntityDef<E extends Object, S extends Object> {
+/// The entity key itself is stored on segments; [style] defines how that
+/// entity renders and serializes.
+class InlineEntityDef<E extends Object> {
   const InlineEntityDef({
     required this.type,
     required this.style,
@@ -14,11 +15,11 @@ class InlineEntityDef<E extends Object, S extends Object> {
     this.defaultText,
   });
 
-  /// Public entity type, e.g. [InlineEntityType.link].
+  /// Public entity key, e.g. [InlineEntityType.link].
   final E type;
 
-  /// Internal style key used to store the entity in a segment.
-  final S style;
+  /// Rendering and codec definition for this entity.
+  final InlineStyleDef style;
 
   /// Human-readable label for UI.
   final String label;

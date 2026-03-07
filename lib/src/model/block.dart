@@ -3,11 +3,11 @@
 /// The document's text content is stored as a list of these segments.
 /// Adjacent segments with identical styles AND attributes should be merged.
 ///
-/// [styles] holds on/off style flags (bold, italic, link, etc.).
-/// Style keys are opaque [Object]s — use the built-in [InlineStyle] enum
-/// or your own enum/class.
-/// [attributes] holds data for styles that carry it (e.g. `{'url': '...'}`
-/// for links, `{'userId': '...'}` for mentions).
+/// [styles] holds on/off inline keys (bold, italic, link entity, etc.).
+/// Keys are opaque [Object]s — use the built-in [InlineStyle] enum,
+/// `InlineEntityType`, or your own enum/class.
+/// [attributes] holds per-segment data for inline entities
+/// (e.g. `{'url': '...'}` for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
   const StyledSegment(
     this.text, [
@@ -77,9 +77,9 @@ enum BlockType {
   codeBlock,
 }
 
-/// Built-in inline style keys. Use these with the standard schema, or define
-/// your own enum/class for custom inline styles.
-enum InlineStyle { bold, italic, strikethrough, link, code }
+/// Built-in formatting-style keys. Use these with the standard schema, or
+/// define your own enum/class for custom formatting styles.
+enum InlineStyle { bold, italic, strikethrough, code }
 
 /// Standard metadata key for task item checked state.
 const kCheckedKey = 'checked';

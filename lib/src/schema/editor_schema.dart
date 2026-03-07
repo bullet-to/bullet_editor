@@ -13,7 +13,8 @@ import 'inline_style_def.dart';
 /// [B] is the block type key (typically an enum like [BlockType]).
 /// [S] is the inline style key (typically an enum like [InlineStyle]).
 ///
-/// Use [EditorSchema.standard()] for the built-in block types and styles.
+/// Use [EditorSchema.standard()] for the built-in block types, formatting
+/// styles, and inline entity keys.
 class EditorSchema<B extends Object, S extends Object, E extends Object> {
   EditorSchema({
     required this.defaultBlockType,
@@ -35,11 +36,11 @@ class EditorSchema<B extends Object, S extends Object, E extends Object> {
   /// Block type definitions keyed by block type identifier.
   final Map<B, BlockDef> blocks;
 
-  /// Inline style definitions keyed by style identifier.
+  /// Formatting-style definitions keyed by style identifier.
   final Map<S, InlineStyleDef> inlineStyles;
 
-  /// Public inline entity definitions keyed by built-in entity type.
-  final Map<E, InlineEntityDef<E, S>> inlineEntities;
+  /// Public inline entity definitions keyed by entity identifier.
+  final Map<E, InlineEntityDef<E>> inlineEntities;
 
   /// Width of the prefix area (bullet/number/checkbox) as a multiplier of
   /// the block's resolved font size.
@@ -56,16 +57,20 @@ class EditorSchema<B extends Object, S extends Object, E extends Object> {
   InlineStyleDef inlineStyleDef(Object key) =>
       inlineStyles[key] ?? _fallbackInlineStyleDef;
 
-  /// Look up an inline entity definition by public entity type.
-  InlineEntityDef<E, S>? inlineEntityDef(E type) => inlineEntities[type];
+  /// Whether [key] is a registered formatting-style key.
+  bool isInlineStyleKey(Object key) => inlineStyles.containsKey(key);
 
-  /// Look up an inline entity definition by its backing internal style key.
-  InlineEntityDef<E, S>? inlineEntityDefForStyle(Object key) {
-    for (final def in inlineEntities.values) {
-      if (def.style == key) return def;
-    }
-    return null;
-  }
+  /// Look up the rendering/codec definition for any inline key.
+  InlineStyleDef inlinePresentationDef(Object key) =>
+      inlineStyles[key] ??
+      inlineEntities[key]?.style ??
+      _fallbackInlineStyleDef;
+
+  /// Look up an inline entity definition by public entity type.
+  InlineEntityDef<E>? inlineEntityDef(E type) => inlineEntities[type];
+
+  /// Look up an inline entity definition by the key stored on a segment.
+  InlineEntityDef<E>? inlineEntityDefForKey(Object key) => inlineEntities[key];
 
   /// Aggregate policies map from all registered block defs.
   /// Used by edit operations that need to check structural rules.
@@ -81,12 +86,13 @@ class EditorSchema<B extends Object, S extends Object, E extends Object> {
   /// Whether the block type identified by [key] is a heading.
   bool isHeading(Object key) => blocks[key]?.isHeading ?? false;
 
-  /// Collect all input rules from block defs then inline style defs,
-  /// in map insertion order. This determines rule priority — specific
+  /// Collect all input rules from block defs, formatting styles, then inline
+  /// entities in map insertion order. This determines rule priority — specific
   /// rules must come before general ones in the schema's map ordering.
   List<InputRule> get inputRules => [
     for (final def in blocks.values) ...def.inputRules,
     for (final def in inlineStyles.values) ...def.inputRules,
+    for (final def in inlineEntities.values) ...def.style.inputRules,
   ];
 
   static const _fallbackBlockDef = BlockDef(label: 'Unknown');

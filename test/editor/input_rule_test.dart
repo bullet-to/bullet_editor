@@ -866,7 +866,7 @@ void main() {
       final applied = result!.apply(doc);
       final seg = applied.allBlocks[0].segments[0];
       expect(seg.text, 'Google');
-      expect(seg.styles, {InlineStyle.link});
+      expect(seg.styles, {InlineEntityType.link});
       expect(seg.attributes['url'], 'https://google.com');
     });
 
@@ -906,7 +906,7 @@ void main() {
         segs.any(
           (s) =>
               s.text == 'Google' &&
-              s.styles.contains(InlineStyle.link) &&
+              s.styles.contains(InlineEntityType.link) &&
               s.attributes['url'] == 'https://g.co',
         ),
         isTrue,

@@ -6,13 +6,13 @@ import '../editor/input_rule.dart';
 
 /// Defines the behavior and appearance of an inline style.
 ///
-/// Each inline style (bold, italic, etc.) has a corresponding
+/// Each formatting style (bold, italic, etc.) has a corresponding
 /// [InlineStyleDef] that describes how it modifies text rendering
-/// and serialization. Register inline style defs in an [EditorSchema].
+/// and serialization. `InlineEntityDef` also reuses this type for entity
+/// rendering/codec behavior.
 ///
-/// Simple styles use [applyStyle]. Data-carrying styles (links, mentions)
-/// can also set [isDataCarrying] to true, which signals the toolbar and
-/// controller to handle them differently (they need attributes, not just toggle).
+/// Simple styles use [applyStyle]. Styles can also set [isDataCarrying] to true,
+/// which signals the toolbar and controller to treat them as non-toggleable.
 class InlineStyleDef {
   const InlineStyleDef({
     required this.label,
@@ -30,8 +30,8 @@ class InlineStyleDef {
   /// Receives the segment's [attributes] for data-carrying styles.
   /// Example: bold returns `base.copyWith(fontWeight: FontWeight.bold)`.
   /// Example: link returns `base.copyWith(color: blue, decoration: underline)`.
-  final TextStyle Function(TextStyle base,
-      {Map<String, dynamic> attributes}) applyStyle;
+  final TextStyle Function(TextStyle base, {Map<String, dynamic> attributes})
+  applyStyle;
 
   /// Whether this style carries data in segment attributes (e.g. link URL).
   /// Data-carrying styles are not simple toggles — they need attributes

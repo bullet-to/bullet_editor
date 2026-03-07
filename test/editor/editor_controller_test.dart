@@ -1757,7 +1757,7 @@ void main() {
 
         final segs = controller.document.allBlocks[0].segments;
         final linkSeg = segs.firstWhere((s) => s.text == 'here');
-        expect(linkSeg.styles, contains(InlineStyle.link));
+        expect(linkSeg.styles, contains(InlineEntityType.link));
         expect(linkSeg.attributes['url'], 'https://example.com');
 
         // Non-linked parts should not have link style.
@@ -1787,7 +1787,7 @@ void main() {
         );
 
         final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-          (s) => s.styles.contains(InlineStyle.link),
+          (s) => s.styles.contains(InlineEntityType.link),
         );
         expect(linkSeg.text, 'https://example.com');
       });
@@ -1807,7 +1807,7 @@ void main() {
                   const StyledSegment('Visit '),
                   const StyledSegment(
                     'Google',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://google.com'},
                   ),
                   const StyledSegment(' today'),
@@ -1843,7 +1843,7 @@ void main() {
                 const StyledSegment('Visit '),
                 const StyledSegment(
                   'Google',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://google.com'},
                 ),
                 const StyledSegment(' today'),
@@ -1856,7 +1856,7 @@ void main() {
         final startSeg = controller.segmentAtOffset(6);
         expect(startSeg, isNotNull);
         expect(startSeg!.text, 'Google');
-        expect(startSeg.styles, contains(InlineStyle.link));
+        expect(startSeg.styles, contains(InlineEntityType.link));
         expect(startSeg.attributes['url'], 'https://google.com');
 
         // Model offset 8 = inside 'Google'
@@ -1873,7 +1873,7 @@ void main() {
         // Model offset 2 = inside 'Visit ' segment (no link)
         final plainSeg = controller.segmentAtOffset(2);
         expect(plainSeg, isNotNull);
-        expect(plainSeg!.styles, isNot(contains(InlineStyle.link)));
+        expect(plainSeg!.styles, isNot(contains(InlineEntityType.link)));
 
         controller.dispose();
       });
@@ -1891,7 +1891,7 @@ void main() {
                   const StyledSegment('Hi '),
                   const StyledSegment(
                     'link',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://x.com'},
                   ),
                 ],
@@ -1934,7 +1934,7 @@ void main() {
                 const StyledSegment('before '),
                 const StyledSegment(
                   'link',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://x.com'},
                 ),
                 const StyledSegment(' after'),
@@ -1960,7 +1960,7 @@ void main() {
                 const StyledSegment('before '),
                 const StyledSegment(
                   'link',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://x.com'},
                 ),
                 const StyledSegment(' after'),
@@ -1991,7 +1991,7 @@ void main() {
                 const StyledSegment('before '),
                 const StyledSegment(
                   'link',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://x.com'},
                 ),
                 const StyledSegment(' after'),
@@ -2018,7 +2018,7 @@ void main() {
                 const StyledSegment('before '),
                 const StyledSegment(
                   'link',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://x.com'},
                 ),
                 const StyledSegment(' after'),
@@ -2061,7 +2061,7 @@ void main() {
               segments: [
                 const StyledSegment(
                   'click',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://old.com'},
                 ),
               ],
@@ -2078,7 +2078,7 @@ void main() {
         );
 
         final seg = controller.document.allBlocks[0].segments[0];
-        expect(seg.styles, contains(InlineStyle.link));
+        expect(seg.styles, contains(InlineEntityType.link));
         expect(seg.attributes['url'], 'https://new.com');
       });
 
@@ -2095,7 +2095,7 @@ void main() {
                   const StyledSegment('see '),
                   const StyledSegment(
                     'here',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://old.com'},
                   ),
                   const StyledSegment(' end'),
@@ -2124,7 +2124,7 @@ void main() {
             'see click me end',
           );
           final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-            (s) => s.styles.contains(InlineStyle.link),
+            (s) => s.styles.contains(InlineEntityType.link),
           );
           expect(linkSeg.text, 'click me');
           expect(linkSeg.attributes['url'], 'https://new.com');
@@ -2142,7 +2142,7 @@ void main() {
                 const StyledSegment('see '),
                 const StyledSegment(
                   'here',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://old.com'},
                 ),
                 const StyledSegment(' end'),
@@ -2164,7 +2164,7 @@ void main() {
 
         // The link segment should have the new URL.
         final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-          (s) => s.styles.contains(InlineStyle.link),
+          (s) => s.styles.contains(InlineEntityType.link),
         );
         expect(linkSeg.text, 'here');
         expect(linkSeg.attributes['url'], 'https://updated.com');
@@ -2198,7 +2198,7 @@ void main() {
         // "link" inserted at cursor with link style.
         expect(controller.document.allBlocks[0].plainText, 'pllinkain');
         final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-          (s) => s.styles.contains(InlineStyle.link),
+          (s) => s.styles.contains(InlineEntityType.link),
         );
         expect(linkSeg.text, 'link');
         expect(linkSeg.attributes['url'], 'https://example.com');
@@ -2232,7 +2232,7 @@ void main() {
             'hellohttps://x.com',
           );
           final linkSeg = controller.document.allBlocks[0].segments.firstWhere(
-            (s) => s.styles.contains(InlineStyle.link),
+            (s) => s.styles.contains(InlineEntityType.link),
           );
           expect(linkSeg.text, 'https://x.com');
         },
@@ -2258,7 +2258,7 @@ void main() {
         );
 
         final seg = controller.document.allBlocks[0].segments[0];
-        expect(seg.styles, contains(InlineStyle.link));
+        expect(seg.styles, contains(InlineEntityType.link));
         expect(seg.attributes['url'], 'https://example.com');
       });
     });
@@ -2312,7 +2312,7 @@ void main() {
                 const StyledSegment('see '),
                 const StyledSegment(
                   'here',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://example.com'},
                 ),
                 const StyledSegment(' end'),
@@ -2365,7 +2365,7 @@ void main() {
                 const StyledSegment('see '),
                 const StyledSegment(
                   'click here',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://example.com'},
                 ),
                 const StyledSegment(' end'),
@@ -2400,7 +2400,7 @@ void main() {
               segments: [
                 const StyledSegment(
                   'lin',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://example.com'},
                 ),
                 const StyledSegment('k rest'),
@@ -2434,13 +2434,13 @@ void main() {
                 segments: [
                   const StyledSegment(
                     'aaa',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://example.com'},
                   ),
                   const StyledSegment(' '),
                   const StyledSegment(
                     'bbb',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://example.com'},
                   ),
                 ],
@@ -2473,13 +2473,13 @@ void main() {
                 segments: [
                   const StyledSegment(
                     'aaa',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://first.com'},
                   ),
                   const StyledSegment(' '),
                   const StyledSegment(
                     'bbb',
-                    {InlineStyle.link},
+                    {InlineEntityType.link},
                     {'url': 'https://second.com'},
                   ),
                 ],
@@ -2506,7 +2506,7 @@ void main() {
               segments: [
                 const StyledSegment(
                   'hello',
-                  {InlineStyle.link},
+                  {InlineEntityType.link},
                   {'url': 'https://example.com'},
                 ),
               ],

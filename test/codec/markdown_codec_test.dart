@@ -331,7 +331,7 @@ void main() {
             const StyledSegment('Visit '),
             const StyledSegment(
               'Google',
-              {InlineStyle.link},
+              {InlineEntityType.link},
               {'url': 'https://google.com'},
             ),
             const StyledSegment(' today'),
@@ -348,7 +348,7 @@ void main() {
       expect(segs[0].text, 'Visit ');
       expect(segs[0].styles, isEmpty);
       expect(segs[1].text, 'Google');
-      expect(segs[1].styles, {InlineStyle.link});
+      expect(segs[1].styles, {InlineEntityType.link});
       expect(segs[1].attributes['url'], 'https://google.com');
       expect(segs[2].text, ' today');
     });
@@ -362,7 +362,7 @@ void main() {
             const StyledSegment('Click ', {InlineStyle.bold}),
             const StyledSegment(
               'here',
-              {InlineStyle.link},
+              {InlineEntityType.link},
               {'url': 'https://example.com'},
             ),
           ],
@@ -375,7 +375,7 @@ void main() {
         decoded.blocks[0].segments.any(
           (s) =>
               s.text == 'here' &&
-              s.styles.contains(InlineStyle.link) &&
+              s.styles.contains(InlineEntityType.link) &&
               s.attributes['url'] == 'https://example.com',
         ),
         isTrue,
@@ -494,7 +494,7 @@ void main() {
             const StyledSegment('plain '),
             const StyledSegment(
               'click',
-              {InlineStyle.bold, InlineStyle.link},
+              {InlineStyle.bold, InlineEntityType.link},
               {'url': 'https://x.com'},
             ),
             const StyledSegment(' more'),
@@ -838,7 +838,7 @@ void main() {
       final doc = codec.decode('see <https://example.com> here');
       expect(doc.blocks[0].segments.length, 3);
       expect(doc.blocks[0].segments[1].text, 'https://example.com');
-      expect(doc.blocks[0].segments[1].styles, {InlineStyle.link});
+      expect(doc.blocks[0].segments[1].styles, {InlineEntityType.link});
       expect(
         doc.blocks[0].segments[1].attributes['url'],
         'https://example.com',
@@ -849,7 +849,7 @@ void main() {
       final doc = codec.decode('visit https://flutter.dev today');
       expect(doc.blocks[0].segments.length, 3);
       expect(doc.blocks[0].segments[1].text, 'https://flutter.dev');
-      expect(doc.blocks[0].segments[1].styles, {InlineStyle.link});
+      expect(doc.blocks[0].segments[1].styles, {InlineEntityType.link});
       expect(
         doc.blocks[0].segments[1].attributes['url'],
         'https://flutter.dev',

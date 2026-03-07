@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
 import '../model/document.dart';
+import '../model/inline_entity.dart';
 import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
 import 'transaction.dart';
@@ -17,7 +18,10 @@ import 'transaction.dart';
 /// specific enum values.
 abstract class InputRule {
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema);
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  );
 }
 
 /// Detects a wrap-delimiter pattern (e.g. `**text**`, `*text*`, `~~text~~`)
@@ -39,7 +43,10 @@ class InlineWrapRule extends InputRule {
 
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null) return null;
 
@@ -77,8 +84,7 @@ class InlineWrapRule extends InputRule {
       ];
 
       final blockStartGlobal = resultDoc.globalOffset(i, 0);
-      final cursorOffset =
-          blockStartGlobal + fullMatchStart + innerText.length;
+      final cursorOffset = blockStartGlobal + fullMatchStart + innerText.length;
 
       return Transaction(
         operations: ops,
@@ -118,7 +124,10 @@ class LinkWrapRule extends InputRule {
 
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ')') return null;
 
@@ -149,8 +158,13 @@ class LinkWrapRule extends InputRule {
         ...pending.operations,
         // Delete the entire [text](url) and replace with just the text.
         DeleteText(i, fullMatchStart, fullMatchLength),
-        InsertText(i, fullMatchStart, linkText,
-            styles: {InlineStyle.link}, attributes: {'url': url}),
+        InsertText(
+          i,
+          fullMatchStart,
+          linkText,
+          styles: {InlineEntityType.link},
+          attributes: {'url': url},
+        ),
       ],
       selectionAfter: pending.selectionAfter?.copyWith(
         baseOffset: cursorOffset,
@@ -173,7 +187,10 @@ class PrefixBlockRule extends InputRule {
 
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ' ') return null;
     if (insertOp.offset != prefix.length) return null;
@@ -213,7 +230,10 @@ class HeadingRule extends PrefixBlockRule {
 class HeadingBackspaceRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -226,8 +246,11 @@ class HeadingBackspaceRule extends InputRule {
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType,
-            policies: schema.policies),
+        ChangeBlockType(
+          mergeOp.secondBlockIndex,
+          schema.defaultBlockType,
+          policies: schema.policies,
+        ),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -251,7 +274,10 @@ class NumberedListRule extends PrefixBlockRule {
 class TaskItemRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != ' ') return null;
 
@@ -320,7 +346,10 @@ class TaskItemRule extends InputRule {
 class EmptyListItemRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
     if (splitOp == null) return null;
 
@@ -331,8 +360,11 @@ class EmptyListItemRule extends InputRule {
     // Replace the split with a type change to the default block type.
     return Transaction(
       operations: [
-        ChangeBlockType(splitOp.blockIndex, schema.defaultBlockType,
-            policies: schema.policies),
+        ChangeBlockType(
+          splitOp.blockIndex,
+          schema.defaultBlockType,
+          policies: schema.policies,
+        ),
       ],
       selectionAfter: pending.selectionAfter,
     );
@@ -348,7 +380,10 @@ class EmptyListItemRule extends InputRule {
 class ListItemBackspaceRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -363,8 +398,11 @@ class ListItemBackspaceRule extends InputRule {
     final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
     return Transaction(
       operations: [
-        ChangeBlockType(mergeOp.secondBlockIndex, schema.defaultBlockType,
-            policies: schema.policies),
+        ChangeBlockType(
+          mergeOp.secondBlockIndex,
+          schema.defaultBlockType,
+          policies: schema.policies,
+        ),
       ],
       selectionAfter: TextSelection.collapsed(offset: cursorOffset),
     );
@@ -378,7 +416,10 @@ class ListItemBackspaceRule extends InputRule {
 class NestedBackspaceRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -409,7 +450,10 @@ class NestedBackspaceRule extends InputRule {
 class DividerRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final insertOp = _findInsertOp(pending);
     if (insertOp == null || insertOp.text != '-') return null;
 
@@ -445,7 +489,10 @@ class DividerRule extends InputRule {
 class DividerBackspaceRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
     if (mergeOp == null) return null;
 
@@ -470,20 +517,20 @@ class DividerBackspaceRule extends InputRule {
 class CodeBlockEnterRule extends InputRule {
   @override
   Transaction? tryTransform(
-      Transaction pending, Document doc, EditorSchema schema) {
+    Transaction pending,
+    Document doc,
+    EditorSchema schema,
+  ) {
     final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
     if (splitOp == null) return null;
 
     final block = doc.allBlocks[splitOp.blockIndex];
     if (schema.blockDef(block.blockType).label != 'Code Block') return null;
 
-    final globalOffset =
-        doc.globalOffset(splitOp.blockIndex, splitOp.offset);
+    final globalOffset = doc.globalOffset(splitOp.blockIndex, splitOp.offset);
 
     return Transaction(
-      operations: [
-        InsertText(splitOp.blockIndex, splitOp.offset, '\n'),
-      ],
+      operations: [InsertText(splitOp.blockIndex, splitOp.offset, '\n')],
       selectionAfter: TextSelection.collapsed(offset: globalOffset + 1),
     );
   }

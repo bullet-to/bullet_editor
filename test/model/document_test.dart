@@ -261,8 +261,16 @@ void main() {
 
     test('does NOT merge segments with different attributes', () {
       final result = mergeSegments([
-        const StyledSegment('a', {InlineStyle.link}, {'url': 'https://a.com'}),
-        const StyledSegment('b', {InlineStyle.link}, {'url': 'https://b.com'}),
+        const StyledSegment(
+          'a',
+          {InlineEntityType.link},
+          {'url': 'https://a.com'},
+        ),
+        const StyledSegment(
+          'b',
+          {InlineEntityType.link},
+          {'url': 'https://b.com'},
+        ),
       ]);
       expect(result.length, 2);
       expect(result[0].attributes['url'], 'https://a.com');
@@ -273,12 +281,12 @@ void main() {
       final result = mergeSegments([
         const StyledSegment(
           'click',
-          {InlineStyle.link},
+          {InlineEntityType.link},
           {'url': 'https://x.com'},
         ),
         const StyledSegment(
           ' here',
-          {InlineStyle.link},
+          {InlineEntityType.link},
           {'url': 'https://x.com'},
         ),
       ]);
@@ -290,15 +298,15 @@ void main() {
 
   group('StyledSegment attributes', () {
     test('equality includes attributes', () {
-      const a = StyledSegment('x', {InlineStyle.link}, {'url': 'a'});
-      const b = StyledSegment('x', {InlineStyle.link}, {'url': 'a'});
-      const c = StyledSegment('x', {InlineStyle.link}, {'url': 'b'});
+      const a = StyledSegment('x', {InlineEntityType.link}, {'url': 'a'});
+      const b = StyledSegment('x', {InlineEntityType.link}, {'url': 'a'});
+      const c = StyledSegment('x', {InlineEntityType.link}, {'url': 'b'});
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
 
     test('copyWith preserves attributes', () {
-      const seg = StyledSegment('hi', {InlineStyle.link}, {'url': 'x'});
+      const seg = StyledSegment('hi', {InlineEntityType.link}, {'url': 'x'});
       final copy = seg.copyWith(text: 'bye');
       expect(copy.text, 'bye');
       expect(copy.attributes, {'url': 'x'});
@@ -387,7 +395,7 @@ void main() {
           segments: [
             const StyledSegment(
               'click',
-              {InlineStyle.link},
+              {InlineEntityType.link},
               {'url': 'https://x.com'},
             ),
           ],

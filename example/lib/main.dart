@@ -69,7 +69,7 @@ class _EditorScreenState extends State<EditorScreen> {
           const StyledSegment(' paragraph with a '),
           const StyledSegment(
             'link',
-            {InlineStyle.link},
+            {InlineEntityType.link},
             {'url': 'https://flutter.dev'},
           ),
           const StyledSegment('.'),
@@ -305,9 +305,11 @@ class _EditorScreenState extends State<EditorScreen> {
             //     IconButton(
             //       icon: Icon(
             //         Icons.link,
-            //         color: _controller.activeStyles.contains(InlineStyle.link)
-            //             ? Theme.of(context).colorScheme.primary
-            //             : null,
+            //         color:
+            //             _controller.inlineEntityAtCursor?.type ==
+            //                     InlineEntityType.link
+            //                 ? Theme.of(context).colorScheme.primary
+            //                 : null,
             //       ),
             //       tooltip: 'Link (Cmd+K)',
             //       onPressed: _showLinkDialog,
