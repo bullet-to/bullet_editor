@@ -694,7 +694,8 @@ List<StyledSegment> _spliceInsert(
       final before = seg.text.substring(0, localOffset);
       final after = seg.text.substring(localOffset);
       final insertStyles = styles ?? seg.styles;
-      final insertAttrs = attributes ?? seg.attributes;
+      final insertAttrs =
+          attributes ?? (styles != null ? const <String, dynamic>{} : seg.attributes);
       if (before.isNotEmpty) {
         result.add(StyledSegment(before, seg.styles, seg.attributes));
       }

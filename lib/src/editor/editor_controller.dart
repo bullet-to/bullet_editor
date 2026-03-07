@@ -82,6 +82,34 @@ class InlineEntityInfo<E extends Object> {
   /// Entity range in display/TextField coordinates.
   final int displayStart;
   final int displayEnd;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InlineEntityInfo<E> &&
+          type == other.type &&
+          text == other.text &&
+          data == other.data &&
+          modelStart == other.modelStart &&
+          modelEnd == other.modelEnd &&
+          displayStart == other.displayStart &&
+          displayEnd == other.displayEnd;
+
+  @override
+  int get hashCode => Object.hash(
+    type,
+    text,
+    data,
+    modelStart,
+    modelEnd,
+    displayStart,
+    displayEnd,
+  );
+
+  @override
+  String toString() =>
+      'InlineEntityInfo(type: $type, text: "$text", data: $data, '
+      'model: $modelStart..$modelEnd, display: $displayStart..$displayEnd)';
 }
 
 /// Pre-fill info for an inline entity edit UI.
@@ -256,10 +284,6 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     final (start, end) = _orderedRange(sel);
     final modelStart = displayToModel(start);
     final modelEnd = displayToModel(end);
-
-    E? foundType;
-    InlineEntityData? foundData;
-    var multiple = false;
     final textBuf = StringBuffer();
 
     _forEachBlockInRange(modelStart, modelEnd, (
@@ -270,30 +294,20 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     ) {
       if (textBuf.isNotEmpty) textBuf.write('\n');
       textBuf.write(block.plainText.substring(localStart, localEnd));
-
-      var offset = 0;
-      for (final seg in block.segments) {
-        final segEnd = offset + seg.text.length;
-        if (segEnd > localStart && offset < localEnd) {
-          final def = _inlineEntityDefOf(seg);
-          if (def != null) {
-            final data = def.decode(seg.attributes);
-            if (foundType == null) {
-              foundType = def.type;
-              foundData = data;
-            } else if (foundType != def.type || foundData != data) {
-              multiple = true;
-            }
-          }
-        }
-        offset = segEnd;
-      }
     });
+
+    final entities = _inlineEntitiesInModelRange(modelStart, modelEnd);
+    final firstEntity = entities.isEmpty ? null : entities.first;
+    final hasMixedEntities = firstEntity != null &&
+        entities.any(
+          (entity) =>
+              entity.type != firstEntity.type || entity.data != firstEntity.data,
+        );
 
     return InlineEntityEditInfo<E>(
       text: textBuf.toString(),
-      type: multiple ? null : foundType,
-      data: multiple ? null : foundData,
+      type: hasMixedEntities ? null : firstEntity?.type,
+      data: hasMixedEntities ? null : firstEntity?.data,
     );
   }
 
@@ -308,6 +322,35 @@ class EditorController<B extends Object, S extends Object, E extends Object>
         displayToModel(sel.baseOffset),
         boundary: SegmentBoundary.backward,
       ),
+    );
+  }
+
+  /// Resolved inline entities touched by the current selection.
+  ///
+  /// - Collapsed selection: returns the entity at the cursor, if any.
+  /// - Non-collapsed selection: returns every distinct entity run touched by
+  ///   the selection. Adjacent segments with the same entity type and payload
+  ///   are coalesced into one logical entity run.
+  ///
+  /// This method is intentionally factual: it reports which entities are
+  /// touched, but does not decide what the app should do when multiple
+  /// entities are returned.
+  List<InlineEntityInfo<E>> inlineEntitiesInSelection({E? type}) {
+    final sel = value.selection;
+    if (!sel.isValid) return const [];
+
+    if (sel.isCollapsed) {
+      final entity = inlineEntityAtCursor;
+      if (entity == null) return const [];
+      if (type != null && entity.type != type) return const [];
+      return [entity];
+    }
+
+    final (start, end) = _orderedRange(sel);
+    return _inlineEntitiesInModelRange(
+      displayToModel(start),
+      displayToModel(end),
+      type: type,
     );
   }
 
@@ -428,6 +471,25 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     return null;
   }
 
+  /// Styles and attributes to use for text inserted at [modelOffset].
+  /// Uses the segment at [modelOffset] (forward) only when the position is
+  /// strictly inside it (not at the segment end), so typing after a link
+  /// stays plain; typing inside a link keeps the link.
+  (Set<Object>?, Map<String, dynamic>?) _stylesAndAttrsForInsertAt(
+    int modelOffset,
+  ) {
+    final run = _segmentRunAtModelOffset(
+      modelOffset,
+      boundary: SegmentBoundary.forward,
+    );
+    if (run != null &&
+        _inlineEntityDefOf(run.segment) != null &&
+        modelOffset < run.globalEnd) {
+      return (Set.of(run.segment.styles), Map.of(run.segment.attributes));
+    }
+    return (_typingStyles, null);
+  }
+
   /// Return the public entity type for this segment, if any.
   E? _inlineEntityTypeOf(StyledSegment seg) => _inlineEntityDefOf(seg)?.type;
 
@@ -445,6 +507,90 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       displayStart: run.displayStart,
       displayEnd: run.displayEnd,
     );
+  }
+
+  List<InlineEntityInfo<E>> _inlineEntitiesInModelRange(
+    int start,
+    int end, {
+    E? type,
+  }) {
+    if (end <= start) return const [];
+
+    final entities = <InlineEntityInfo<E>>[];
+    E? activeType;
+    InlineEntityData? activeData;
+    var activeText = '';
+    int? activeStart;
+    int? activeEnd;
+
+    void flush() {
+      if (activeType == null ||
+          activeData == null ||
+          activeStart == null ||
+          activeEnd == null) {
+        return;
+      }
+      entities.add(
+        InlineEntityInfo<E>(
+          type: activeType!,
+          text: activeText,
+          data: activeData!,
+          modelStart: activeStart!,
+          modelEnd: activeEnd!,
+          displayStart: mapper.modelToDisplay(_document, activeStart!, _schema),
+          displayEnd: mapper.modelToDisplay(_document, activeEnd!, _schema),
+        ),
+      );
+      activeType = null;
+      activeData = null;
+      activeText = '';
+      activeStart = null;
+      activeEnd = null;
+    }
+
+    _forEachBlockInRange(start, end, (blockIndex, block, localStart, localEnd) {
+      var offset = 0;
+      for (final seg in block.segments) {
+        final segStart = offset;
+        final segEnd = offset + seg.text.length;
+        final touchesSelection = segEnd > localStart && segStart < localEnd;
+
+        if (!touchesSelection) {
+          offset = segEnd;
+          continue;
+        }
+
+        final def = _inlineEntityDefOf(seg);
+        if (def == null || (type != null && def.type != type)) {
+          flush();
+          offset = segEnd;
+          continue;
+        }
+
+        final data = def.decode(seg.attributes);
+        final globalStart = _document.globalOffset(blockIndex, segStart);
+        final globalEnd = _document.globalOffset(blockIndex, segEnd);
+
+        if (activeType == def.type &&
+            activeData == data &&
+            activeEnd == globalStart) {
+          activeEnd = globalEnd;
+          activeText += seg.text;
+        } else {
+          flush();
+          activeType = def.type;
+          activeData = data;
+          activeText = seg.text;
+          activeStart = globalStart;
+          activeEnd = globalEnd;
+        }
+
+        offset = segEnd;
+      }
+    });
+
+    flush();
+    return entities;
   }
 
   /// Fallback visible text when inserting a collapsed entity without explicit text.
@@ -896,11 +1042,11 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   /// - **Collapsed cursor not on that entity type:** inserts a new entity at
   ///   the cursor using [text], or the entity's default display string.
   void setInlineEntity(E type, InlineEntityData data, {String? text}) {
-    if (!value.selection.isValid) return;
     final def = _schema.inlineEntityDef(type);
     assert(def != null, 'No inline entity definition registered for $type.');
     if (def == null) return;
     final attributes = def.encode(data);
+    if (!value.selection.isValid) return;
 
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
@@ -924,15 +1070,21 @@ class EditorController<B extends Object, S extends Object, E extends Object>
               run.localStart,
               run.localEnd - run.localStart,
             ),
-            InsertText(run.blockIndex, run.localStart, text),
-          ],
-          ToggleStyle(
-            run.blockIndex,
-            run.localStart,
-            text != null ? run.localStart + text.length : run.localEnd,
-            type,
-            attributes: attributes,
-          ),
+            InsertText(
+              run.blockIndex,
+              run.localStart,
+              text,
+              styles: {type},
+              attributes: attributes,
+            ),
+          ] else
+            ToggleStyle(
+              run.blockIndex,
+              run.localStart,
+              run.localEnd,
+              type,
+              attributes: attributes,
+            ),
         ];
         final cursorAfter =
             run.globalStart + (text?.length ?? (modelOffset - run.globalStart));
@@ -971,8 +1123,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       return;
     }
 
-    final modelSel = _selectionToModel(value.selection);
-    final (start, end) = _orderedRange(modelSel);
+    final (start, end) = _orderedRange(_selectionToModel(value.selection));
 
     if (text != null) {
       final startPos = _document.blockAt(start);
@@ -1017,13 +1168,12 @@ class EditorController<B extends Object, S extends Object, E extends Object>
         );
       }
 
-      ops.add(InsertText(startPos.blockIndex, startPos.localOffset, text));
       ops.add(
-        ToggleStyle(
+        InsertText(
           startPos.blockIndex,
           startPos.localOffset,
-          startPos.localOffset + text.length,
-          type,
+          text,
+          styles: {type},
           attributes: attributes,
         ),
       );
@@ -1067,6 +1217,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     if (addOps.isEmpty) return;
 
     _pushUndo();
+    final modelSel = TextSelection(baseOffset: start, extentOffset: end);
     _document = Transaction(
       operations: [...removeOps, ...addOps],
       selectionAfter: modelSel,
@@ -1084,10 +1235,10 @@ class EditorController<B extends Object, S extends Object, E extends Object>
   /// - **Collapsed cursor inside an entity of [type]:** removes that whole entity.
   /// - **Non-collapsed selection:** removes [type] anywhere in the selection.
   void removeInlineEntity(E type) {
-    if (!value.selection.isValid) return;
     final def = _schema.inlineEntityDef(type);
     assert(def != null, 'No inline entity definition registered for $type.');
     if (def == null) return;
+    if (!value.selection.isValid) return;
     if (value.selection.isCollapsed) {
       final modelOffset = displayToModel(value.selection.baseOffset);
       final run = _segmentRunAtModelOffset(
@@ -1115,8 +1266,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       return;
     }
 
-    final modelSel = _selectionToModel(value.selection);
-    final (start, end) = _orderedRange(modelSel);
+    final (start, end) = _orderedRange(_selectionToModel(value.selection));
     final ops = <EditOperation>[];
     _forEachBlockInRange(start, end, (i, block, localStart, localEnd) {
       var offset = 0;
@@ -1143,6 +1293,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
     if (ops.isEmpty) return;
 
     _pushUndo();
+    final modelSel = TextSelection.collapsed(offset: start);
     _document = Transaction(
       operations: ops,
       selectionAfter: modelSel,
@@ -1612,12 +1763,15 @@ class EditorController<B extends Object, S extends Object, E extends Object>
       }
 
       if (diff.insertedText.isNotEmpty) {
+        final (insertStyles, insertAttrs) =
+            _stylesAndAttrsForInsertAt(diff.start);
         ops.add(
           InsertText(
             startPos.blockIndex,
             startPos.localOffset,
             diff.insertedText,
-            styles: _typingStyles,
+            styles: insertStyles,
+            attributes: insertAttrs,
           ),
         );
       }
@@ -1645,6 +1799,7 @@ class EditorController<B extends Object, S extends Object, E extends Object>
 
     // Pure insert (no delete).
     if (diff.insertedText.isNotEmpty) {
+      final (insertStyles, insertAttrs) = _stylesAndAttrsForInsertAt(diff.start);
       return (
         Transaction(
           operations: [
@@ -1652,7 +1807,8 @@ class EditorController<B extends Object, S extends Object, E extends Object>
               startPos.blockIndex,
               startPos.localOffset,
               diff.insertedText,
-              styles: _typingStyles,
+              styles: insertStyles,
+              attributes: insertAttrs,
             ),
           ],
           selectionAfter: selection,

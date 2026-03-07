@@ -76,6 +76,24 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
       TextBlock(
+        id: 'b2a',
+        blockType: BlockType.paragraph,
+        segments: [
+          const StyledSegment('Adjacent links: '),
+          const StyledSegment(
+            'alpha',
+            {InlineEntityType.link},
+            {'url': 'https://example.com/alpha'},
+          ),
+          const StyledSegment(
+            'beta',
+            {InlineEntityType.link},
+            {'url': 'https://example.com/beta'},
+          ),
+          const StyledSegment('.'),
+        ],
+      ),
+      TextBlock(
         id: 'bh2',
         blockType: BlockType.h2,
         segments: [const StyledSegment('Heading 2 example')],
@@ -182,66 +200,81 @@ class _EditorScreenState extends State<EditorScreen> {
     super.dispose();
   }
 
-  void _showLinkDialog() {
+  Future<void> _showLinkDialog() async {
     if (!_controller.value.selection.isValid) return;
 
-    // If cursor is inside an existing link, pre-fill its URL.
-    // setInlineEntity handles collapsed-cursor-inside-link natively.
-    final entity = _controller.inlineEntityAtCursor;
-    final existingUrl = entity?.type == InlineEntityType.link
-        ? (entity!.data as LinkData).url
-        : null;
-    final isEditing = entity?.type == InlineEntityType.link;
-
-    // For new links, require a selection. For editing, collapsed is fine
-    // (setInlineEntity updates the entity at the cursor).
-    if (!isEditing && _controller.value.selection.isCollapsed) return;
-
-    final urlController = TextEditingController(text: existingUrl ?? '');
-    showDialog<String?>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isEditing ? 'Edit Link' : 'Insert Link'),
-        content: TextField(
-          controller: urlController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://...',
-            labelText: 'URL',
+    final touchedLinks = _controller.inlineEntitiesInSelection(
+      type: InlineEntityType.link,
+    );
+    if (touchedLinks.length > 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Selection touches multiple links. Edit one link at a time.',
           ),
-          onSubmitted: (url) => Navigator.of(ctx).pop(url),
         ),
-        actions: [
-          if (isEditing)
-            TextButton(
-              onPressed: () {
-                // Remove the link style.
-                _controller.removeInlineEntity(InlineEntityType.link);
-                Navigator.of(ctx).pop();
-              },
-              child: const Text('Remove Link'),
-            ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(urlController.text),
-            child: const Text('Apply'),
-          ),
-        ],
-      ),
-    ).then((url) {
-      if (url == null) {
-        // Cancelled — do nothing.
-      } else if (url.isEmpty) {
-        // Empty URL — remove the link.
-        _controller.removeInlineEntity(InlineEntityType.link);
-      } else {
-        _controller.setInlineEntity(InlineEntityType.link, LinkData(url: url));
-      }
+      );
       _focusNode.requestFocus();
-    });
+      return;
+    }
+
+    final touchedLink = touchedLinks.isEmpty ? null : touchedLinks.single;
+    final editInfo = touchedLink != null
+        ? InlineEntityEditInfo(
+            text: touchedLink.text,
+            type: InlineEntityType.link,
+            data: touchedLink.data,
+          )
+        : _controller.inlineEntityEditInfo;
+    final linkData = editInfo?.type == InlineEntityType.link
+        ? editInfo!.data as LinkData
+        : null;
+    final result = await showDialog<_LinkDialogResult>(
+      context: context,
+      builder: (ctx) => _LinkDialog(
+        initialText: editInfo?.text ?? '',
+        initialUrl: linkData?.url ?? '',
+        isEditing: editInfo?.type == InlineEntityType.link,
+      ),
+    );
+
+    if (!mounted || result == null) {
+      _focusNode.requestFocus();
+      return;
+    }
+
+    if (result.remove) {
+      _selectInlineEntity(touchedLink);
+      _controller.removeInlineEntity(InlineEntityType.link);
+      _focusNode.requestFocus();
+      return;
+    }
+
+    final url = result.url.trim();
+    if (url.isEmpty) {
+      _focusNode.requestFocus();
+      return;
+    }
+
+    final text = result.text.trim();
+    _selectInlineEntity(touchedLink);
+    _controller.setInlineEntity(
+      InlineEntityType.link,
+      LinkData(url: url),
+      text: text.isEmpty ? null : text,
+    );
+    _focusNode.requestFocus();
+  }
+
+  void _selectInlineEntity(InlineEntityInfo<InlineEntityType>? entity) {
+    if (entity != null) {
+      _controller.value = _controller.value.copyWith(
+        selection: TextSelection(
+          baseOffset: entity.displayStart,
+          extentOffset: entity.displayEnd,
+        ),
+      );
+    }
   }
 
   String _buildDebugText() {
@@ -256,14 +289,18 @@ class _EditorScreenState extends State<EditorScreen> {
       final depth = _controller.document.depthOf(i);
       final indent = '  ' * depth;
       final meta = block.metadata.isNotEmpty ? ' ${block.metadata}' : '';
-      final attrs = block.segments
-          .where((s) => s.attributes.isNotEmpty)
-          .map((s) => s.attributes)
-          .toList();
-      final attrStr = attrs.isNotEmpty ? ' $attrs' : '';
-      buf.writeln(
-        '$indent[$i] ${block.blockType}$meta: "${block.plainText}"$attrStr',
-      );
+      buf.writeln('$indent[$i] ${block.blockType}$meta: "${block.plainText}"');
+      for (final segmentEntry in block.segments.asMap().entries) {
+        final segment = segmentEntry.value;
+        final styles = segment.styles.isEmpty ? '[]' : '${segment.styles}';
+        final attributes = segment.attributes.isEmpty
+            ? '{}'
+            : '${segment.attributes}';
+        buf.writeln(
+          '$indent  - seg ${segmentEntry.key}: '
+          '"${segment.text}" styles=$styles attrs=$attributes',
+        );
+      }
     }
     return buf.toString();
   }
@@ -292,30 +329,81 @@ class _EditorScreenState extends State<EditorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Toolbar.
-            // Row(
-            //   children: [
-            //     Expanded(
-            //       child: EditorToolbar(
-            //         controller: _controller,
-            //         editorFocusNode: _focusNode,
-            //       ),
-            //     ),
-            //     const SizedBox(width: 8),
-            //     IconButton(
-            //       icon: Icon(
-            //         Icons.link,
-            //         color:
-            //             _controller.inlineEntityAtCursor?.type ==
-            //                     InlineEntityType.link
-            //                 ? Theme.of(context).colorScheme.primary
-            //                 : null,
-            //       ),
-            //       tooltip: 'Link (Cmd+K)',
-            //       onPressed: _showLinkDialog,
-            //     ),
-            //   ],
-            // ),
+            Row(
+              children: [
+                Expanded(
+                  child: EditorToolbar(
+                    controller: _controller,
+                    blockTypeSelector: BlockTypeSelector(
+                      controller: _controller,
+                      items: const [
+                        BlockTypeSelectorItem(
+                          type: BlockType.paragraph,
+                          label: 'Paragraph',
+                        ),
+                        BlockTypeSelectorItem(type: BlockType.h1, label: 'H1'),
+                        BlockTypeSelectorItem(type: BlockType.h2, label: 'H2'),
+                        BlockTypeSelectorItem(
+                          type: BlockType.listItem,
+                          label: 'Bullet',
+                        ),
+                        BlockTypeSelectorItem(
+                          type: BlockType.numberedList,
+                          label: 'Numbered',
+                        ),
+                        BlockTypeSelectorItem(
+                          type: BlockType.taskItem,
+                          label: 'Task',
+                        ),
+                        BlockTypeSelectorItem(
+                          type: BlockType.blockQuote,
+                          label: 'Quote',
+                        ),
+                      ],
+                    ),
+                    styleButtons: [
+                      StyleToggleButton(
+                        controller: _controller,
+                        style: InlineStyle.bold,
+                        icon: Icons.format_bold,
+                        tooltip: 'Bold',
+                      ),
+                      StyleToggleButton(
+                        controller: _controller,
+                        style: InlineStyle.italic,
+                        icon: Icons.format_italic,
+                        tooltip: 'Italic',
+                      ),
+                      StyleToggleButton(
+                        controller: _controller,
+                        style: InlineStyle.strikethrough,
+                        icon: Icons.format_strikethrough,
+                        tooltip: 'Strikethrough',
+                      ),
+                      StyleToggleButton(
+                        controller: _controller,
+                        style: InlineStyle.code,
+                        icon: Icons.code,
+                        tooltip: 'Code',
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(
+                    Icons.link,
+                    color:
+                        _controller.inlineEntityEditInfo?.type ==
+                            InlineEntityType.link
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                  tooltip: 'Link (Cmd+K)',
+                  onPressed: _showLinkDialog,
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             Expanded(
               flex: 3,
@@ -376,4 +464,106 @@ class _EditorScreenState extends State<EditorScreen> {
 
 class _LinkDialogIntent extends Intent {
   const _LinkDialogIntent();
+}
+
+class _LinkDialogResult {
+  const _LinkDialogResult({
+    required this.text,
+    required this.url,
+    this.remove = false,
+  });
+
+  final String text;
+  final String url;
+  final bool remove;
+}
+
+class _LinkDialog extends StatefulWidget {
+  const _LinkDialog({
+    required this.initialText,
+    required this.initialUrl,
+    required this.isEditing,
+  });
+
+  final String initialText;
+  final String initialUrl;
+  final bool isEditing;
+
+  @override
+  State<_LinkDialog> createState() => _LinkDialogState();
+}
+
+class _LinkDialogState extends State<_LinkDialog> {
+  late final TextEditingController _textController;
+  late final TextEditingController _urlController;
+
+  @override
+  void initState() {
+    super.initState();
+    _textController = TextEditingController(text: widget.initialText);
+    _urlController = TextEditingController(text: widget.initialUrl);
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _urlController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.isEditing ? 'Edit Link' : 'Add Link'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _textController,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Text'),
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _urlController,
+            decoration: const InputDecoration(
+              labelText: 'URL',
+              hintText: 'https://example.com',
+            ),
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => Navigator.of(context).pop(
+              _LinkDialogResult(
+                text: _textController.text,
+                url: _urlController.text,
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (widget.isEditing)
+          TextButton(
+            onPressed: () => Navigator.of(
+              context,
+            ).pop(const _LinkDialogResult(text: '', url: '', remove: true)),
+            child: const Text('Remove'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(
+            _LinkDialogResult(
+              text: _textController.text,
+              url: _urlController.text,
+            ),
+          ),
+          child: Text(widget.isEditing ? 'Update' : 'Add'),
+        ),
+      ],
+    );
+  }
 }

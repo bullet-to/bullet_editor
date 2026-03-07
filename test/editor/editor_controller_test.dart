@@ -113,6 +113,64 @@ void main() {
       );
       expect(segments[1].text, '!');
       expect(segments[1].styles, isEmpty);
+      expect(segments[1].attributes, isEmpty);
+    });
+
+    test('typing inside plain segment keeps one segment', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'helXlo',
+        selection: TextSelection.collapsed(offset: 4),
+      );
+
+      final segments = controller.document.blocks[0].segments;
+      expect(segments, hasLength(1));
+      expect(segments.single, const StyledSegment('helXlo'));
+    });
+
+    test('typing inside linked segment keeps one linked segment', () {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [
+              const StyledSegment(
+                'beta',
+                {InlineEntityType.link},
+                {'url': 'https://example.com/beta'},
+              ),
+            ],
+          ),
+        ]),
+      );
+
+      controller.value = const TextEditingValue(
+        text: 'betXa',
+        selection: TextSelection.collapsed(offset: 4),
+      );
+
+      final segments = controller.document.blocks[0].segments;
+      expect(segments, hasLength(1));
+      expect(
+        segments.single,
+        const StyledSegment(
+          'betXa',
+          {InlineEntityType.link},
+          {'url': 'https://example.com/beta'},
+        ),
+      );
     });
 
     test('collapsed toggle override clears when cursor moves', () {
@@ -187,6 +245,7 @@ void main() {
       );
       expect(segments[1].text, '!');
       expect(segments[1].styles, isEmpty);
+      expect(segments[1].attributes, isEmpty);
       },
     );
 
@@ -2326,6 +2385,67 @@ void main() {
         },
       );
 
+      test(
+        'setInlineEntity replacing adjacent link text keeps replacement linked',
+        () {
+          final controller = EditorController(
+            schema: EditorSchema.standard(),
+            document: Document([
+              TextBlock(
+                id: 'a',
+                blockType: BlockType.paragraph,
+                segments: [
+                  const StyledSegment('Adjacent links: '),
+                  const StyledSegment(
+                    'alpha',
+                    {InlineEntityType.link},
+                    {'url': 'https://example.com/alpha'},
+                  ),
+                  const StyledSegment(
+                    'beta',
+                    {InlineEntityType.link},
+                    {'url': 'https://example.com/beta'},
+                  ),
+                  const StyledSegment('.'),
+                ],
+              ),
+            ]),
+          );
+
+          final betaStart = controller.text.indexOf('beta');
+          controller.value = controller.value.copyWith(
+            selection: TextSelection(
+              baseOffset: betaStart,
+              extentOffset: betaStart + 4,
+            ),
+          );
+
+          controller.setInlineEntity(
+            InlineEntityType.link,
+            const LinkData(url: 'https://example.com/beta'),
+            text: 'betaa',
+          );
+
+          final segments = controller.document.allBlocks[0].segments;
+          expect(segments.length, 4);
+          expect(segments[1].text, 'alpha');
+          expect(
+            segments[1].attributes['url'],
+            'https://example.com/alpha',
+          );
+          expect(
+            segments[2],
+            const StyledSegment(
+              'betaa',
+              {InlineEntityType.link},
+              {'url': 'https://example.com/beta'},
+            ),
+          );
+          expect(segments[3].text, '.');
+          expect(segments[3].styles, isEmpty);
+        },
+      );
+
       test('setInlineEntity with collapsed cursor inside link updates URL', () {
         final controller = EditorController(
           schema: EditorSchema.standard(),
@@ -2727,6 +2847,161 @@ void main() {
             type: InlineEntityType.link,
             data: LinkData(url: 'https://example.com'),
           ),
+        );
+      });
+    });
+
+    group('inlineEntitiesInSelection', () {
+      test('collapsed cursor in plain text returns no entities', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [const StyledSegment('hello')],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 2),
+        );
+
+        expect(controller.inlineEntitiesInSelection(), isEmpty);
+      });
+
+      test('collapsed cursor in link returns one resolved entity', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment('see '),
+                const StyledSegment(
+                  'here',
+                  {InlineEntityType.link},
+                  {'url': 'https://example.com'},
+                ),
+                const StyledSegment(' end'),
+              ],
+            ),
+          ]),
+        );
+        final hereStart = controller.text.indexOf('here');
+        controller.value = controller.value.copyWith(
+          selection: TextSelection.collapsed(offset: hereStart + 2),
+        );
+
+        expect(
+          controller.inlineEntitiesInSelection(),
+          [
+            const InlineEntityInfo<InlineEntityType>(
+              type: InlineEntityType.link,
+              text: 'here',
+              data: LinkData(url: 'https://example.com'),
+              modelStart: 4,
+              modelEnd: 8,
+              displayStart: 4,
+              displayEnd: 8,
+            ),
+          ],
+        );
+      });
+
+      test('selection touching adjacent identical link segments returns one entity',
+          () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'be',
+                  {InlineEntityType.link},
+                  {'url': 'https://example.com/beta'},
+                ),
+                const StyledSegment(
+                  'ta',
+                  {InlineEntityType.link},
+                  {'url': 'https://example.com/beta'},
+                ),
+                const StyledSegment('.'),
+              ],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 1, extentOffset: 3),
+        );
+
+        expect(
+          controller.inlineEntitiesInSelection(type: InlineEntityType.link),
+          [
+            const InlineEntityInfo<InlineEntityType>(
+              type: InlineEntityType.link,
+              text: 'beta',
+              data: LinkData(url: 'https://example.com/beta'),
+              modelStart: 0,
+              modelEnd: 4,
+              displayStart: 0,
+              displayEnd: 4,
+            ),
+          ],
+        );
+      });
+
+      test('selection touching two different links returns both entities', () {
+        final controller = EditorController(
+          schema: EditorSchema.standard(),
+          document: Document([
+            TextBlock(
+              id: 'a',
+              blockType: BlockType.paragraph,
+              segments: [
+                const StyledSegment(
+                  'alpha',
+                  {InlineEntityType.link},
+                  {'url': 'https://example.com/alpha'},
+                ),
+                const StyledSegment(
+                  'beta',
+                  {InlineEntityType.link},
+                  {'url': 'https://example.com/beta'},
+                ),
+              ],
+            ),
+          ]),
+        );
+        controller.value = controller.value.copyWith(
+          selection: const TextSelection(baseOffset: 1, extentOffset: 9),
+        );
+
+        expect(
+          controller.inlineEntitiesInSelection(type: InlineEntityType.link),
+          [
+            const InlineEntityInfo<InlineEntityType>(
+              type: InlineEntityType.link,
+              text: 'alpha',
+              data: LinkData(url: 'https://example.com/alpha'),
+              modelStart: 0,
+              modelEnd: 5,
+              displayStart: 0,
+              displayEnd: 5,
+            ),
+            const InlineEntityInfo<InlineEntityType>(
+              type: InlineEntityType.link,
+              text: 'beta',
+              data: LinkData(url: 'https://example.com/beta'),
+              modelStart: 5,
+              modelEnd: 9,
+              displayStart: 5,
+              displayEnd: 9,
+            ),
+          ],
         );
       });
     });
