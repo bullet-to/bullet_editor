@@ -26,7 +26,7 @@ void main() {
       );
       final block = TextBlock(
         id: 'a',
-        blockType: BlockType.h1,
+        blockType: HeadingKeys.h1,
         segments: [const StyledSegment('Hello')],
       );
       final ctx = const EncodeContext(
@@ -44,7 +44,7 @@ void main() {
       );
       final block = TextBlock(
         id: 'a',
-        blockType: BlockType.numberedList,
+        blockType: NumberedListKeys.type,
         segments: [const StyledSegment('Item')],
       );
       final ctx = const EncodeContext(
@@ -122,14 +122,14 @@ void main() {
     test('decode picks most specific match (h3 over h1)', () {
       final codec = MarkdownCodec();
       final doc = codec.decode('### Sub-heading');
-      expect(doc.blocks[0].blockType, BlockType.h3);
+      expect(doc.blocks[0].blockType, HeadingKeys.h3);
       expect(doc.blocks[0].plainText, 'Sub-heading');
     });
 
     test('decode picks most specific match (task over list)', () {
       final codec = MarkdownCodec();
       final doc = codec.decode('- [ ] My task');
-      expect(doc.blocks[0].blockType, BlockType.taskItem);
+      expect(doc.blocks[0].blockType, TaskItemKeys.type);
       expect(doc.blocks[0].plainText, 'My task');
       expect(doc.blocks[0].metadata['checked'], false);
     });
@@ -137,12 +137,16 @@ void main() {
     test('schema inline codecs are used for encode', () {
       final codec = MarkdownCodec();
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [
-          const StyledSegment('normal '),
-          const StyledSegment('bold', {InlineStyle.bold}),
-          const StyledSegment(' '),
-          const StyledSegment('italic', {InlineStyle.italic}),
-        ]),
+        TextBlock(
+          id: 'a',
+          blockType: ParagraphKeys.type,
+          segments: [
+            const StyledSegment('normal '),
+            const StyledSegment('bold', {InlineStyleKeys.bold}),
+            const StyledSegment(' '),
+            const StyledSegment('italic', {InlineStyleKeys.italic}),
+          ],
+        ),
       ]);
       expect(codec.encode(doc), 'normal **bold** *italic*');
     });
@@ -154,23 +158,25 @@ void main() {
       expect(segs.length, 4);
       expect(segs[0].text, 'normal ');
       expect(segs[1].text, 'bold');
-      expect(segs[1].styles, {InlineStyle.bold});
+      expect(segs[1].styles, {InlineStyleKeys.bold});
       expect(segs[2].text, ' ');
       expect(segs[3].text, 'italic');
-      expect(segs[3].styles, {InlineStyle.italic});
+      expect(segs[3].styles, {InlineStyleKeys.italic});
     });
 
     test('block def without codec falls back to plain content', () {
       final schema = EditorSchema(
-        defaultBlockType: BlockType.paragraph,
-        blocks: {
-          BlockType.paragraph: const BlockDef(label: 'Paragraph'),
-        },
-        inlineStyles: <Object, InlineStyleDef>{},
+        defaultBlockType: ParagraphKeys.type,
+        blocks: {ParagraphKeys.type: const BlockDef(label: 'Paragraph')},
+        inlineStyles: const <String, InlineStyleDef>{},
       );
       final codec = MarkdownCodec(schema: schema);
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: [const StyledSegment('Hello')]),
+        TextBlock(
+          id: 'a',
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('Hello')],
+        ),
       ]);
       // Fallback: indent + content
       expect(codec.encode(doc), 'Hello');

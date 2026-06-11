@@ -4,9 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('Document', () {
     test('empty creates single block with given type', () {
-      final doc = Document.empty(BlockType.paragraph);
+      final doc = Document.empty(ParagraphKeys.type);
       expect(doc.allBlocks.length, 1);
-      expect(doc.allBlocks.first.blockType, BlockType.paragraph);
+      expect(doc.allBlocks.first.blockType, ParagraphKeys.type);
       expect(doc.allBlocks.first.plainText, '');
     });
 
@@ -16,76 +16,63 @@ void main() {
       expect(doc.allBlocks.first.blockType, 'myCustomBlock');
     });
 
-    test('plainText joins blocks with newline', () {
+    // The global plain-text surface (Document.plainText, blockAt,
+    // globalOffset) died with the single-TextField architecture; the
+    // replacement addressing surface is id-based.
+
+    test('indexOfBlock resolves ids to flat indices', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('A')],
+          children: [
+            TextBlock(
+              id: 'a1',
+              blockType: ParagraphKeys.type,
+              segments: [const StyledSegment('A1')],
+            ),
+          ],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('world')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('B')],
         ),
       ]);
-      expect(doc.plainText, 'hello\nworld');
+      expect(doc.indexOfBlock('a'), 0);
+      expect(doc.indexOfBlock('a1'), 1);
+      expect(doc.indexOfBlock('b'), 2);
+      expect(doc.indexOfBlock('gone'), -1);
+      expect(doc.idToFlatIndex['a1'], 1);
     });
 
-    test('blockAt maps global offset to correct block', () {
+    test('blockById returns the block or null', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('abc')],
-        ), // 0-2
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('de')],
-        ), // 4-5 (3 is \n)
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('A')],
+        ),
       ]);
-
-      // Inside first block
-      expect(doc.blockAt(0).blockIndex, 0);
-      expect(doc.blockAt(0).localOffset, 0);
-      expect(doc.blockAt(2).blockIndex, 0);
-      expect(doc.blockAt(2).localOffset, 2);
-      expect(doc.blockAt(3).blockIndex, 0);
-      expect(doc.blockAt(3).localOffset, 3);
-
-      // Inside second block
-      expect(doc.blockAt(4).blockIndex, 1);
-      expect(doc.blockAt(4).localOffset, 0);
-      expect(doc.blockAt(5).blockIndex, 1);
-      expect(doc.blockAt(5).localOffset, 1);
+      expect(doc.blockById('a')!.plainText, 'A');
+      expect(doc.blockById('gone'), isNull);
     });
 
-    test('globalOffset reverses blockAt', () {
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('abc')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('de')],
-        ),
-      ]);
-
-      expect(doc.globalOffset(0, 0), 0);
-      expect(doc.globalOffset(0, 3), 3);
-      expect(doc.globalOffset(1, 0), 4);
-      expect(doc.globalOffset(1, 2), 6);
+    test('generateBlockId produces unique UUID-shaped ids', () {
+      final ids = {for (var i = 0; i < 1000; i++) generateBlockId()};
+      expect(ids.length, 1000);
+      final uuid = RegExp(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+      );
+      expect(ids.every(uuid.hasMatch), isTrue);
     });
   });
 
   group('StyledSegment', () {
     test('equality', () {
-      const a = StyledSegment('hi', {InlineStyle.bold});
-      const b = StyledSegment('hi', {InlineStyle.bold});
+      const a = StyledSegment('hi', {InlineStyleKeys.bold});
+      const b = StyledSegment('hi', {InlineStyleKeys.bold});
       expect(a, equals(b));
     });
   });
@@ -95,29 +82,29 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('A')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('B')],
           children: [
             TextBlock(
               id: 'b1',
-              blockType: BlockType.paragraph,
+              blockType: ParagraphKeys.type,
               segments: [const StyledSegment('B1')],
             ),
             TextBlock(
               id: 'b2',
-              blockType: BlockType.paragraph,
+              blockType: ParagraphKeys.type,
               segments: [const StyledSegment('B2')],
             ),
           ],
         ),
         TextBlock(
           id: 'c',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('C')],
         ),
       ]);
@@ -125,70 +112,44 @@ void main() {
       expect(ids, ['a', 'b', 'b1', 'b2', 'c']);
     });
 
-    test('plainText flattens tree correctly', () {
+    test('per-block text flattens tree correctly', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('A')],
           children: [
             TextBlock(
               id: 'a1',
-              blockType: BlockType.paragraph,
+              blockType: ParagraphKeys.type,
               segments: [const StyledSegment('A1')],
             ),
           ],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('B')],
         ),
       ]);
-      expect(doc.plainText, 'A\nA1\nB');
-    });
-
-    test('blockAt works with nested blocks', () {
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('AB')],
-          children: [
-            TextBlock(
-              id: 'a1',
-              blockType: BlockType.paragraph,
-              segments: [const StyledSegment('CD')],
-            ),
-          ],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('EF')],
-        ),
-      ]);
-      // "AB\nCD\nEF" — offsets: A=0, B=1, \n=2, C=3, D=4, \n=5, E=6, F=7
-      expect(doc.blockAt(0).blockIndex, 0); // 'a'
-      expect(doc.blockAt(3).blockIndex, 1); // 'a1'
-      expect(doc.blockAt(6).blockIndex, 2); // 'b'
+      expect(doc.allBlocks.map((b) => b.plainText).toList(), ['A', 'A1', 'B']);
     });
 
     test('depthOf returns correct nesting level', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: const [],
           children: [
             TextBlock(
               id: 'a1',
-              blockType: BlockType.paragraph,
+              blockType: ParagraphKeys.type,
               segments: const [],
               children: [
                 TextBlock(
                   id: 'a1a',
-                  blockType: BlockType.paragraph,
+                  blockType: ParagraphKeys.type,
                   segments: const [],
                 ),
               ],
@@ -203,49 +164,49 @@ void main() {
   });
 
   group('Document.stylesAt', () {
-    test('returns styles from segment at offset', () {
+    test('returns styles from segment at block-local offset', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('abc '),
-            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment('bold', {InlineStyleKeys.bold}),
             const StyledSegment(' xyz'),
           ],
         ),
       ]);
       // Inside unstyled "abc "
-      expect(doc.stylesAt(0), <InlineStyle>{});
-      expect(doc.stylesAt(2), <InlineStyle>{});
+      expect(doc.stylesAt(0, 0), <Object>{});
+      expect(doc.stylesAt(0, 2), <Object>{});
       // Inside bold "bold"
-      expect(doc.stylesAt(5), {InlineStyle.bold});
-      expect(doc.stylesAt(7), {InlineStyle.bold});
+      expect(doc.stylesAt(0, 5), {InlineStyleKeys.bold});
+      expect(doc.stylesAt(0, 7), {InlineStyleKeys.bold});
       // At boundary (offset 8 = end of bold / start of " xyz").
       // Backward boundary → bold (typing continues the style you just left).
-      expect(doc.stylesAt(8), {InlineStyle.bold});
+      expect(doc.stylesAt(0, 8), {InlineStyleKeys.bold});
       // Inside unstyled " xyz"
-      expect(doc.stylesAt(9), <InlineStyle>{});
+      expect(doc.stylesAt(0, 9), <Object>{});
     });
 
     test('returns empty for empty block', () {
       final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.paragraph, segments: const []),
+        TextBlock(id: 'a', blockType: ParagraphKeys.type, segments: const []),
       ]);
-      expect(doc.stylesAt(0), <InlineStyle>{});
+      expect(doc.stylesAt(0, 0), <Object>{});
     });
   });
 
   group('mergeSegments', () {
     test('merges adjacent same-style segments', () {
       final result = mergeSegments([
-        const StyledSegment('hel', {InlineStyle.bold}),
-        const StyledSegment('lo', {InlineStyle.bold}),
+        const StyledSegment('hel', {InlineStyleKeys.bold}),
+        const StyledSegment('lo', {InlineStyleKeys.bold}),
         const StyledSegment(' world'),
       ]);
       expect(result.length, 2);
       expect(result[0].text, 'hello');
-      expect(result[0].styles, {InlineStyle.bold});
+      expect(result[0].styles, {InlineStyleKeys.bold});
       expect(result[1].text, ' world');
     });
 
@@ -263,12 +224,12 @@ void main() {
       final result = mergeSegments([
         const StyledSegment(
           'a',
-          {InlineEntityType.link},
+          {InlineEntityKeys.link},
           {'url': 'https://a.com'},
         ),
         const StyledSegment(
           'b',
-          {InlineEntityType.link},
+          {InlineEntityKeys.link},
           {'url': 'https://b.com'},
         ),
       ]);
@@ -281,12 +242,12 @@ void main() {
       final result = mergeSegments([
         const StyledSegment(
           'click',
-          {InlineEntityType.link},
+          {InlineEntityKeys.link},
           {'url': 'https://x.com'},
         ),
         const StyledSegment(
           ' here',
-          {InlineEntityType.link},
+          {InlineEntityKeys.link},
           {'url': 'https://x.com'},
         ),
       ]);
@@ -298,22 +259,22 @@ void main() {
 
   group('StyledSegment attributes', () {
     test('equality includes attributes', () {
-      const a = StyledSegment('x', {InlineEntityType.link}, {'url': 'a'});
-      const b = StyledSegment('x', {InlineEntityType.link}, {'url': 'a'});
-      const c = StyledSegment('x', {InlineEntityType.link}, {'url': 'b'});
+      const a = StyledSegment('x', {InlineEntityKeys.link}, {'url': 'a'});
+      const b = StyledSegment('x', {InlineEntityKeys.link}, {'url': 'a'});
+      const c = StyledSegment('x', {InlineEntityKeys.link}, {'url': 'b'});
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
 
     test('copyWith preserves attributes', () {
-      const seg = StyledSegment('hi', {InlineEntityType.link}, {'url': 'x'});
+      const seg = StyledSegment('hi', {InlineEntityKeys.link}, {'url': 'x'});
       final copy = seg.copyWith(text: 'bye');
       expect(copy.text, 'bye');
       expect(copy.attributes, {'url': 'x'});
     });
 
     test('default attributes is empty', () {
-      const seg = StyledSegment('hi', {InlineStyle.bold});
+      const seg = StyledSegment('hi', {InlineStyleKeys.bold});
       expect(seg.attributes, isEmpty);
     });
   });
@@ -323,42 +284,41 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('Hello '),
-            const StyledSegment('world', {InlineStyle.bold}),
+            const StyledSegment('world', {InlineStyleKeys.bold}),
           ],
         ),
       ]);
-      // Extract "lo wo" (offset 3..8)
-      final blocks = doc.extractRange(3, 8);
+      // Extract "lo wo" (local offsets 3..8)
+      final blocks = doc.extractRange(0, 3, 0, 8);
       expect(blocks.length, 1);
       expect(blocks[0].plainText, 'lo wo');
       // Should have 2 segments: "lo " (plain) + "wo" (bold)
       expect(blocks[0].segments.length, 2);
-      expect(blocks[0].segments[1].styles, {InlineStyle.bold});
+      expect(blocks[0].segments[1].styles, {InlineStyleKeys.bold});
     });
 
     test('cross-block extraction preserves block types', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.h1,
+          blockType: HeadingKeys.h1,
           segments: [const StyledSegment('Title')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('Body text')],
         ),
       ]);
-      // Extract "tle\nBody " (offset 2..11) — crosses block boundary
-      // Title(5) + \n(1) + "Body "(5) = 11
-      final blocks = doc.extractRange(2, 11);
+      // Extract "tle" + "Body " — crosses the block boundary.
+      final blocks = doc.extractRange(0, 2, 1, 5);
       expect(blocks.length, 2);
-      expect(blocks[0].blockType, BlockType.h1);
+      expect(blocks[0].blockType, HeadingKeys.h1);
       expect(blocks[0].plainText, 'tle');
-      expect(blocks[1].blockType, BlockType.paragraph);
+      expect(blocks[1].blockType, ParagraphKeys.type);
       expect(blocks[1].plainText, 'Body ');
     });
 
@@ -366,24 +326,24 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('first')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('second')],
         ),
         TextBlock(
           id: 'c',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('third')],
         ),
       ]);
-      // Extract entire second block: "first\n" = 6 chars, second = 6..12
-      final blocks = doc.extractRange(6, 12);
+      // Extract the entire second block.
+      final blocks = doc.extractRange(1, 0, 1, 6);
       expect(blocks.length, 1);
-      expect(blocks[0].blockType, BlockType.listItem);
+      expect(blocks[0].blockType, ListItemKeys.type);
       expect(blocks[0].plainText, 'second');
     });
 
@@ -391,17 +351,17 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment(
               'click',
-              {InlineEntityType.link},
+              {InlineEntityKeys.link},
               {'url': 'https://x.com'},
             ),
           ],
         ),
       ]);
-      final blocks = doc.extractRange(0, 5);
+      final blocks = doc.extractRange(0, 0, 0, 5);
       expect(blocks[0].segments[0].attributes['url'], 'https://x.com');
     });
 
@@ -409,19 +369,19 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('Parent')],
           children: [
             TextBlock(
               id: 'b',
-              blockType: BlockType.listItem,
+              blockType: ListItemKeys.type,
               segments: [const StyledSegment('Child')],
             ),
           ],
         ),
       ]);
-      // Select all: "Parent\nChild" = 12 chars
-      final blocks = doc.extractRange(0, 12);
+      // Select all: "Parent" through "Child".
+      final blocks = doc.extractRange(0, 0, 1, 5);
       expect(blocks.length, 1, reason: 'Should be 1 root with 1 child');
       expect(blocks[0].plainText, 'Parent');
       expect(blocks[0].children.length, 1);
@@ -432,18 +392,18 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('Parent')],
           children: [
             TextBlock(
               id: 'b',
-              blockType: BlockType.listItem,
+              blockType: ListItemKeys.type,
               segments: [const StyledSegment('Nested')],
             ),
           ],
         ),
       ]);
-      final extracted = doc.extractRange(0, 13); // "Parent\nNested"
+      final extracted = doc.extractRange(0, 0, 1, 6); // "Parent" + "Nested"
       final tempDoc = Document(extracted);
       final codec = MarkdownCodec();
       final md = codec.encode(tempDoc);

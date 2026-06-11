@@ -1,4 +1,5 @@
 import '../model/block.dart';
+import '../model/block_policies.dart';
 import '../model/document.dart';
 import '../schema/editor_schema.dart';
 import 'block_codec.dart';
@@ -42,23 +43,29 @@ String escapeMarkdown(String text) {
 ///
 /// This class owns the format-level grammar: paragraph splitting (`\n\n`),
 /// indentation (2-space nesting), and tree building.
-class MarkdownCodec<B extends Object> {
-  MarkdownCodec({EditorSchema<B, Object, Object>? schema})
-    : _schema =
-          schema ?? EditorSchema.standard() as EditorSchema<B, Object, Object>;
+class MarkdownCodec {
+  MarkdownCodec({EditorSchema? schema})
+    : _schema = schema ?? EditorSchema.standard();
 
-  /// Convenience constructor that returns a codec typed for the built-in
-  /// [BlockType] enum using the standard schema.
-  static MarkdownCodec<BlockType> standard() =>
-      MarkdownCodec<BlockType>(schema: EditorSchema.standard());
+  /// Convenience constructor using the standard schema.
+  static MarkdownCodec standard() =>
+      MarkdownCodec(schema: EditorSchema.standard());
 
-  final EditorSchema<B, Object, Object> _schema;
+  final EditorSchema _schema;
+
+  /// Whether consecutive siblings of this type join tightly (single \n).
+  /// List-shaped types are exactly those whose split policy inherits the
+  /// type (lists continue on Enter) — the codec half of the deleted
+  /// `isListLike` boolean.
+  bool _isTight(String blockType) =>
+      _schema.splitPolicyOf(blockType).newBlockType ==
+      SplitNewBlockType.inherit;
 
   // -----------------------------------------------------------------------
   // Encode
   // -----------------------------------------------------------------------
 
-  String encode(Document<B> doc) {
+  String encode(Document doc) {
     final entries = <_EncodedLine>[];
     _encodeBlocks(doc.blocks, 0, entries);
 
@@ -69,9 +76,7 @@ class MarkdownCodec<B extends Object> {
       if (i > 0) {
         final prev = entries[i - 1];
         final curr = entries[i];
-        final tightPair =
-            _schema.isListLike(prev.blockType) &&
-            _schema.isListLike(curr.blockType);
+        final tightPair = _isTight(prev.blockType) && _isTight(curr.blockType);
         // An empty block already contributes "" as its line, so the \n\n
         // separator before it produces one blank line. Use \n after
         // an empty line so the next block isn't double-spaced.
@@ -84,25 +89,29 @@ class MarkdownCodec<B extends Object> {
   }
 
   void _encodeBlocks(
-    List<TextBlock<B>> blocks,
+    List<TextBlock> blocks,
     int depth,
     List<_EncodedLine> entries,
   ) {
-    var numberedOrdinal = 0;
+    // 1-based ordinal among consecutive same-type siblings — numbered-list
+    // codecs read it; other codecs ignore it.
+    var runOrdinal = 0;
+    String? runType;
     for (final block in blocks) {
       final content = _encodeSegments(block.segments);
       final indent = '  ' * depth;
 
-      if (block.blockType == BlockType.numberedList) {
-        numberedOrdinal++;
+      if (block.blockType == runType) {
+        runOrdinal++;
       } else {
-        numberedOrdinal = 0;
+        runType = block.blockType;
+        runOrdinal = 1;
       }
 
       final ctx = EncodeContext(
         depth: depth,
         indent: indent,
-        ordinal: numberedOrdinal,
+        ordinal: runOrdinal,
         content: content,
       );
 
@@ -202,7 +211,7 @@ class MarkdownCodec<B extends Object> {
   /// optionally followed by a language identifier.
   static final _fenceOpen = RegExp(r'^(`{3,}|~{3,})(.*)$');
 
-  Document<B> decode(String markdown) {
+  Document decode(String markdown) {
     if (markdown.isEmpty) {
       return Document.empty(_schema.defaultBlockType);
     }
@@ -298,7 +307,7 @@ class MarkdownCodec<B extends Object> {
   }
 
   /// Decode a fenced code block from its multi-line string.
-  TextBlock<B> _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
+  TextBlock _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
     final lines = text.split('\n');
     final lang = fenceMatch.group(2)!.trim();
     final fenceDelim = fenceMatch.group(1)!;
@@ -317,21 +326,17 @@ class MarkdownCodec<B extends Object> {
     // Content is everything between opening and closing fence.
     final content = lines.sublist(1, endIndex).join('\n');
 
-    // Look up the code block type key from the schema.
-    B? codeBlockKey;
-    for (final entry in _schema.blocks.entries) {
-      if (entry.value.label == 'Code Block') {
-        codeBlockKey = entry.key;
-        break;
-      }
-    }
-    codeBlockKey ??= _schema.defaultBlockType;
+    // Fences decode to the registered code-block key (the v2 label
+    // comparison dies with the key-holder pass).
+    final codeBlockKey = _schema.blocks.containsKey(CodeBlockKeys.type)
+        ? CodeBlockKeys.type
+        : _schema.defaultBlockType;
 
     return TextBlock(
       id: generateBlockId(),
       blockType: codeBlockKey,
       segments: [StyledSegment(content)],
-      metadata: lang.isNotEmpty ? {'language': lang} : const {},
+      metadata: lang.isNotEmpty ? {CodeBlockKeys.language: lang} : const {},
     );
   }
 
@@ -343,8 +348,8 @@ class MarkdownCodec<B extends Object> {
   /// When collapsing a block, the entire subsequent group at depth >= the
   /// original depth is shifted down by 1, preserving sibling relationships.
   /// Iterates until stable (typically 1-2 passes).
-  List<(int, TextBlock<B>)> _normalizeDepths(List<(int, TextBlock<B>)> parsed) {
-    final adj = List<(int, TextBlock<B>)>.of(parsed);
+  List<(int, TextBlock)> _normalizeDepths(List<(int, TextBlock)> parsed) {
+    final adj = List<(int, TextBlock)>.of(parsed);
     var changed = true;
     while (changed) {
       changed = false;
@@ -429,7 +434,7 @@ class MarkdownCodec<B extends Object> {
   /// Try all registered block decoders. If multiple match, pick the most
   /// specific one (the decoder that consumed the most prefix, i.e. whose
   /// DecodeMatch.content is shortest). Falls back to the default block type.
-  TextBlock<B> _decodeBlock(String text) {
+  TextBlock _decodeBlock(String text) {
     // CommonMark allows up to 3 leading spaces on block-level constructs.
     // Strip them before trying decoders (4+ spaces = indented code block,
     // which we don't support, but we still avoid stripping those).
@@ -442,7 +447,7 @@ class MarkdownCodec<B extends Object> {
     }
     if (leading > 0) stripped = text.substring(leading);
 
-    B? bestKey;
+    String? bestKey;
     DecodeMatch? bestMatch;
 
     for (final entry in _schema.blocks.entries) {
@@ -771,6 +776,6 @@ class _InlineCombinedWrapEntry {
 class _EncodedLine {
   const _EncodedLine(this.line, this.blockType, this.depth);
   final String line;
-  final Object blockType;
+  final String blockType;
   final int depth;
 }

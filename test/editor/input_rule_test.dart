@@ -1,46 +1,73 @@
 import 'package:bullet_editor/bullet_editor.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart' show TextRange;
 import 'package:flutter_test/flutter_test.dart';
+
+/// Applies an [InputRuleOutcome]'s follow-up operations sequentially to
+/// [docAfter] (the document as it looks after the triggering insertion).
+Document applyOutcome(
+  Document docAfter,
+  InputRuleOutcome outcome,
+  EditorSchema schema,
+) {
+  final ctx = schema.editContext();
+  var doc = docAfter;
+  for (final op in outcome.operations) {
+    final next = op.apply(doc, ctx);
+    expect(next, isNotNull, reason: 'op $op rejected');
+    doc = next!;
+  }
+  return doc;
+}
 
 void main() {
   final schema = EditorSchema.standard();
+
+  // Deleted v2 rule groups (behavior moved into BlockDef policies, applied by
+  // the controller, days 5–7):
+  // - HeadingBackspaceRule → BlockDef `backspaceAtStart` policy.
+  // - EmptyListItemRule (incl. list-like types) → BlockDef `split` policy.
+  // - ListItemBackspaceRule → BlockDef `backspaceAtStart` policy.
+  // - NestedBackspaceRule → BlockDef `backspaceAtStart`/`split` policies.
+  // - DividerBackspaceRule → BlockDef `voidBackspace` policy.
+
   group('BoldWrapRule', () {
     test('detects **text** and transforms to bold', () {
       final rule = BoldWrapRule();
 
-      // Simulate: document has "hello " and user has typed "**world**"
-      // so the pending transaction inserts the final "*" making it "hello **world**"
-      final doc = Document([
+      // Post-application: the closing "*" has already been inserted at
+      // offset 14, making the committed text "hello **world**".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello **world*')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello **world**')],
         ),
       ]);
 
-      // The pending transaction adds the closing "*"
-      final pending = Transaction(
-        operations: [InsertText(0, 14, '*')],
-        selectionAfter: const TextSelection.collapsed(offset: 15),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 14, end: 15),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      // Apply the transformed transaction to the original doc.
-      final newDoc = result!.apply(doc);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
 
       // The asterisks should be removed and "world" should be bold.
       expect(newDoc.blocks[0].plainText, 'hello world');
       expect(
         newDoc.blocks[0].segments.any(
-          (s) => s.text == 'world' && s.styles.contains(InlineStyle.bold),
+          (s) => s.text == 'world' && s.styles.contains(InlineStyleKeys.bold),
         ),
         isTrue,
       );
 
-      // Cursor should be right after "world" (offset 11 = "hello world".length).
-      expect(result.selectionAfter!.baseOffset, 11);
+      // Caret should be right after "world" (offset 11 = "hello world".length).
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('a', 11)),
+      );
     });
 
     test(
@@ -48,452 +75,279 @@ void main() {
       () {
         final rule = BoldWrapRule();
 
-        // Block already has **text** as literal characters.
-        final doc = Document([
+        // Block already has **text** as literal characters; the user typed a
+        // space at the end — unrelated to the pattern.
+        final docAfter = Document([
           TextBlock(
             id: 'a',
-            blockType: BlockType.paragraph,
-            segments: [const StyledSegment('Type **text** here')],
+            blockType: ParagraphKeys.type,
+            segments: [const StyledSegment('Type **text** here ')],
           ),
         ]);
 
-        // User types a space at the end — unrelated to the pattern.
-        final pending = Transaction(
-          operations: [InsertText(0, 18, ' ')],
-          selectionAfter: const TextSelection.collapsed(offset: 19),
-        );
-
         // Rule should NOT fire — the pattern wasn't just completed.
-        expect(rule.tryTransform(pending, doc, schema), isNull);
+        expect(
+          rule.tryTransform(
+            docAfter,
+            'a',
+            const TextRange(start: 18, end: 19),
+            schema,
+          ),
+          isNull,
+        );
       },
     );
 
     test('cursor lands after bold text when pattern is mid-sentence', () {
       final rule = BoldWrapRule();
 
-      // "abc **trigger* bold" — user is about to type the closing *
-      final doc = Document([
+      // User typed the closing * at offset 14 → "abc **trigger** bold".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('abc **trigger* bold')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('abc **trigger** bold')],
         ),
       ]);
 
-      // User types closing * at position 14 (right after the existing *)
-      final pending = Transaction(
-        operations: [InsertText(0, 14, '*')],
-        selectionAfter: const TextSelection.collapsed(offset: 15),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 14, end: 15),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
 
       // Should be "abc trigger bold" with "trigger" bold.
       expect(newDoc.blocks[0].plainText, 'abc trigger bold');
       expect(
         newDoc.blocks[0].segments.any(
-          (s) => s.text == 'trigger' && s.styles.contains(InlineStyle.bold),
+          (s) => s.text == 'trigger' && s.styles.contains(InlineStyleKeys.bold),
         ),
         isTrue,
       );
 
-      // Cursor should be right after "trigger" = offset 11 ("abc trigger".length)
-      expect(result.selectionAfter!.baseOffset, 11);
+      // Caret right after "trigger" = offset 11 ("abc trigger".length).
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('a', 11)),
+      );
     });
 
     test('cursor correct when bold pattern is in second block', () {
       final rule = BoldWrapRule();
 
-      // Two blocks: block 0 = "first", block 1 = "abc **trigger* bold"
-      final doc = Document([
+      // Two blocks; user typed the closing * in block 'b' at local offset 14.
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('first')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('abc **trigger* bold')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('abc **trigger** bold')],
         ),
       ]);
 
-      // User types * in block 1 at local offset 14.
-      // Global offset: 5 (first) + 1 (\n) + 14 = 20
-      final pending = Transaction(
-        operations: [InsertText(1, 14, '*')],
-        selectionAfter: const TextSelection.collapsed(offset: 20),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'b',
+        const TextRange(start: 14, end: 15),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
       expect(newDoc.blocks[1].plainText, 'abc trigger bold');
 
-      // Cursor should be after "trigger" in block 1.
-      // Global: 5 + 1 + 11 = 17  ("first\nabc trigger".length)
-      expect(result.selectionAfter!.baseOffset, 17);
+      // Caret should be after "trigger" in block 'b' (local offset 11).
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('b', 11)),
+      );
     });
 
     test('returns null when no pattern found', () {
       final rule = BoldWrapRule();
-      final doc = Document([
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello world')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello world!')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 11, '!')],
-        selectionAfter: const TextSelection.collapsed(offset: 12),
-      );
 
-      expect(rule.tryTransform(pending, doc, schema), isNull);
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 11, end: 12),
+          schema,
+        ),
+        isNull,
+      );
     });
   });
 
   group('HeadingRule', () {
     test('# followed by space converts to H1', () {
-      final rule = HeadingRule();
-      final doc = Document([
+      const rule = HeadingRule();
+      // The space after "#" has been committed → block text is "# ".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('#')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('# ')],
         ),
       ]);
 
-      final pending = Transaction(
-        operations: [InsertText(0, 1, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 2),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 1, end: 2),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
-      expect(newDoc.blocks[0].blockType, BlockType.h1);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(newDoc.blocks[0].blockType, HeadingKeys.h1);
       expect(newDoc.blocks[0].plainText, '');
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('a', 0)),
+      );
     });
 
     test('# space at start of paragraph with existing text converts to H1', () {
-      final rule = HeadingRule();
-      // User typed # at the start of "hello", then space. Block has "# hello".
-      final doc = Document([
+      const rule = HeadingRule();
+      // User typed # at the start of "hello", then space → "# hello".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('#hello')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('# hello')],
         ),
       ]);
 
-      final pending = Transaction(
-        operations: [InsertText(0, 1, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 2),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 1, end: 2),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
-      expect(newDoc.blocks[0].blockType, BlockType.h1);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(newDoc.blocks[0].blockType, HeadingKeys.h1);
       expect(newDoc.blocks[0].plainText, 'hello');
     });
 
     test('does not fire on # mid-text', () {
-      final rule = HeadingRule();
-      final doc = Document([
+      const rule = HeadingRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello #')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello # ')],
         ),
       ]);
 
-      final pending = Transaction(
-        operations: [InsertText(0, 7, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 8),
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 7, end: 8),
+          schema,
+        ),
+        isNull,
       );
-
-      expect(rule.tryTransform(pending, doc, schema), isNull);
     });
 
     test('does not fire if block is already H1', () {
-      final rule = HeadingRule();
-      final doc = Document([
+      const rule = HeadingRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.h1,
-          segments: [const StyledSegment('#')],
+          blockType: HeadingKeys.h1,
+          segments: [const StyledSegment('# ')],
         ),
       ]);
 
-      final pending = Transaction(
-        operations: [InsertText(0, 1, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 2),
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 1, end: 2),
+          schema,
+        ),
+        isNull,
       );
-
-      expect(rule.tryTransform(pending, doc, schema), isNull);
     });
   });
 
-  group('HeadingBackspaceRule', () {
-    test('backspace at start of H3 converts to paragraph', () {
-      final rule = HeadingBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.h3,
-          segments: [const StyledSegment('title')],
-        ),
-      ]);
-
-      final pending = Transaction(operations: [MergeBlocks(1)]);
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final newDoc = result!.apply(doc);
-      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
-      expect(newDoc.allBlocks[1].plainText, 'title');
-    });
-
-    test('backspace at start of H1 converts to paragraph', () {
-      final rule = HeadingBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.h1,
-          segments: [const StyledSegment('title')],
-        ),
-      ]);
-
-      final pending = Transaction(operations: [MergeBlocks(1)]);
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final newDoc = result!.apply(doc);
-      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
-    });
-
-    test('does not fire on paragraph', () {
-      final rule = HeadingBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('below')],
-        ),
-      ]);
-
-      final pending = Transaction(operations: [MergeBlocks(1)]);
-      expect(rule.tryTransform(pending, doc, schema), isNull);
-    });
-
-    test('uses schema.isHeading — fires for custom heading block', () {
-      // Build a custom schema where 'myHeading' has isHeading: true.
-      final customSchema = EditorSchema<String, String, Object>(
-        defaultBlockType: 'para',
-        blocks: {
-          'para': const BlockDef(label: 'P'),
-          'myHeading': const BlockDef(label: 'H', isHeading: true),
-        },
-        inlineStyles: {},
-      );
-
-      final rule = HeadingBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: 'para',
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: 'myHeading',
-          segments: [const StyledSegment('title')],
-        ),
-      ]);
-
-      final pending = Transaction(operations: [MergeBlocks(1)]);
-      final result = rule.tryTransform(pending, doc, customSchema);
-      expect(result, isNotNull);
-      final newDoc = result!.apply(doc);
-      // Should convert to the schema's defaultBlockType ('para').
-      expect(newDoc.allBlocks[1].blockType, 'para');
-      expect(newDoc.allBlocks[1].plainText, 'title');
-    });
-  });
+  // HeadingBackspaceRule group deleted — behavior moved to the BlockDef
+  // `backspaceAtStart` policy (controller-implemented, days 5–7).
 
   group('ListItemRule', () {
     test('- followed by space converts to list item', () {
-      final rule = ListItemRule();
-      final doc = Document([
+      const rule = ListItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('-')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('- ')],
         ),
       ]);
 
-      final pending = Transaction(
-        operations: [InsertText(0, 1, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 2),
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 1, end: 2),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
-      expect(newDoc.blocks[0].blockType, BlockType.listItem);
+      final newDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(newDoc.blocks[0].blockType, ListItemKeys.type);
       expect(newDoc.blocks[0].plainText, '');
     });
   });
 
-  group('EmptyListItemRule', () {
-    test('Enter on empty list item converts to paragraph', () {
-      final rule = EmptyListItemRule();
-      final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.listItem, segments: const []),
-      ]);
+  // EmptyListItemRule group deleted — behavior moved to the BlockDef `split`
+  // policy (controller-implemented, days 5–7).
 
-      final pending = Transaction(
-        operations: [
-          SplitBlock(
-            0,
-            0,
-            defaultBlockType: BlockType.paragraph,
-            isListLikeFn: schema.isListLike,
-          ),
-        ],
-        selectionAfter: const TextSelection.collapsed(offset: 1),
-      );
-
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
-      expect(newDoc.blocks[0].blockType, BlockType.paragraph);
-    });
-
-    test('does not fire on non-empty list item', () {
-      final rule = EmptyListItemRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.listItem,
-          segments: [const StyledSegment('content')],
-        ),
-      ]);
-
-      final pending = Transaction(
-        operations: [
-          SplitBlock(
-            0,
-            7,
-            defaultBlockType: BlockType.paragraph,
-            isListLikeFn: schema.isListLike,
-          ),
-        ],
-        selectionAfter: const TextSelection.collapsed(offset: 8),
-      );
-
-      expect(rule.tryTransform(pending, doc, schema), isNull);
-    });
-  });
-
-  group('ListItemBackspaceRule', () {
-    test('backspace at start of list item converts to paragraph', () {
-      final rule = ListItemBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.listItem,
-          segments: [const StyledSegment('item')],
-        ),
-      ]);
-
-      final pending = Transaction(
-        operations: [MergeBlocks(1)],
-        selectionAfter: const TextSelection.collapsed(offset: 5),
-      );
-
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final newDoc = result!.apply(doc);
-      expect(newDoc.allBlocks.length, 2);
-      expect(newDoc.allBlocks[1].blockType, BlockType.paragraph);
-      expect(newDoc.allBlocks[1].plainText, 'item');
-    });
-
-    test('does not fire on non-list-item merge', () {
-      final rule = ListItemBackspaceRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('below')],
-        ),
-      ]);
-
-      final pending = Transaction(
-        operations: [MergeBlocks(1)],
-        selectionAfter: const TextSelection.collapsed(offset: 5),
-      );
-
-      expect(rule.tryTransform(pending, doc, schema), isNull);
-    });
-  });
+  // ListItemBackspaceRule group deleted — behavior moved to the BlockDef
+  // `backspaceAtStart` policy (controller-implemented, days 5–7).
 
   group('ItalicWrapRule', () {
     test('*text* converts to italic', () {
       final rule = ItalicWrapRule();
-      final doc = Document([
+      // Closing * committed at offset 12 → "hello *world*".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello *world')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello *world*')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 12, '*')],
-        selectionAfter: const TextSelection.collapsed(offset: 13),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 12, end: 13),
+        schema,
       );
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
       expect(resultDoc.allBlocks[0].plainText, 'hello world');
       expect(
         resultDoc.allBlocks[0].segments.any(
-          (s) => s.text == 'world' && s.styles.contains(InlineStyle.italic),
+          (s) => s.text == 'world' && s.styles.contains(InlineStyleKeys.italic),
         ),
         isTrue,
       );
@@ -501,44 +355,54 @@ void main() {
 
     test('does not steal the first closing star from bold syntax', () {
       final rule = ItalicWrapRule();
-      final doc = Document([
+      // User typed the first closing * of would-be bold → "**world*".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('**world')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('**world*')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 7, '*')],
-        selectionAfter: const TextSelection.collapsed(offset: 8),
-      );
 
-      expect(rule.tryTransform(pending, doc, schema), isNull);
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 7, end: 8),
+          schema,
+        ),
+        isNull,
+      );
     });
   });
 
   group('StrikethroughWrapRule', () {
     test('~~text~~ converts to strikethrough', () {
       final rule = StrikethroughWrapRule();
-      final doc = Document([
+      // Closing ~ committed at offset 14 → "hello ~~world~~".
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('hello ~~world~')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello ~~world~~')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 14, '~')],
-        selectionAfter: const TextSelection.collapsed(offset: 15),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 14, end: 15),
+        schema,
       );
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
       expect(resultDoc.allBlocks[0].plainText, 'hello world');
       expect(
         resultDoc.allBlocks[0].segments.any(
           (s) =>
-              s.text == 'world' && s.styles.contains(InlineStyle.strikethrough),
+              s.text == 'world' &&
+              s.styles.contains(InlineStyleKeys.strikethrough),
         ),
         isTrue,
       );
@@ -547,182 +411,148 @@ void main() {
 
   group('NumberedListRule', () {
     test('1. followed by space converts to numbered list', () {
-      final doc = Document([
+      const rule = NumberedListRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('1.')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('1. ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 2, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 3),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 2, end: 3),
+        schema,
       );
-      final rule = NumberedListRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.numberedList);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, NumberedListKeys.type);
       expect(resultDoc.allBlocks[0].plainText, '');
     });
   });
 
   group('TaskItemRule', () {
     test('- [ ] followed by space creates unchecked task', () {
-      final doc = Document([
+      const rule = TaskItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('- [ ]')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('- [ ] ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 5, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 6),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 5, end: 6),
+        schema,
       );
-      final rule = TaskItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, TaskItemKeys.type);
       expect(resultDoc.allBlocks[0].metadata['checked'], false);
       expect(resultDoc.allBlocks[0].plainText, '');
     });
 
     test('- [x] followed by space creates checked task', () {
-      final doc = Document([
+      const rule = TaskItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('- [x]')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('- [x] ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 5, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 6),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 5, end: 6),
+        schema,
       );
-      final rule = TaskItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, TaskItemKeys.type);
       expect(resultDoc.allBlocks[0].metadata['checked'], true);
     });
 
     test('[ ] on a list item converts to task (post-ListItemRule path)', () {
       // After ListItemRule eats "- ", the user is on a listItem typing "[ ] ".
-      final doc = Document([
+      const rule = TaskItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
-          segments: [const StyledSegment('[ ]')],
+          blockType: ListItemKeys.type,
+          segments: [const StyledSegment('[ ] ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 3, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 4),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 3, end: 4),
+        schema,
       );
-      final rule = TaskItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, TaskItemKeys.type);
       expect(resultDoc.allBlocks[0].metadata['checked'], false);
       expect(resultDoc.allBlocks[0].plainText, '');
     });
+
     test('[ ] on paragraph creates unchecked task (no hyphen)', () {
-      final doc = Document([
+      const rule = TaskItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('[ ]')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('[ ] ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 3, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 4),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 3, end: 4),
+        schema,
       );
-      final rule = TaskItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, TaskItemKeys.type);
       expect(resultDoc.allBlocks[0].metadata['checked'], false);
       expect(resultDoc.allBlocks[0].plainText, '');
     });
 
     test('[x] on paragraph creates checked task (no hyphen)', () {
-      final doc = Document([
+      const rule = TaskItemRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('[x]')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('[x] ')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 3, ' ')],
-        selectionAfter: const TextSelection.collapsed(offset: 4),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 3, end: 4),
+        schema,
       );
-      final rule = TaskItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.taskItem);
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(docAfter, outcome!, schema);
+      expect(resultDoc.allBlocks[0].blockType, TaskItemKeys.type);
       expect(resultDoc.allBlocks[0].metadata['checked'], true);
       expect(resultDoc.allBlocks[0].plainText, '');
-    });
-  });
-
-  group('EmptyListItemRule with list-like types', () {
-    test('Enter on empty numbered list converts to paragraph', () {
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.numberedList,
-          segments: [const StyledSegment('')],
-        ),
-      ]);
-      final pending = Transaction(
-        operations: [
-          SplitBlock(
-            0,
-            0,
-            defaultBlockType: BlockType.paragraph,
-            isListLikeFn: schema.isListLike,
-          ),
-        ],
-        selectionAfter: const TextSelection.collapsed(offset: 0),
-      );
-      final rule = EmptyListItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.paragraph);
-    });
-
-    test('Enter on empty task converts to paragraph', () {
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: BlockType.taskItem,
-          segments: [const StyledSegment('')],
-          metadata: {'checked': false},
-        ),
-      ]);
-      final pending = Transaction(
-        operations: [
-          SplitBlock(
-            0,
-            0,
-            defaultBlockType: BlockType.paragraph,
-            isListLikeFn: schema.isListLike,
-          ),
-        ],
-        selectionAfter: const TextSelection.collapsed(offset: 0),
-      );
-      final rule = EmptyListItemRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
     });
   });
 
@@ -730,200 +560,266 @@ void main() {
     test(
       'typing --- converts paragraph to divider with trailing paragraph',
       () {
-        // Doc has "--" typed; user types the third "-".
-        final doc = Document([
+        // The third "-" has been committed → block text is "---".
+        const rule = DividerRule();
+        final docAfter = Document([
           TextBlock(
             id: 'a',
-            blockType: BlockType.paragraph,
-            segments: [const StyledSegment('--')],
+            blockType: ParagraphKeys.type,
+            segments: [const StyledSegment('---')],
           ),
         ]);
-        final pending = Transaction(
-          operations: [InsertText(0, 2, '-')],
-          selectionAfter: const TextSelection.collapsed(offset: 3),
+
+        final outcome = rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 2, end: 3),
+          schema,
         );
-        final rule = DividerRule();
-        final result = rule.tryTransform(pending, doc, schema);
-        expect(result, isNotNull);
-        final resultDoc = result!.apply(doc);
+        expect(outcome, isNotNull);
+
+        final resultDoc = applyOutcome(docAfter, outcome!, schema);
         expect(resultDoc.allBlocks.length, 2);
-        expect(resultDoc.allBlocks[0].blockType, BlockType.divider);
+        expect(resultDoc.allBlocks[0].blockType, DividerKeys.type);
         expect(resultDoc.allBlocks[0].plainText, '');
-        expect(resultDoc.allBlocks[1].blockType, BlockType.paragraph);
+        expect(resultDoc.allBlocks[1].blockType, ParagraphKeys.type);
         expect(resultDoc.allBlocks[1].plainText, '');
+
+        // Caret targets the new trailing block's id at offset 0.
+        expect(
+          outcome.selectionAfter,
+          DocSelection.collapsed(DocPosition(resultDoc.allBlocks[1].id, 0)),
+        );
       },
     );
 
     test('does not fire on non-paragraph blocks', () {
-      // Doc has "--" in an H1; user types "-".
-      final doc = Document([
+      const rule = DividerRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.h1,
-          segments: [const StyledSegment('--')],
+          blockType: HeadingKeys.h1,
+          segments: [const StyledSegment('---')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 2, '-')],
-        selectionAfter: const TextSelection.collapsed(offset: 3),
+
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 2, end: 3),
+          schema,
+        ),
+        isNull,
       );
-      final rule = DividerRule();
-      expect(rule.tryTransform(pending, doc, schema), isNull);
     });
 
     test('does not fire when text is not exactly ---', () {
-      // Doc has "a-" typed; user types "-".
-      final doc = Document([
+      const rule = DividerRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('a-')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('a--')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 2, '-')],
-        selectionAfter: const TextSelection.collapsed(offset: 3),
+
+      expect(
+        rule.tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 2, end: 3),
+          schema,
+        ),
+        isNull,
       );
-      final rule = DividerRule();
-      expect(rule.tryTransform(pending, doc, schema), isNull);
     });
   });
 
-  group('DividerBackspaceRule', () {
-    test('backspace at start of block after divider removes divider', () {
-      final doc = Document([
-        TextBlock(id: 'a', blockType: BlockType.divider),
-        TextBlock(
-          id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('Hello')],
-        ),
-      ]);
-      final pending = Transaction(
-        operations: [MergeBlocks(1)],
-        selectionAfter: const TextSelection.collapsed(offset: 0),
-      );
-      final rule = DividerBackspaceRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final resultDoc = result!.apply(doc);
-      // Divider removed, only the paragraph remains.
-      expect(resultDoc.allBlocks.length, 1);
-      expect(resultDoc.allBlocks[0].blockType, BlockType.paragraph);
-      expect(resultDoc.allBlocks[0].plainText, 'Hello');
-    });
+  // DividerBackspaceRule group deleted — behavior moved to the BlockDef
+  // `voidBackspace` policy.
 
-    test('does not fire when preceding block is not a divider', () {
+  group('CodeBlockEnterRule', () {
+    test('Enter inside a code block inserts a literal newline', () {
+      const rule = CodeBlockEnterRule();
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('first')],
+          blockType: CodeBlockKeys.type,
+          segments: [const StyledSegment('hello')],
+        ),
+      ]);
+
+      final outcome = rule.intercept(
+        const StructuralTrigger.split('a', 5),
+        doc,
+        schema,
+      );
+      expect(outcome, isNotNull);
+
+      final resultDoc = applyOutcome(doc, outcome!, schema);
+      // Still one block — the newline is embedded, not a split.
+      expect(resultDoc.allBlocks.length, 1);
+      expect(resultDoc.allBlocks[0].blockType, CodeBlockKeys.type);
+      expect(resultDoc.allBlocks[0].plainText, 'hello\n');
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('a', 6)),
+      );
+    });
+
+    test('does not intercept Enter on non-code blocks', () {
+      const rule = CodeBlockEnterRule();
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('hello')],
+        ),
+      ]);
+
+      expect(
+        rule.intercept(const StructuralTrigger.split('a', 5), doc, schema),
+        isNull,
+      );
+    });
+
+    test('does not intercept backspace-at-start triggers', () {
+      const rule = CodeBlockEnterRule();
+      final doc = Document([
+        TextBlock(
+          id: 'a',
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('above')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('second')],
+          blockType: CodeBlockKeys.type,
+          segments: [const StyledSegment('code')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [MergeBlocks(1)],
-        selectionAfter: const TextSelection.collapsed(offset: 5),
+
+      expect(
+        rule.intercept(
+          const StructuralTrigger.backspaceAtStart('b'),
+          doc,
+          schema,
+        ),
+        isNull,
       );
-      final rule = DividerBackspaceRule();
-      expect(rule.tryTransform(pending, doc, schema), isNull);
     });
   });
 
   group('RemoveBlock', () {
     test('removes a block from document', () {
+      final ctx = schema.editContext();
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('first')],
         ),
-        TextBlock(id: 'b', blockType: BlockType.divider),
+        TextBlock(id: 'b', blockType: DividerKeys.type),
         TextBlock(
           id: 'c',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('third')],
         ),
       ]);
-      final result = RemoveBlock(1).apply(doc);
-      expect(result.allBlocks.length, 2);
+      final result = RemoveBlock('b').apply(doc, ctx);
+      expect(result, isNotNull);
+      expect(result!.allBlocks.length, 2);
       expect(result.allBlocks[0].plainText, 'first');
       expect(result.allBlocks[1].plainText, 'third');
     });
 
-    test('does not remove the last block', () {
-      final doc = Document([TextBlock(id: 'a', blockType: BlockType.divider)]);
-      final result = RemoveBlock(0).apply(doc);
-      expect(result.allBlocks.length, 1);
+    test('removing the last block swaps in an empty default paragraph', () {
+      final ctx = schema.editContext();
+      final doc = Document([TextBlock(id: 'a', blockType: DividerKeys.type)]);
+      final result = RemoveBlock('a').apply(doc, ctx);
+      expect(result, isNotNull);
+      expect(result!.allBlocks.length, 1);
+      expect(result.allBlocks[0].blockType, ParagraphKeys.type);
+      expect(result.allBlocks[0].plainText, '');
     });
   });
 
   group('LinkWrapRule', () {
     test('[text](url) converts to link with URL attribute', () {
-      // Doc has "[Google](https://google.com" typed; user types ")".
-      final doc = Document([
+      // Closing ")" committed at offset 27 → "[Google](https://google.com)".
+      final rule = LinkWrapRule();
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('[Google](https://google.com')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('[Google](https://google.com)')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 27, ')')],
-        selectionAfter: const TextSelection.collapsed(offset: 28),
+
+      final outcome = rule.tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 27, end: 28),
+        schema,
       );
-      final rule = LinkWrapRule();
-      final result = rule.tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final applied = result!.apply(doc);
+      expect(outcome, isNotNull);
+
+      final applied = applyOutcome(docAfter, outcome!, schema);
       final seg = applied.allBlocks[0].segments[0];
       expect(seg.text, 'Google');
-      expect(seg.styles, {InlineEntityType.link});
+      expect(seg.styles, {InlineEntityKeys.link});
       expect(seg.attributes['url'], 'https://google.com');
+      expect(
+        outcome.selectionAfter,
+        DocSelection.collapsed(const DocPosition('a', 6)),
+      );
     });
 
     test('does not fire without closing paren', () {
-      final doc = Document([
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('[Google](https://google.com')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('[Google](https://google.comx')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 27, 'x')],
-        selectionAfter: const TextSelection.collapsed(offset: 28),
+
+      expect(
+        LinkWrapRule().tryTransform(
+          docAfter,
+          'a',
+          const TextRange(start: 27, end: 28),
+          schema,
+        ),
+        isNull,
       );
-      expect(LinkWrapRule().tryTransform(pending, doc, schema), isNull);
     });
 
     test('[text](url) mid-paragraph works', () {
-      final doc = Document([
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('Visit [Google](https://g.co')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('Visit [Google](https://g.co)')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 27, ')')],
-        selectionAfter: const TextSelection.collapsed(offset: 28),
+
+      final outcome = LinkWrapRule().tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 27, end: 28),
+        schema,
       );
-      final result = LinkWrapRule().tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-      final applied = result!.apply(doc);
+      expect(outcome, isNotNull);
+
+      final applied = applyOutcome(docAfter, outcome!, schema);
       final segs = applied.allBlocks[0].segments;
       expect(segs.any((s) => s.text == 'Visit '), isTrue);
       expect(
         segs.any(
           (s) =>
               s.text == 'Google' &&
-              s.styles.contains(InlineEntityType.link) &&
+              s.styles.contains(InlineEntityKeys.link) &&
               s.attributes['url'] == 'https://g.co',
         ),
         isTrue,
@@ -931,25 +827,27 @@ void main() {
     });
 
     test('fires when the inserted chunk ends with closing paren', () {
-      final doc = Document([
+      // "com)" was inserted as a chunk at offset 22, completing the pattern.
+      final docAfter = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
-          segments: [const StyledSegment('[link](https://google.')],
+          blockType: ParagraphKeys.type,
+          segments: [const StyledSegment('[link](https://google.com)')],
         ),
       ]);
-      final pending = Transaction(
-        operations: [InsertText(0, 22, 'com)')],
-        selectionAfter: const TextSelection.collapsed(offset: 26),
+
+      final outcome = LinkWrapRule().tryTransform(
+        docAfter,
+        'a',
+        const TextRange(start: 22, end: 26),
+        schema,
       );
+      expect(outcome, isNotNull);
 
-      final result = LinkWrapRule().tryTransform(pending, doc, schema);
-      expect(result, isNotNull);
-
-      final applied = result!.apply(doc);
+      final applied = applyOutcome(docAfter, outcome!, schema);
       final seg = applied.allBlocks[0].segments[0];
       expect(seg.text, 'link');
-      expect(seg.styles, {InlineEntityType.link});
+      expect(seg.styles, {InlineEntityKeys.link});
       expect(seg.attributes['url'], 'https://google.com');
     });
   });

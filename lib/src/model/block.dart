@@ -4,8 +4,8 @@
 /// Adjacent segments with identical styles AND attributes should be merged.
 ///
 /// [styles] holds on/off inline keys (bold, italic, link entity, etc.).
-/// Keys are opaque [Object]s — use the built-in [InlineStyle] enum,
-/// `InlineEntityType`, or your own enum/class.
+/// Keys are opaque [Object]s — use the built-in [InlineStyleKeys] /
+/// [InlineEntityKeys] string constants, or your own keys.
 /// [attributes] holds per-segment data for inline entities
 /// (e.g. `{'url': '...'}` for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
@@ -58,38 +58,82 @@ class StyledSegment {
   }
 }
 
-/// Built-in block type keys. Use these with the standard schema, or define
-/// your own enum/class for custom block types.
-enum BlockType {
-  paragraph,
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6,
-  listItem,
-  numberedList,
-  taskItem,
-  divider,
-  image,
-  blockQuote,
-  codeBlock,
+// -- Built-in type keys --
+//
+// Block types, inline styles, and inline entities are addressed by string
+// keys. These holders exist for typo-safety; custom block types register
+// their own string keys in the schema.
+
+abstract final class ParagraphKeys {
+  static const type = 'paragraph';
 }
 
-/// Built-in formatting-style keys. Use these with the standard schema, or
-/// define your own enum/class for custom formatting styles.
-enum InlineStyle { bold, italic, strikethrough, code }
+abstract final class HeadingKeys {
+  static const h1 = 'h1';
+  static const h2 = 'h2';
+  static const h3 = 'h3';
+  static const h4 = 'h4';
+  static const h5 = 'h5';
+  static const h6 = 'h6';
 
-/// Standard metadata key for task item checked state.
-const kCheckedKey = 'checked';
+  /// All heading keys, in level order.
+  static const all = [h1, h2, h3, h4, h5, h6];
+}
+
+abstract final class ListItemKeys {
+  static const type = 'listItem';
+}
+
+abstract final class NumberedListKeys {
+  static const type = 'numberedList';
+}
+
+abstract final class TaskItemKeys {
+  static const type = 'taskItem';
+  static const checked = 'checked';
+}
+
+abstract final class BlockQuoteKeys {
+  static const type = 'blockQuote';
+}
+
+abstract final class CodeBlockKeys {
+  static const type = 'codeBlock';
+  static const language = 'language';
+}
+
+abstract final class DividerKeys {
+  static const type = 'divider';
+}
+
+abstract final class ImageKeys {
+  static const type = 'image';
+
+  /// Metadata key holding the image source URL (v2 markdown-codec shape).
+  static const url = 'url';
+}
+
+abstract final class InlineStyleKeys {
+  static const bold = 'bold';
+  static const italic = 'italic';
+  static const strikethrough = 'strikethrough';
+  static const code = 'code';
+}
+
+abstract final class InlineEntityKeys {
+  static const link = 'link';
+
+  /// Attribute key holding a link's destination URL.
+  static const linkUrl = 'url';
+}
 
 /// A single block in the document.
 ///
 /// Immutable. Use [copyWith] to produce modified versions.
 ///
-/// [B] is the block type key — typically an enum like [BlockType].
-class TextBlock<B> {
+/// [blockType] is a string key registered in the schema (see [ParagraphKeys]
+/// and friends for the built-in keys).
+class TextBlock {
   TextBlock({
     required this.id,
     required this.blockType,
@@ -99,12 +143,12 @@ class TextBlock<B> {
   });
 
   final String id;
-  final B blockType;
+  final String blockType;
   final List<StyledSegment> segments;
-  final List<TextBlock<B>> children;
+  final List<TextBlock> children;
 
   /// Arbitrary key-value metadata for the block.
-  /// Used for task checked state (`'checked': true/false`), etc.
+  /// Used for task checked state (`TaskItemKeys.checked`), image source, etc.
   final Map<String, dynamic> metadata;
 
   /// Plain text content of this block (no formatting).
@@ -113,11 +157,11 @@ class TextBlock<B> {
   /// Total character length of this block's text.
   int get length => plainText.length;
 
-  TextBlock<B> copyWith({
+  TextBlock copyWith({
     String? id,
-    B? blockType,
+    String? blockType,
     List<StyledSegment>? segments,
-    List<TextBlock<B>>? children,
+    List<TextBlock>? children,
     Map<String, dynamic>? metadata,
   }) {
     return TextBlock(

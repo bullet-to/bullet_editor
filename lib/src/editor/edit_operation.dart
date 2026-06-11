@@ -1,34 +1,114 @@
 import '../model/block.dart';
 import '../model/block_policies.dart';
+import '../model/doc_selection.dart';
 import '../model/document.dart';
+
+/// Schema-dependent behavior supplied by the controller at apply time.
+///
+/// Ops are pure caller data (ids, offsets, text, keys, blocks) and carry no
+/// configuration — a half-configured op is unrepresentable. Everything an op
+/// needs from the schema arrives through this context.
+class EditContext {
+  const EditContext({
+    required this.defaultBlockType,
+    required this.splitPolicyOf,
+    required this.backspaceAtStartOf,
+    required this.newBlockMetadataOf,
+    required this.policies,
+    required this.isVoid,
+  });
+
+  /// The block type for new blocks (schema.defaultBlockType).
+  final String defaultBlockType;
+
+  /// What Enter does for a block type.
+  final SplitPolicy Function(String blockType) splitPolicyOf;
+
+  /// What backspace at offset 0 does for a text block type.
+  final BackspaceAtStartPolicy Function(String blockType) backspaceAtStartOf;
+
+  /// Metadata for the new block created by splitting a block of this type
+  /// (e.g. taskItem → `{TaskItemKeys.checked: false}`). Null = empty map.
+  final Map<String, dynamic> Function(TextBlock splitBlock)? Function(
+    String blockType,
+  )
+  newBlockMetadataOf;
+
+  /// Structural policies by block type.
+  final Map<String, BlockPolicies> policies;
+
+  /// Whether a block type is void (no editable text).
+  final bool Function(String blockType) isVoid;
+
+  /// The shared indent gate (G13) — used by BOTH the controller's
+  /// all-or-nothing group gate and `IndentBlock.apply`, so gate-pass implies
+  /// op-applies by construction.
+  ///
+  /// [member] is the block being indented, [resolvedTarget] its would-be
+  /// parent (the previous sibling), [newDepth] the depth it would land at.
+  bool canIndent(TextBlock member, TextBlock resolvedTarget, int newDepth) {
+    final memberPolicy = policies[member.blockType] ?? const BlockPolicies();
+    if (!memberPolicy.canBeChild) return false;
+    final targetPolicy =
+        policies[resolvedTarget.blockType] ?? const BlockPolicies();
+    if (!targetPolicy.canHaveChildren) return false;
+    final maxDepth = memberPolicy.maxDepth;
+    if (maxDepth != null && newDepth > maxDepth) return false;
+    return true;
+  }
+}
+
+/// The result of applying a batch of operations.
+sealed class EditResult {
+  const EditResult();
+}
+
+/// Every op applied; the batch was committed.
+class EditApplied extends EditResult {
+  const EditApplied();
+}
+
+/// An op failed to apply (gone id, out-of-bounds offset, or failed gate).
+/// The whole batch was rejected pre-commit; the document is unchanged.
+class EditRejected extends EditResult {
+  const EditRejected(this.rejectedOp);
+
+  final EditOperation rejectedOp;
+
+  @override
+  String toString() => 'EditRejected($rejectedOp)';
+}
 
 /// A single atomic edit to the document.
 ///
-/// Each operation knows how to [apply] itself to a Document, returning
-/// a new Document. The controller composes these into Transactions.
+/// Ops address blocks by [String] id, never by flat index — each op resolves
+/// its own id against the document it receives (`doc.idToFlatIndex`, O(1)) at
+/// apply time, never earlier, so an op mid-batch always sees the document the
+/// previous op produced (resolve-at-apply).
 ///
-/// Operations are non-generic classes — they store block type values as
-/// [Object]. The [apply] method is generic so it preserves the caller's
-/// `Document<B>` type through the operation chain.
+/// [apply] returns the new document, or **null to reject**: a gone id, an
+/// out-of-bounds offset, or a failed structural gate. The controller's batch
+/// loop aborts the whole batch pre-commit on the first null — never a partial
+/// document, never a silent wrong block.
 sealed class EditOperation {
-  Document<B> apply<B>(Document<B> doc);
+  Document? apply(Document doc, EditContext ctx);
 }
 
-/// Insert [text] into the block at [blockIndex] at [offset].
+/// Insert [text] into the block [blockId] at [offset].
 ///
 /// If [styles] is provided, the inserted text gets those styles explicitly
 /// (from the controller's active styles). If null, inherits from the
 /// segment at the insertion point.
 class InsertText extends EditOperation {
   InsertText(
-    this.blockIndex,
+    this.blockId,
     this.offset,
     this.text, {
     this.styles,
     this.attributes,
   });
 
-  final int blockIndex;
+  final String blockId;
   final int offset;
   final String text;
   final Set<Object>? styles;
@@ -37,8 +117,15 @@ class InsertText extends EditOperation {
   final Map<String, dynamic>? attributes;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final block = doc.allBlocks[blockIndex];
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final block = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(block.blockType),
+      'Text ops must not address void blocks ($blockId is ${block.blockType})',
+    );
+    if (offset < 0 || offset > block.length) return null;
     final newSegments = _spliceInsert(
       block.segments,
       offset,
@@ -47,49 +134,54 @@ class InsertText extends EditOperation {
       attributes: attributes,
     );
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
-    return doc.replaceBlock(blockIndex, newBlock);
+    return doc.replaceBlock(index, newBlock);
   }
 
   @override
-  String toString() =>
-      'InsertText(block: $blockIndex, offset: $offset, "$text")';
+  String toString() => 'InsertText($blockId, offset: $offset, "$text")';
 }
 
-/// Delete [length] characters from block at [blockIndex] starting at [offset].
+/// Delete [length] characters from block [blockId] starting at [offset].
 class DeleteText extends EditOperation {
-  DeleteText(this.blockIndex, this.offset, this.length);
+  DeleteText(this.blockId, this.offset, this.length);
 
-  final int blockIndex;
+  final String blockId;
   final int offset;
   final int length;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final block = doc.allBlocks[blockIndex];
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final block = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(block.blockType),
+      'Text ops must not address void blocks ($blockId is ${block.blockType})',
+    );
+    if (offset < 0 || length < 0 || offset + length > block.length) return null;
     final newSegments = _spliceDelete(block.segments, offset, length);
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
-    return doc.replaceBlock(blockIndex, newBlock);
+    return doc.replaceBlock(index, newBlock);
   }
 
   @override
-  String toString() =>
-      'DeleteText(block: $blockIndex, offset: $offset, len: $length)';
+  String toString() => 'DeleteText($blockId, offset: $offset, len: $length)';
 }
 
-/// Toggle [style] on the range [start]..[end] in block at [blockIndex].
+/// Toggle [style] on the range [start]..[end] in block [blockId].
 ///
 /// If the entire range already has the style, remove it.
 /// Otherwise, apply it to the entire range.
 class ToggleStyle extends EditOperation {
   ToggleStyle(
-    this.blockIndex,
+    this.blockId,
     this.start,
     this.end,
     this.style, {
     this.attributes,
   });
 
-  final int blockIndex;
+  final String blockId;
   final int start;
   final int end;
   final Object style;
@@ -99,8 +191,15 @@ class ToggleStyle extends EditOperation {
   final Map<String, dynamic>? attributes;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final block = doc.allBlocks[blockIndex];
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final block = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(block.blockType),
+      'Text ops must not address void blocks ($blockId is ${block.blockType})',
+    );
+    if (start < 0 || end < start || end > block.length) return null;
     final segments = block.segments;
 
     // Expand segments into per-character style sets and attribute maps.
@@ -146,55 +245,54 @@ class ToggleStyle extends EditOperation {
     }
 
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
-    return doc.replaceBlock(blockIndex, newBlock);
+    return doc.replaceBlock(index, newBlock);
   }
 
   @override
-  String toString() =>
-      'ToggleStyle(block: $blockIndex, $start..$end, $style)';
+  String toString() => 'ToggleStyle($blockId, $start..$end, $style)';
 }
 
-/// Split block at [blockIndex] at [offset], creating a new block after it.
+/// Split block [blockId] at [offset], creating a new block after it.
 ///
-/// This is what happens when the user presses Enter.
-/// - List items (isListLike): new block is another list item (continue the list).
-/// - Everything else: new block uses [defaultBlockType] (Notion-style).
-///
-/// [defaultBlockType] and [isListLikeFn] are provided by the controller from
-/// the schema, keeping the operation itself decoupled from specific enums.
+/// This is what happens when the user presses Enter. The new block's type
+/// comes from `ctx.splitPolicyOf(type).newBlockType` (inherit for list
+/// items, the schema default otherwise) and its metadata from the type's
+/// `newBlockMetadata` policy (taskItem → unchecked). The policy's
+/// `onSplitEmpty` half is the controller's concern, consulted before an op
+/// is chosen — this op always splits.
 class SplitBlock extends EditOperation {
-  SplitBlock(this.blockIndex, this.offset,
-      {this.defaultBlockType, this.isListLikeFn});
+  SplitBlock(this.blockId, this.offset);
 
-  final int blockIndex;
+  final String blockId;
   final int offset;
 
-  /// The default block type for new blocks. Provided by the controller from
-  /// `schema.defaultBlockType`. Stored as Object, cast to B in [apply].
-  final Object? defaultBlockType;
-
-  /// When provided, determines whether the current block type continues on
-  /// Enter. When null, defaults to using the default block type.
-  final bool Function(Object blockType)? isListLikeFn;
-
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final block = doc.allBlocks[blockIndex];
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final block = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(block.blockType),
+      'SplitBlock must not address void blocks ($blockId is ${block.blockType})',
+    );
+    if (offset < 0 || offset > block.length) return null;
 
-    final listLike = isListLikeFn?.call(block.blockType as Object) ?? false;
-    final B newBlockType =
-        listLike ? block.blockType : (defaultBlockType as B? ?? block.blockType);
+    final newBlockType =
+        ctx.splitPolicyOf(block.blockType).newBlockType ==
+            SplitNewBlockType.inherit
+        ? block.blockType
+        : ctx.defaultBlockType;
 
     // Split at start of a non-empty block: insert an empty line BEFORE the
     // current block. The current block keeps its type, content, and children.
     // For empty blocks (e.g. divider rule creating a trailing paragraph),
     // fall through to the normal split which inserts after.
     if (offset == 0 && block.plainText.isNotEmpty) {
-      final emptyBlock = TextBlock<B>(
+      final emptyBlock = TextBlock(
         id: generateBlockId(),
         blockType: newBlockType,
       );
-      return doc.insertBeforeFlatIndex(blockIndex, emptyBlock);
+      return doc.insertBeforeFlatIndex(index, emptyBlock);
     }
 
     final (beforeSegments, afterSegments) = splitSegmentsAt(
@@ -202,15 +300,14 @@ class SplitBlock extends EditOperation {
       offset,
     );
 
-    // For tasks, new block starts unchecked.
-    final newMetadata = block.blockType == BlockType.taskItem
-        ? <String, dynamic>{kCheckedKey: false}
-        : <String, dynamic>{};
+    final newMetadata =
+        ctx.newBlockMetadataOf(block.blockType)?.call(block) ??
+        const <String, dynamic>{};
 
     final updatedBlock = block.copyWith(
       segments: mergeSegments(beforeSegments),
     );
-    final newBlock = TextBlock<B>(
+    final newBlock = TextBlock(
       id: generateBlockId(),
       blockType: newBlockType,
       segments: mergeSegments(afterSegments),
@@ -218,30 +315,37 @@ class SplitBlock extends EditOperation {
     );
 
     // Insert the new block as a sibling after the split block in the tree.
-    var result = doc.replaceBlock(blockIndex, updatedBlock);
-    result = result.insertAfterFlatIndex(blockIndex, newBlock);
+    var result = doc.replaceBlock(index, updatedBlock);
+    result = result.insertAfterFlatIndex(index, newBlock);
     return result;
   }
 
   @override
-  String toString() => 'SplitBlock(block: $blockIndex, offset: $offset)';
+  String toString() => 'SplitBlock($blockId, offset: $offset)';
 }
 
-/// Merge block at [secondBlockIndex] into the block before it.
+/// Merge block [blockId] into the block before it (in flat document order).
 ///
-/// This is what happens when the user presses Backspace at the start of a block.
+/// This is what happens when the user presses Backspace at the start of a
+/// block whose `backspaceAtStart` policy is `merge`. The merge target is
+/// resolved internally from the document at apply time.
 class MergeBlocks extends EditOperation {
-  MergeBlocks(this.secondBlockIndex);
+  MergeBlocks(this.blockId);
 
-  final int secondBlockIndex;
+  final String blockId;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final flat = doc.allBlocks;
-    if (secondBlockIndex <= 0 || secondBlockIndex >= flat.length) return doc;
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    if (index == 0) return null; // Nothing before the first block.
 
-    final first = flat[secondBlockIndex - 1];
-    final second = flat[secondBlockIndex];
+    final first = doc.allBlocks[index - 1];
+    final second = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(first.blockType) && !ctx.isVoid(second.blockType),
+      'MergeBlocks must not involve void blocks (handle via voidBackspace)',
+    );
 
     final mergedSegments = mergeSegments([
       ...first.segments,
@@ -250,114 +354,132 @@ class MergeBlocks extends EditOperation {
     // If the first block is empty, adopt the second block's type so that
     // forward-delete on an empty paragraph doesn't strip the heading/list
     // type of the block below.
-    final mergedType =
-        first.plainText.isEmpty ? second.blockType : first.blockType;
+    final mergedType = first.plainText.isEmpty
+        ? second.blockType
+        : first.blockType;
     final mergedBlock = first.copyWith(
       blockType: mergedType,
       segments: mergedSegments,
     );
 
-    var result = doc.replaceBlock(secondBlockIndex - 1, mergedBlock);
+    var result = doc.replaceBlock(index - 1, mergedBlock);
     // Promote the second block's children before removing it, so they
     // become siblings at the level where the second block was.
-    result = result.removeBlockPromoteChildren(secondBlockIndex);
+    result = result.removeBlockPromoteChildren(index);
     return result;
   }
 
   @override
-  String toString() => 'MergeBlocks(second: $secondBlockIndex)';
+  String toString() => 'MergeBlocks($blockId)';
 }
 
-/// Change the block type of the block at [blockIndex].
+/// Change the block type of block [blockId] to [newType].
 class ChangeBlockType extends EditOperation {
-  ChangeBlockType(this.blockIndex, this.newType, {required this.policies});
+  ChangeBlockType(this.blockId, this.newType);
 
-  final int blockIndex;
-  final Object newType;
-
-  /// Policies map from the schema. Enforces structural rules (e.g. headings
-  /// can't be children, paragraphs can't have children → auto-outdent).
-  final Map<Object, BlockPolicies> policies;
+  final String blockId;
+  final String newType;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+
     // Policy: if the new type can't be a child and the block is nested, reject.
-    final newPolicy = policies[newType];
-    if (newPolicy != null &&
-        !newPolicy.canBeChild &&
-        doc.depthOf(blockIndex) > 0) {
-      return doc;
+    final newPolicy = ctx.policies[newType];
+    if (newPolicy != null && !newPolicy.canBeChild && doc.depthOf(index) > 0) {
+      return null;
     }
 
-    final block = doc.allBlocks[blockIndex];
+    final block = doc.allBlocks[index];
     if (block.blockType == newType) return doc;
 
     var result = doc;
 
     // If the new type can't have children, outdent existing children first.
-    if (newPolicy != null && !newPolicy.canHaveChildren && block.children.isNotEmpty) {
-      // Outdent children in reverse order so flat indices stay valid.
+    if (newPolicy != null &&
+        !newPolicy.canHaveChildren &&
+        block.children.isNotEmpty) {
+      // Outdent children in reverse order so earlier outdents don't reshape
+      // the subtree under later ones.
       for (var i = block.children.length; i > 0; i--) {
-        final childFlatIndex = result.indexOfBlock(block.children[i - 1].id);
-        if (childFlatIndex >= 0) {
-          result = OutdentBlock(childFlatIndex).apply(result);
-        }
+        final next = OutdentBlock(block.children[i - 1].id).apply(result, ctx);
+        if (next == null) return null;
+        result = next;
       }
     }
 
-    // Re-fetch the block after potential outdenting (index may have shifted).
-    final updatedIndex = result.indexOfBlock(block.id);
-    if (updatedIndex < 0) return doc; // Safety check.
+    // Re-resolve the block after potential outdenting.
+    final updatedIndex = result.idToFlatIndex[block.id];
+    if (updatedIndex == null) return null;
     final updatedBlock = result.allBlocks[updatedIndex];
 
     // Clear metadata when changing type — stale metadata from the old type
     // (e.g. task 'checked' state) shouldn't carry over.
     return result.replaceBlock(
       updatedIndex,
-      updatedBlock.copyWith(blockType: newType as B, metadata: const {}),
+      updatedBlock.copyWith(blockType: newType, metadata: const {}),
     );
   }
 
   @override
-  String toString() => 'ChangeBlockType(block: $blockIndex, $newType)';
+  String toString() => 'ChangeBlockType($blockId, $newType)';
 }
 
 /// Delete a range of text that may span multiple blocks.
 ///
-/// If the range is within a single block, behaves like [DeleteText].
-/// If cross-block: truncates the start block, removes middle blocks entirely,
-/// truncates the end block, and merges the remaining end text into the start block.
+/// Endpoints are document positions; their order is resolved internally
+/// against the document at apply time. If the range is within a single
+/// block, behaves like [DeleteText]. If cross-block: truncates the start
+/// block, removes middle blocks entirely, truncates the end block, and
+/// merges the remaining end text into the start block.
+///
+/// Void endpoints are forbidden — the controller's range-op builder snaps
+/// void endpoints (remove-whole via [RemoveBlock], no text merge) before
+/// emitting this op.
 class DeleteRange extends EditOperation {
-  DeleteRange(
-    this.startBlockIndex,
-    this.startOffset,
-    this.endBlockIndex,
-    this.endOffset,
-  );
+  DeleteRange(this.start, this.end);
 
-  final int startBlockIndex;
-  final int startOffset;
-  final int endBlockIndex;
-  final int endOffset;
+  final DocPosition start;
+  final DocPosition end;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
+  Document? apply(Document doc, EditContext ctx) {
+    final aIndex = doc.idToFlatIndex[start.blockId];
+    final bIndex = doc.idToFlatIndex[end.blockId];
+    if (aIndex == null || bIndex == null) return null;
+
+    // Resolve document order internally.
+    final aFirst =
+        aIndex < bIndex || (aIndex == bIndex && start.offset <= end.offset);
+    final (startIndex, startOffset) = aFirst
+        ? (aIndex, start.offset)
+        : (bIndex, end.offset);
+    final (endIndex, endOffset) = aFirst
+        ? (bIndex, end.offset)
+        : (aIndex, start.offset);
+
     final flat = doc.allBlocks;
-    if (startBlockIndex >= flat.length || endBlockIndex >= flat.length) {
-      return doc;
-    }
+    final startBlock = flat[startIndex];
+    final endBlock = flat[endIndex];
+    assert(
+      !ctx.isVoid(startBlock.blockType) && !ctx.isVoid(endBlock.blockType),
+      'DeleteRange endpoints must be text blocks — the range-op builder '
+      'snaps void endpoints before emitting (architecture §void-endpoint '
+      'normalization)',
+    );
+    if (startOffset < 0 || startOffset > startBlock.length) return null;
+    if (endOffset < 0 || endOffset > endBlock.length) return null;
 
     // Same block — just delete within it.
-    if (startBlockIndex == endBlockIndex) {
+    if (startIndex == endIndex) {
       final length = endOffset - startOffset;
-      if (length <= 0) return doc;
-      return DeleteText(startBlockIndex, startOffset, length).apply(doc);
+      if (length < 0) return null;
+      if (length == 0) return doc;
+      return DeleteText(startBlock.id, startOffset, length).apply(doc, ctx);
     }
 
     // Cross-block delete.
-    final startBlock = flat[startBlockIndex];
-    final endBlock = flat[endBlockIndex];
-
     // 1. Truncate start block: keep text before startOffset.
     final (startSegs, _) = splitSegmentsAt(startBlock.segments, startOffset);
 
@@ -368,12 +490,13 @@ class DeleteRange extends EditOperation {
     final mergedSegments = mergeSegments([...startSegs, ...endSegs]);
     final mergedBlock = startBlock.copyWith(segments: mergedSegments);
 
-    // 4. Apply: replace start block, then remove end block and all middle blocks.
-    //    Use removeBlockPromoteChildren so that children of deleted blocks
-    //    (that were outside the selection range) are promoted instead of lost.
-    //    Remove from high index to low to avoid index shifting.
-    var result = doc.replaceBlock(startBlockIndex, mergedBlock);
-    for (var i = endBlockIndex; i > startBlockIndex; i--) {
+    // 4. Apply: replace start block, then remove end block and all middle
+    //    blocks. Use removeBlockPromoteChildren so that children of deleted
+    //    blocks (that were outside the selection range) are promoted instead
+    //    of lost. Remove from high index to low so earlier removals don't
+    //    shift the positions of the blocks still to be removed.
+    var result = doc.replaceBlock(startIndex, mergedBlock);
+    for (var i = endIndex; i > startIndex; i--) {
       if (i < result.allBlocks.length) {
         result = result.removeBlockPromoteChildren(i);
       }
@@ -383,242 +506,274 @@ class DeleteRange extends EditOperation {
   }
 
   @override
-  String toString() =>
-      'DeleteRange(start: $startBlockIndex:$startOffset, end: $endBlockIndex:$endOffset)';
+  String toString() => 'DeleteRange($start → $end)';
 }
 
-/// Remove a block entirely from the document.
+/// Remove a block (and its subtree) entirely from the document.
 ///
-/// Used for deleting void blocks (e.g. divider) where merging makes no sense.
+/// Used for deleting void blocks (e.g. divider, image) where merging makes
+/// no sense. Removing the last remaining block swaps in a single empty
+/// default-type paragraph (G9 — the "document never empty" invariant holds,
+/// and select-all + delete on an all-void document yields one empty
+/// paragraph).
 class RemoveBlock extends EditOperation {
-  RemoveBlock(this.flatIndex);
+  RemoveBlock(this.blockId);
 
-  final int flatIndex;
+  final String blockId;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final flat = doc.allBlocks;
-    if (flatIndex < 0 || flatIndex >= flat.length) return doc;
-    // Don't remove the last block — always keep at least one.
-    if (flat.length <= 1) return doc;
-    return doc.removeBlock(flatIndex);
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final result = doc.removeBlock(index);
+    if (result.blocks.isEmpty) {
+      return Document.empty(ctx.defaultBlockType);
+    }
+    return result;
   }
 
   @override
-  String toString() => 'RemoveBlock(flat: $flatIndex)';
+  String toString() => 'RemoveBlock($blockId)';
 }
 
-/// Paste one or more blocks at [blockIndex]:[offset] in the document.
+/// Insert [blocks] as siblings after block [afterBlockId], in order.
+///
+/// Insertion is id-chained: each block is placed after the previously
+/// inserted block's id, resolved against the evolving document.
+class InsertBlocks extends EditOperation {
+  InsertBlocks(this.afterBlockId, this.blocks);
+
+  final String afterBlockId;
+  final List<TextBlock> blocks;
+
+  @override
+  Document? apply(Document doc, EditContext ctx) {
+    if (blocks.isEmpty) return doc;
+    var result = doc;
+    var anchorId = afterBlockId;
+    for (final block in blocks) {
+      final anchorIndex = result.idToFlatIndex[anchorId];
+      if (anchorIndex == null) return null;
+      result = result.insertAfterFlatIndex(anchorIndex, block);
+      anchorId = block.id;
+    }
+    return result;
+  }
+
+  @override
+  String toString() =>
+      'InsertBlocks(after: $afterBlockId, ${blocks.length} blocks)';
+}
+
+/// Paste one or more blocks at [blockId]:[offset].
 ///
 /// Single-block paste: merges the pasted block's segments into the target
 /// block at the given offset, preserving styles and attributes.
 ///
 /// Multi-block paste: splits the target block at the offset, merges the
-/// first pasted block into the first half, inserts middle blocks as siblings,
-/// and merges the last pasted block with the second half.
+/// first pasted block into the first half, inserts middle blocks as
+/// id-chained siblings at the target's depth, and merges the last pasted
+/// block with the second half.
+///
+/// Void edges are never merged (architecture §PasteBlocks): a void
+/// first/last pasted block is inserted whole, metadata preserved. The last
+/// pasted block keeps its id through the tail merge, so the caller can place
+/// the post-paste caret by an id it already holds.
 class PasteBlocks extends EditOperation {
-  PasteBlocks(this.blockIndex, this.offset, this.pastedBlocks);
+  PasteBlocks(this.blockId, this.offset, this.blocks);
 
-  final int blockIndex;
+  final String blockId;
   final int offset;
-  final List<TextBlock> pastedBlocks;
+  final List<TextBlock> blocks;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    if (pastedBlocks.isEmpty) return doc;
-    final flat = doc.allBlocks;
-    if (blockIndex >= flat.length) return doc;
+  Document? apply(Document doc, EditContext ctx) {
+    if (blocks.isEmpty) return doc;
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final target = doc.allBlocks[index];
+    assert(
+      !ctx.isVoid(target.blockType),
+      'PasteBlocks must not target void blocks ($blockId is ${target.blockType})',
+    );
+    if (offset < 0 || offset > target.length) return null;
 
-    final target = flat[blockIndex];
-
-    if (pastedBlocks.length == 1) {
-      return _applySingleBlock(doc, target);
+    if (blocks.length == 1 && !ctx.isVoid(blocks.first.blockType)) {
+      return _applySingleBlock(doc, index, target);
     }
 
-    return _applyMultiBlock(doc, target);
+    return _applyMultiBlock(doc, ctx, target);
   }
 
-  Document<B> _applySingleBlock<B>(Document<B> doc, TextBlock<B> target) {
-    final pasted = pastedBlocks[0];
+  Document _applySingleBlock(Document doc, int index, TextBlock target) {
+    final pasted = blocks[0];
     final (before, after) = splitSegmentsAt(target.segments, offset);
     final merged = mergeSegments([...before, ...pasted.segments, ...after]);
-    // If pasting at offset 0 and the target is empty (or all content comes
-    // from the pasted block), adopt the pasted block's type so that pasting
-    // "- item" creates a list item, not a paragraph with "item" text.
+    // If pasting at offset 0 and the target is empty, adopt the pasted
+    // block's type so that pasting "- item" creates a list item, not a
+    // paragraph with "item" text.
     final useType = offset == 0 && target.plainText.isEmpty
-        ? pasted.blockType as B
+        ? pasted.blockType
         : target.blockType;
     return doc.replaceBlock(
-      blockIndex,
+      index,
       target.copyWith(blockType: useType, segments: merged),
     );
   }
 
-  Document<B> _applyMultiBlock<B>(Document<B> doc, TextBlock<B> target) {
+  Document? _applyMultiBlock(Document doc, EditContext ctx, TextBlock target) {
     // 1. Split target into head (before offset) and tail (after offset).
     final (headSegs, tailSegs) = splitSegmentsAt(target.segments, offset);
 
-    // 2. Merge first pasted block's segments into the head.
-    // If pasting at the very start of the block (offset 0), use the first
-    // pasted block's type — don't force the target's type on pasted content.
-    // Preserve children from the first pasted block.
-    final firstPasted = pastedBlocks.first;
-    final headType =
-        offset == 0 ? firstPasted.blockType as B : target.blockType;
-    final headBlock = target.copyWith(
-      blockType: headType,
-      segments: mergeSegments([...headSegs, ...firstPasted.segments]),
-      children: firstPasted.children.isNotEmpty
-          ? firstPasted.children.map((c) => _recastBlock<B>(c)).toList()
-          : target.children,
-    );
+    final firstPasted = blocks.first;
+    final lastPasted = blocks.last;
+    final firstIsVoid = ctx.isVoid(firstPasted.blockType);
+    final lastIsVoid = ctx.isVoid(lastPasted.blockType);
+    final headAndTailDistinct = blocks.length > 1;
 
-    // 3. Merge last pasted block's segments with the tail.
-    final lastPasted = pastedBlocks.last;
-    final tailBlock = TextBlock<B>(
-      id: generateBlockId(),
-      blockType: lastPasted.blockType as B,
-      segments: mergeSegments([...lastPasted.segments, ...tailSegs]),
-      children: lastPasted.children.isNotEmpty
-          ? lastPasted.children.map((c) => _recastBlock<B>(c)).toList()
-          : const [],
-    );
-
-    // 4. Middle blocks (if any) go between head and tail.
-    final middleBlocks = pastedBlocks.length > 2
-        ? pastedBlocks.sublist(1, pastedBlocks.length - 1)
-        : <TextBlock>[];
-
-    // 5. Replace target with head, insert middle + tail as root siblings.
-    //    Build the new root block list directly to avoid insertAfterFlatIndex
-    //    nesting issues with children.
-    var result = doc.replaceBlock(blockIndex, headBlock);
-
-    // Find the head block's position in the root list and insert after it.
-    final rootIdx =
-        result.blocks.indexWhere((b) => b.id == headBlock.id);
-    if (rootIdx >= 0) {
-      final newRoots = List<TextBlock<B>>.of(result.blocks);
-      var insertAt = rootIdx + 1;
-      for (final mid in middleBlocks) {
-        newRoots.insert(insertAt, _recastBlock<B>(mid));
-        insertAt++;
-      }
-      newRoots.insert(insertAt, tailBlock);
-      result = Document(newRoots);
+    // 2. Head edge. A text first block merges into the target's head; a void
+    //    first block is never merged — it inserts whole after the head.
+    final TextBlock headBlock;
+    if (firstIsVoid) {
+      headBlock = target.copyWith(segments: mergeSegments(headSegs));
     } else {
-      // Fallback: head is nested. Use insertAfterFlatIndex.
-      var insertAfter = blockIndex;
-      for (final mid in middleBlocks) {
-        final typedMid = _recastBlock<B>(mid);
-        result = result.insertAfterFlatIndex(insertAfter, typedMid);
-        insertAfter++;
-      }
-      result = result.insertAfterFlatIndex(insertAfter, tailBlock);
+      final headType = offset == 0 ? firstPasted.blockType : target.blockType;
+      headBlock = target.copyWith(
+        blockType: headType,
+        segments: mergeSegments([...headSegs, ...firstPasted.segments]),
+        children: firstPasted.children.isNotEmpty
+            ? firstPasted.children
+            : target.children,
+      );
     }
 
+    // 3. Tail edge. A text last block absorbs the target's tail and keeps
+    //    its own id; a void last block is inserted whole and the tail text
+    //    becomes a fresh block of the target's type after it.
+    final TextBlock tailBlock;
+    if (lastIsVoid || !headAndTailDistinct) {
+      tailBlock = TextBlock(
+        id: generateBlockId(),
+        blockType: target.blockType,
+        segments: mergeSegments(tailSegs),
+      );
+    } else {
+      tailBlock = lastPasted.copyWith(
+        segments: mergeSegments([...lastPasted.segments, ...tailSegs]),
+      );
+    }
+
+    // 4. The id-chained sibling sequence after the head:
+    //    [first if void] + middles + [last if void or same as first] + tail.
+    final toInsert = <TextBlock>[
+      if (firstIsVoid) firstPasted,
+      if (blocks.length > 2) ...blocks.sublist(1, blocks.length - 1),
+      if (headAndTailDistinct && lastIsVoid) lastPasted,
+      tailBlock,
+    ];
+
+    // 5. Replace target with head, then chain-insert each block after the
+    //    previous inserted block's id, resolved against the evolving doc —
+    //    siblings land at the target's depth regardless of nesting.
+    var result = doc.replaceBlock(doc.idToFlatIndex[target.id]!, headBlock);
+    var anchorId = headBlock.id;
+    for (final block in toInsert) {
+      final anchorIndex = result.idToFlatIndex[anchorId];
+      if (anchorIndex == null) return null;
+      result = result.insertAfterFlatIndex(anchorIndex, block);
+      anchorId = block.id;
+    }
     return result;
   }
 
   @override
   String toString() =>
-      'PasteBlocks(block: $blockIndex, offset: $offset, ${pastedBlocks.length} blocks)';
+      'PasteBlocks($blockId, offset: $offset, ${blocks.length} blocks)';
 }
 
-/// Set a metadata field on a block.
+/// Set a metadata field on block [blockId].
 ///
 /// Used for toggling task checked state, etc.
-class SetBlockMetadata extends EditOperation {
-  SetBlockMetadata(this.blockIndex, this.key, this.value);
+class SetMetadata extends EditOperation {
+  SetMetadata(this.blockId, this.key, this.value);
 
-  final int blockIndex;
+  final String blockId;
   final String key;
   final dynamic value;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final flat = doc.allBlocks;
-    if (blockIndex < 0 || blockIndex >= flat.length) return doc;
-
-    final block = flat[blockIndex];
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final block = doc.allBlocks[index];
     final newMeta = Map<String, dynamic>.of(block.metadata);
     newMeta[key] = value;
-    return doc.replaceBlock(blockIndex, block.copyWith(metadata: newMeta));
+    return doc.replaceBlock(index, block.copyWith(metadata: newMeta));
   }
 
   @override
-  String toString() => 'SetBlockMetadata(block: $blockIndex, $key: $value)';
+  String toString() => 'SetMetadata($blockId, $key: $value)';
 }
 
-/// Indent a block: make it a child of its previous sibling.
+/// Indent block [blockId]: make it the last child of its previous sibling.
 ///
-/// Only valid for list items that have a previous sibling.
-/// The block is removed from its current position and appended
-/// as the last child of the previous sibling.
+/// The G13 gate (`ctx.canIndent` — the same predicate the controller's
+/// all-or-nothing group gate uses) is evaluated here; failure rejects the
+/// whole batch rather than silently no-oping, so a consumer batch can never
+/// reproduce the silent-re-parent trap.
 class IndentBlock extends EditOperation {
-  IndentBlock(this.flatIndex, {this.policies});
-  final int flatIndex;
+  IndentBlock(this.blockId);
 
-  /// Policies map from the schema. When provided, structural rules are
-  /// enforced (nesting depth, canBeChild, canHaveChildren). When null,
-  /// indent is applied unconditionally.
-  final Map<Object, BlockPolicies>? policies;
+  final String blockId;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final policyMap = policies;
-    final prevSibling = doc.previousSibling(flatIndex);
-    if (prevSibling == null) return doc; // No previous sibling — can't indent.
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final prevSibling = doc.previousSibling(index);
+    if (prevSibling == null) return null; // No previous sibling — gate fails.
 
-    final block = doc.allBlocks[flatIndex];
+    final block = doc.allBlocks[index];
+    final newDepth = doc.depthOf(index) + 1;
+    if (!ctx.canIndent(block, prevSibling, newDepth)) return null;
 
-    // Policy checks (skipped when no policies provided).
-    final blockPolicy = policyMap?[block.blockType];
-    if (blockPolicy != null && !blockPolicy.canBeChild) return doc;
-
-    final parentPolicy = policyMap?[prevSibling.blockType];
-    if (parentPolicy != null && !parentPolicy.canHaveChildren) return doc;
-
-    if (blockPolicy?.maxDepth != null) {
-      final newDepth = doc.depthOf(flatIndex) + 1;
-      if (newDepth > blockPolicy!.maxDepth!) return doc;
-    }
-
-    // Remove block from current position.
-    var result = doc.removeBlockByFlatIndex(flatIndex);
-
-    // Add as last child of previous sibling.
-    final prevFlatIndex = result.indexOfBlock(prevSibling.id);
-    if (prevFlatIndex < 0) return doc; // Safety check.
-    result = result.addChild(prevFlatIndex, block);
-
+    // Remove block from current position, then add as last child of the
+    // previous sibling.
+    var result = doc.removeBlockByFlatIndex(index);
+    final prevIndex = result.idToFlatIndex[prevSibling.id];
+    if (prevIndex == null) return null;
+    result = result.addChild(prevIndex, block);
     return result;
   }
 
   @override
-  String toString() => 'IndentBlock(flat: $flatIndex)';
+  String toString() => 'IndentBlock($blockId)';
 }
 
-/// Outdent a block: move it from its parent's children to be a sibling
-/// after its parent.
+/// Outdent block [blockId]: move it from its parent's children to be a
+/// sibling after its parent.
 ///
-/// Only valid for nested blocks (depth > 0).
+/// Root-depth blocks reject (the symmetric G13 gate) rather than silently
+/// no-oping, so a mixed-depth Shift-Tab group can never partially apply.
 ///
 /// When the block has subsequent siblings, those siblings become children
 /// of the outdented block (standard behavior matching Notion / Google Docs).
 /// This preserves visual ordering: the outdented block appears right after
 /// its former parent, and its former later siblings stay below it.
 class OutdentBlock extends EditOperation {
-  OutdentBlock(this.flatIndex);
-  final int flatIndex;
+  OutdentBlock(this.blockId);
+
+  final String blockId;
 
   @override
-  Document<B> apply<B>(Document<B> doc) {
-    final parent = doc.parentOf(flatIndex);
-    if (parent == null) return doc; // Already at root — can't outdent.
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+    final parent = doc.parentOf(index);
+    if (parent == null) return null; // Already at root — gate fails.
 
-    final block = doc.allBlocks[flatIndex];
-    final sibIdx = doc.siblingIndex(flatIndex);
+    final block = doc.allBlocks[index];
+    final sibIdx = doc.siblingIndex(index);
     final siblings = parent.children;
 
     // Collect subsequent siblings (they'll become children of the
@@ -632,38 +787,71 @@ class OutdentBlock extends EditOperation {
 
     // Remove the block and all subsequent siblings from the parent.
     final trimmedChildren = siblings.sublist(0, sibIdx);
-    final parentFlatIndex = doc.indexOfBlock(parent.id);
+    final parentIndex = doc.idToFlatIndex[parent.id];
+    if (parentIndex == null) return null;
     final updatedParent = parent.copyWith(children: trimmedChildren);
-    var result = doc.replaceBlockByFlatIndex(parentFlatIndex, updatedParent);
+    var result = doc.replaceBlockByFlatIndex(parentIndex, updatedParent);
 
     // Insert the outdented block as a sibling after the (now trimmed) parent.
-    final newParentIdx = result.indexOfBlock(parent.id);
-    if (newParentIdx < 0) return doc;
-    result = result.insertAfterFlatIndex(newParentIdx, updatedBlock);
-
+    final newParentIndex = result.idToFlatIndex[parent.id];
+    if (newParentIndex == null) return null;
+    result = result.insertAfterFlatIndex(newParentIndex, updatedBlock);
     return result;
   }
 
   @override
-  String toString() => 'OutdentBlock(flat: $flatIndex)';
+  String toString() => 'OutdentBlock($blockId)';
+}
+
+/// Direction for [MoveBlock].
+enum MoveDirection { up, down }
+
+/// Move block [blockId] (with its subtree intact) one position up or down
+/// among its siblings.
+///
+/// Launch boundary policy (recorded decision): movement is within the
+/// current parent only — moving a first sibling up or a last sibling down is
+/// a no-op (not a rejection: a boundary hit must not abort an Alt+↑ batch).
+/// Cross-parent hoisting rides the post-launch drag-reorder work.
+class MoveBlock extends EditOperation {
+  MoveBlock(this.blockId, this.direction);
+
+  final String blockId;
+  final MoveDirection direction;
+
+  @override
+  Document? apply(Document doc, EditContext ctx) {
+    final index = doc.idToFlatIndex[blockId];
+    if (index == null) return null;
+
+    final sibIdx = doc.siblingIndex(index);
+    final parent = doc.parentOf(index);
+    final siblings = parent?.children ?? doc.blocks;
+
+    final targetIdx = direction == MoveDirection.up ? sibIdx - 1 : sibIdx + 1;
+    if (targetIdx < 0 || targetIdx >= siblings.length) {
+      return doc; // Boundary no-op.
+    }
+
+    final reordered = List<TextBlock>.of(siblings);
+    final block = reordered.removeAt(sibIdx);
+    reordered.insert(targetIdx, block);
+
+    if (parent == null) {
+      return Document(reordered);
+    }
+    final parentIndex = doc.idToFlatIndex[parent.id]!;
+    return doc.replaceBlockByFlatIndex(
+      parentIndex,
+      parent.copyWith(children: reordered),
+    );
+  }
+
+  @override
+  String toString() => 'MoveBlock($blockId, $direction)';
 }
 
 // --- Helpers ---
-
-/// Recursively rebuild a [TextBlock] with the correct generic type [B].
-///
-/// This is needed when pasting blocks from codecs or external sources that
-/// produce `TextBlock<dynamic>` — Dart's reified generics mean that
-/// `.cast<TextBlock<B>>()` fails at runtime for children.
-TextBlock<B> _recastBlock<B>(TextBlock block) {
-  return TextBlock<B>(
-    id: block.id,
-    blockType: block.blockType as B,
-    segments: block.segments,
-    children: block.children.map((c) => _recastBlock<B>(c)).toList(),
-    metadata: block.metadata,
-  );
-}
 
 /// Insert [text] at [offset] in [segments].
 ///
@@ -695,7 +883,8 @@ List<StyledSegment> _spliceInsert(
       final after = seg.text.substring(localOffset);
       final insertStyles = styles ?? seg.styles;
       final insertAttrs =
-          attributes ?? (styles != null ? const <String, dynamic>{} : seg.attributes);
+          attributes ??
+          (styles != null ? const <String, dynamic>{} : seg.attributes);
       if (before.isNotEmpty) {
         result.add(StyledSegment(before, seg.styles, seg.attributes));
       }
@@ -733,8 +922,8 @@ List<StyledSegment> _spliceDelete(
 ) {
   final result = <StyledSegment>[];
   var pos = 0;
-  var deleteStart = offset;
-  var deleteEnd = offset + length;
+  final deleteStart = offset;
+  final deleteEnd = offset + length;
 
   for (final seg in segments) {
     final segStart = pos;
@@ -797,11 +986,7 @@ List<StyledSegment> _spliceDelete(
         ),
       );
       after.add(
-        StyledSegment(
-          seg.text.substring(splitAt),
-          seg.styles,
-          seg.attributes,
-        ),
+        StyledSegment(seg.text.substring(splitAt), seg.styles, seg.attributes),
       );
     }
 

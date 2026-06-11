@@ -1,37 +1,99 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart' show TextRange;
 
 import '../model/block.dart';
+import '../model/doc_selection.dart';
 import '../model/document.dart';
-import '../model/inline_entity.dart';
 import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
-import 'transaction.dart';
 
-/// Input rules intercept pending transactions before commit and can
-/// transform them. This is how markdown shortcuts work in WYSIWYG mode.
+/// The outcome of an input rule: follow-up operations plus the selection to
+/// land on after they apply.
+class InputRuleOutcome {
+  const InputRuleOutcome({required this.operations, this.selectionAfter});
+
+  final List<EditOperation> operations;
+  final DocSelection? selectionAfter;
+}
+
+/// Base type for input rules, registered on block defs / inline defs and
+/// collected by the schema.
 ///
-/// Return a modified [Transaction] to transform the edit, or null to
-/// let it pass through unchanged.
-///
-/// [schema] provides access to block/style metadata (e.g. isListLike,
-/// isHeading, defaultBlockType) so rules don't need to compare against
-/// specific enum values.
+/// The contract is split (architecture §input rules):
+/// - [PatternInputRule] — insert-pattern rules (markdown shortcuts). Run
+///   AFTER an insertion has applied, against the committed text.
+/// - [StructuralInputRule] — pre-application interceptors for structural
+///   triggers (Enter, backspace-at-start). The escape hatch for behavior the
+///   named BlockDef policies can't express; consulted first from the
+///   controller's split/merge paths.
 abstract class InputRule {
-  Transaction? tryTransform(
-    Transaction pending,
+  const InputRule();
+
+  /// Inline style/entity keys this rule's outcome can reference. Declared,
+  /// not introspected — `EditorSchema.validate()` asserts every declared key
+  /// is registered.
+  Set<Object> get referencedInlineKeys => const {};
+}
+
+/// An insert-pattern rule: examines the committed text of [blockId] in the
+/// post-edit document and may emit follow-up operations (which run through
+/// the same batch loop as any other edit).
+abstract class PatternInputRule extends InputRule {
+  const PatternInputRule();
+
+  /// [editedRange] is the block-local range the insertion covered.
+  /// Return null to pass.
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
+    EditorSchema schema,
+  );
+}
+
+/// What structural event a [StructuralInputRule] is being consulted about.
+enum StructuralTriggerKind {
+  /// Enter at (blockId, offset).
+  split,
+
+  /// Backspace with the caret at offset 0 of blockId.
+  backspaceAtStart,
+}
+
+/// A structural trigger passed to interceptors before the controller's
+/// standard policy behavior runs.
+class StructuralTrigger {
+  const StructuralTrigger.split(this.blockId, this.offset)
+    : kind = StructuralTriggerKind.split;
+
+  const StructuralTrigger.backspaceAtStart(this.blockId)
+    : kind = StructuralTriggerKind.backspaceAtStart,
+      offset = 0;
+
+  final StructuralTriggerKind kind;
+  final String blockId;
+  final int offset;
+}
+
+/// A pre-application structural interceptor — the escape hatch consulted
+/// first from the controller's split/merge paths, before the standard
+/// `split`/`backspaceAtStart` BlockDef policies.
+///
+/// Return an outcome to REPLACE the standard behavior, or null to let the
+/// policies run.
+abstract class StructuralInputRule extends InputRule {
+  const StructuralInputRule();
+
+  InputRuleOutcome? intercept(
+    StructuralTrigger trigger,
     Document doc,
     EditorSchema schema,
   );
 }
 
 /// Detects a wrap-delimiter pattern (e.g. `**text**`, `*text*`, `~~text~~`)
-/// and converts it to the corresponding inline style.
-///
-/// When the user types the closing delimiter that completes the pattern:
-/// 1. Find the delimiter pair in the resulting text
-/// 2. Strip both delimiters
-/// 3. Apply the style to the enclosed text
-class InlineWrapRule extends InputRule {
+/// completed by the latest insertion and converts it to the corresponding
+/// inline style.
+class InlineWrapRule extends PatternInputRule {
   InlineWrapRule(this.delimiter, this.style, {RegExp? pattern})
     : _pattern =
           pattern ??
@@ -42,60 +104,43 @@ class InlineWrapRule extends InputRule {
   final RegExp _pattern;
 
   @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
+  Set<Object> get referencedInlineKeys => {style};
+
+  @override
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
     EditorSchema schema,
   ) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null) return null;
-
-    final resultDoc = pending.apply(doc);
+    final block = docAfter.blockById(blockId);
+    if (block == null) return null;
+    final text = block.plainText;
     final delimLen = delimiter.length;
 
-    for (var i = 0; i < resultDoc.allBlocks.length; i++) {
-      final block = resultDoc.allBlocks[i];
-      final text = block.plainText;
+    final match = _pattern
+        .allMatches(text)
+        .cast<RegExpMatch?>()
+        .firstWhere((m) => m!.end == editedRange.end, orElse: () => null);
+    if (match == null) return null;
 
-      final editBlock = insertOp.blockIndex;
-      final editEnd = insertOp.offset + insertOp.text.length;
-      if (editBlock != i) continue;
+    final fullMatchStart = match.start;
+    final innerText = match.group(1)!;
+    final innerEnd = fullMatchStart + delimLen + innerText.length;
+    final caret = fullMatchStart + innerText.length;
 
-      final match = _pattern
-          .allMatches(text)
-          .cast<RegExpMatch?>()
-          .firstWhere((m) => m!.end == editEnd, orElse: () => null);
-      if (match == null) continue;
-
-      final fullMatchStart = match.start;
-      final innerText = match.group(1)!;
-      final innerEnd = fullMatchStart + delimLen + innerText.length;
-
-      final ops = <EditOperation>[
-        ...pending.operations,
-        DeleteText(i, innerEnd, delimLen), // remove closing delimiter
-        DeleteText(i, fullMatchStart, delimLen), // remove opening delimiter
-        ToggleStyle(
-          i,
+    return InputRuleOutcome(
+      operations: [
+        DeleteText(blockId, innerEnd, delimLen), // remove closing delimiter
+        DeleteText(
+          blockId,
           fullMatchStart,
-          fullMatchStart + innerText.length,
-          style,
-        ),
-      ];
-
-      final blockStartGlobal = resultDoc.globalOffset(i, 0);
-      final cursorOffset = blockStartGlobal + fullMatchStart + innerText.length;
-
-      return Transaction(
-        operations: ops,
-        selectionAfter: pending.selectionAfter?.copyWith(
-          baseOffset: cursorOffset,
-          extentOffset: cursorOffset,
-        ),
-      );
-    }
-
-    return null;
+          delimLen,
+        ), // remove opening delimiter
+        ToggleStyle(blockId, fullMatchStart, caret, style),
+      ],
+      selectionAfter: DocSelection.collapsed(DocPosition(blockId, caret)),
+    );
   }
 }
 
@@ -103,20 +148,20 @@ class InlineWrapRule extends InputRule {
 /// Order matters: register BoldWrapRule before ItalicWrapRule so `**` is
 /// checked before `*`.
 class BoldWrapRule extends InlineWrapRule {
-  BoldWrapRule() : super('**', InlineStyle.bold);
+  BoldWrapRule() : super('**', InlineStyleKeys.bold);
 }
 
 class ItalicWrapRule extends InlineWrapRule {
   ItalicWrapRule()
     : super(
         '*',
-        InlineStyle.italic,
+        InlineStyleKeys.italic,
         pattern: RegExp(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)'),
       );
 }
 
 class StrikethroughWrapRule extends InlineWrapRule {
-  StrikethroughWrapRule() : super('~~', InlineStyle.strikethrough);
+  StrikethroughWrapRule() : super('~~', InlineStyleKeys.strikethrough);
 }
 
 /// Detects `[text](url)` typed inline and converts to a link.
@@ -124,150 +169,116 @@ class StrikethroughWrapRule extends InlineWrapRule {
 /// Fires when the user types the closing `)` that completes the pattern.
 /// Strips the markdown syntax, applies the link style, and sets the URL
 /// attribute on the resulting text.
-class LinkWrapRule extends InputRule {
+class LinkWrapRule extends PatternInputRule {
   static final _pattern = RegExp(r'\[([^\]]+)\]\(([^)]+)\)');
 
   @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
+  Set<Object> get referencedInlineKeys => {InlineEntityKeys.link};
+
+  @override
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
     EditorSchema schema,
   ) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null || !insertOp.text.endsWith(')')) return null;
-
-    final resultDoc = pending.apply(doc);
-    final i = insertOp.blockIndex;
-    if (i >= resultDoc.allBlocks.length) return null;
-
-    final block = resultDoc.allBlocks[i];
+    final block = docAfter.blockById(blockId);
+    if (block == null) return null;
     final text = block.plainText;
-    final editEnd = insertOp.offset + insertOp.text.length;
+    if (editedRange.end < 1 ||
+        editedRange.end > text.length ||
+        text[editedRange.end - 1] != ')') {
+      return null;
+    }
 
     final match = _pattern
         .allMatches(text)
         .cast<RegExpMatch?>()
-        .firstWhere((m) => m!.end == editEnd, orElse: () => null);
+        .firstWhere((m) => m!.end == editedRange.end, orElse: () => null);
     if (match == null) return null;
 
     final linkText = match.group(1)!;
     final url = match.group(2)!;
     final fullMatchStart = match.start;
     final fullMatchLength = match.end - match.start;
+    final caret = fullMatchStart + linkText.length;
 
-    final blockStartGlobal = resultDoc.globalOffset(i, 0);
-    final cursorOffset = blockStartGlobal + fullMatchStart + linkText.length;
-
-    return Transaction(
+    return InputRuleOutcome(
       operations: [
-        ...pending.operations,
         // Delete the entire [text](url) and replace with just the text.
-        DeleteText(i, fullMatchStart, fullMatchLength),
+        DeleteText(blockId, fullMatchStart, fullMatchLength),
         InsertText(
-          i,
+          blockId,
           fullMatchStart,
           linkText,
-          styles: {InlineEntityType.link},
-          attributes: {'url': url},
+          styles: {InlineEntityKeys.link},
+          attributes: {InlineEntityKeys.linkUrl: url},
         ),
       ],
-      selectionAfter: pending.selectionAfter?.copyWith(
-        baseOffset: cursorOffset,
-        extentOffset: cursorOffset,
-      ),
+      selectionAfter: DocSelection.collapsed(DocPosition(blockId, caret)),
     );
   }
 }
 
-/// Detects a prefix (e.g. "# ", "- ") typed at the start of a paragraph
-/// and converts the block to the specified type.
+/// Detects a prefix (e.g. "# ", "- ") typed at the start of a default-type
+/// block and converts the block to [targetType].
 ///
 /// Fires when the user types a space after the prefix character at position 0.
-class PrefixBlockRule extends InputRule {
-  PrefixBlockRule(this.prefix, this.targetType);
+class PrefixBlockRule extends PatternInputRule {
+  const PrefixBlockRule(this.prefix, this.targetType);
 
-  /// The prefix character before the space (e.g. "#", "-").
+  /// The prefix before the space (e.g. "#", "-").
   final String prefix;
-  final Object targetType;
+  final String targetType;
 
   @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
     EditorSchema schema,
   ) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null || insertOp.text != ' ') return null;
-    if (insertOp.offset != prefix.length) return null;
+    final block = docAfter.blockById(blockId);
+    if (block == null) return null;
+    final text = block.plainText;
 
-    final resultDoc = pending.apply(doc);
-    final i = insertOp.blockIndex;
-    if (i >= resultDoc.allBlocks.length) return null;
+    // The edit must be exactly the space typed right after the prefix.
+    if (editedRange.start != prefix.length ||
+        editedRange.end != prefix.length + 1) {
+      return null;
+    }
+    if (editedRange.end > text.length ||
+        text.substring(editedRange.start, editedRange.end) != ' ') {
+      return null;
+    }
 
-    final block = resultDoc.allBlocks[i];
     final fullPrefix = '$prefix ';
-    if (!block.plainText.startsWith(fullPrefix) ||
+    if (!text.startsWith(fullPrefix) ||
         block.blockType != schema.defaultBlockType) {
       return null;
     }
 
-    final blockStart = resultDoc.globalOffset(i, 0);
-    return Transaction(
+    return InputRuleOutcome(
       operations: [
-        ...pending.operations,
-        DeleteText(i, 0, fullPrefix.length),
-        ChangeBlockType(i, targetType, policies: schema.policies),
+        DeleteText(blockId, 0, fullPrefix.length),
+        ChangeBlockType(blockId, targetType),
       ],
-      selectionAfter: pending.selectionAfter?.copyWith(
-        baseOffset: blockStart,
-        extentOffset: blockStart,
-      ),
+      selectionAfter: DocSelection.collapsed(DocPosition(blockId, 0)),
     );
   }
 }
 
 /// Convenience constructors for common prefix rules.
 class HeadingRule extends PrefixBlockRule {
-  HeadingRule() : super('#', BlockType.h1);
-}
-
-/// Backspace at the start of a heading converts it to the default block type.
-class HeadingBackspaceRule extends InputRule {
-  @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
-    if (mergeOp == null) return null;
-
-    final flat = doc.allBlocks;
-    if (mergeOp.secondBlockIndex >= flat.length) return null;
-
-    final block = flat[mergeOp.secondBlockIndex];
-    if (!schema.isHeading(block.blockType)) return null;
-
-    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
-    return Transaction(
-      operations: [
-        ChangeBlockType(
-          mergeOp.secondBlockIndex,
-          schema.defaultBlockType,
-          policies: schema.policies,
-        ),
-      ],
-      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
-    );
-  }
+  const HeadingRule() : super('#', HeadingKeys.h1);
 }
 
 class ListItemRule extends PrefixBlockRule {
-  ListItemRule() : super('-', BlockType.listItem);
+  const ListItemRule() : super('-', ListItemKeys.type);
 }
 
 class NumberedListRule extends PrefixBlockRule {
-  NumberedListRule() : super('1.', BlockType.numberedList);
+  const NumberedListRule() : super('1.', NumberedListKeys.type);
 }
 
 /// Detects task shortcut patterns and converts to a taskItem with metadata.
@@ -276,22 +287,26 @@ class NumberedListRule extends PrefixBlockRule {
 /// 1. `- [ ] ` or `- [x] ` typed on a default block type (full shortcut)
 /// 2. `[ ] ` or `[x] ` typed at the start of a list item (since "- " already
 ///    converted it to a list item via ListItemRule)
-class TaskItemRule extends InputRule {
+class TaskItemRule extends PatternInputRule {
+  const TaskItemRule();
+
   @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
     EditorSchema schema,
   ) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null || insertOp.text != ' ') return null;
-
-    final resultDoc = pending.apply(doc);
-    final i = insertOp.blockIndex;
-    if (i >= resultDoc.allBlocks.length) return null;
-
-    final block = resultDoc.allBlocks[i];
+    final block = docAfter.blockById(blockId);
+    if (block == null) return null;
     final text = block.plainText;
+
+    // The edit must be exactly a typed space.
+    if (editedRange.end != editedRange.start + 1 ||
+        editedRange.end > text.length ||
+        text.substring(editedRange.start, editedRange.end) != ' ') {
+      return null;
+    }
 
     bool? checked;
     int prefixLen;
@@ -312,7 +327,7 @@ class TaskItemRule extends InputRule {
       } else {
         return null;
       }
-    } else if (block.blockType == BlockType.listItem) {
+    } else if (block.blockType == ListItemKeys.type) {
       // Path 2: "[ ] " at start of a list item (user typed "- [ ] ",
       // ListItemRule ate the "- ", leaving "[ ] " on a listItem).
       if (text.startsWith('[ ] ')) {
@@ -328,120 +343,16 @@ class TaskItemRule extends InputRule {
       return null;
     }
 
-    final blockStart = resultDoc.globalOffset(i, 0);
-    return Transaction(
+    // The typed space must be the one completing the prefix.
+    if (editedRange.end != prefixLen) return null;
+
+    return InputRuleOutcome(
       operations: [
-        ...pending.operations,
-        DeleteText(i, 0, prefixLen),
-        ChangeBlockType(i, BlockType.taskItem, policies: schema.policies),
-        SetBlockMetadata(i, kCheckedKey, checked),
+        DeleteText(blockId, 0, prefixLen),
+        ChangeBlockType(blockId, TaskItemKeys.type),
+        SetMetadata(blockId, TaskItemKeys.checked, checked),
       ],
-      selectionAfter: pending.selectionAfter?.copyWith(
-        baseOffset: blockStart,
-        extentOffset: blockStart,
-      ),
-    );
-  }
-}
-
-/// Enter on an empty list item converts it to the default block type.
-///
-/// This rule checks for SplitBlock on an empty list item and replaces it
-/// with a ChangeBlockType to the default block type.
-class EmptyListItemRule extends InputRule {
-  @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
-    if (splitOp == null) return null;
-
-    final block = doc.allBlocks[splitOp.blockIndex];
-    if (!schema.isListLike(block.blockType)) return null;
-    if (block.plainText.isNotEmpty) return null;
-
-    // Replace the split with a type change to the default block type.
-    return Transaction(
-      operations: [
-        ChangeBlockType(
-          splitOp.blockIndex,
-          schema.defaultBlockType,
-          policies: schema.policies,
-        ),
-      ],
-      selectionAfter: pending.selectionAfter,
-    );
-  }
-}
-
-/// Backspace at start of a list item converts it to the default block type
-/// (keeps nesting).
-///
-/// Detects a MergeBlocks where the second block is a list item, and replaces
-/// it with a ChangeBlockType. The block stays in its current position in the
-/// tree — only the type changes.
-class ListItemBackspaceRule extends InputRule {
-  @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
-    if (mergeOp == null) return null;
-
-    final flat = doc.allBlocks;
-    if (mergeOp.secondBlockIndex >= flat.length) return null;
-
-    final block = flat[mergeOp.secondBlockIndex];
-    if (!schema.isListLike(block.blockType)) return null;
-
-    // Convert to default block type instead of merging.
-    // Cursor should stay at the start of this block, not jump to the previous one.
-    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
-    return Transaction(
-      operations: [
-        ChangeBlockType(
-          mergeOp.secondBlockIndex,
-          schema.defaultBlockType,
-          policies: schema.policies,
-        ),
-      ],
-      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
-    );
-  }
-}
-
-/// Backspace at start of a nested block (non-list-item) outdents instead of merging.
-///
-/// This gives the Notion/Google Docs behavior: backspace reduces nesting
-/// step by step until root level, then merges.
-class NestedBackspaceRule extends InputRule {
-  @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
-    if (mergeOp == null) return null;
-
-    final flat = doc.allBlocks;
-    if (mergeOp.secondBlockIndex >= flat.length) return null;
-
-    final block = flat[mergeOp.secondBlockIndex];
-    // Only for non-list-like blocks (list-like are handled by ListItemBackspaceRule).
-    if (schema.isListLike(block.blockType)) return null;
-    // Only if nested (depth > 0). Root blocks merge normally.
-    if (doc.depthOf(mergeOp.secondBlockIndex) == 0) return null;
-
-    // Outdent instead of merging.
-    final cursorOffset = doc.globalOffset(mergeOp.secondBlockIndex, 0);
-    return Transaction(
-      operations: [OutdentBlock(mergeOp.secondBlockIndex)],
-      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+      selectionAfter: DocSelection.collapsed(DocPosition(blockId, 0)),
     );
   }
 }
@@ -452,65 +363,42 @@ class NestedBackspaceRule extends InputRule {
 /// Fires when the third `-` is inserted, making the block text exactly `---`.
 /// The text is cleared, the block type is changed to divider, and a new empty
 /// block is inserted after for the cursor to land on.
-class DividerRule extends InputRule {
+class DividerRule extends PatternInputRule {
+  const DividerRule();
+
   @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
+  InputRuleOutcome? tryTransform(
+    Document docAfter,
+    String blockId,
+    TextRange editedRange,
     EditorSchema schema,
   ) {
-    final insertOp = _findInsertOp(pending);
-    if (insertOp == null || insertOp.text != '-') return null;
+    final block = docAfter.blockById(blockId);
+    if (block == null) return null;
+    final text = block.plainText;
 
-    final resultDoc = pending.apply(doc);
-    final i = insertOp.blockIndex;
-    if (i >= resultDoc.allBlocks.length) return null;
-
-    final block = resultDoc.allBlocks[i];
-    if (block.blockType != schema.defaultBlockType ||
-        block.plainText != '---') {
+    // The edit must be exactly a typed '-' completing '---'.
+    if (editedRange.end != editedRange.start + 1 ||
+        editedRange.end > text.length ||
+        text.substring(editedRange.start, editedRange.end) != '-') {
+      return null;
+    }
+    if (block.blockType != schema.defaultBlockType || text != '---') {
       return null;
     }
 
-    final blockStart = resultDoc.globalOffset(i, 0);
-    return Transaction(
-      operations: [
-        ...pending.operations,
-        DeleteText(i, 0, 3),
-        ChangeBlockType(i, BlockType.divider, policies: schema.policies),
-        // Create a new block after the divider for the cursor.
-        SplitBlock(i, 0, defaultBlockType: schema.defaultBlockType),
-      ],
-      selectionAfter: TextSelection.collapsed(offset: blockStart + 1),
+    final trailing = TextBlock(
+      id: generateBlockId(),
+      blockType: schema.defaultBlockType,
     );
-  }
-}
-
-/// Backspace at the start of a block that follows a divider deletes the divider.
-///
-/// Intercepts MergeBlocks where the preceding block is a void block (divider).
-/// Instead of merging (which would corrupt the current block's type), we remove
-/// the divider entirely and keep the current block as-is.
-class DividerBackspaceRule extends InputRule {
-  @override
-  Transaction? tryTransform(
-    Transaction pending,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    final mergeOp = pending.operations.whereType<MergeBlocks>().firstOrNull;
-    if (mergeOp == null) return null;
-
-    final flat = doc.allBlocks;
-    final prevIdx = mergeOp.secondBlockIndex - 1;
-    if (prevIdx < 0 || prevIdx >= flat.length) return null;
-    if (!schema.isVoid(flat[prevIdx].blockType)) return null;
-
-    // Remove the divider. The current block slides into its position.
-    final cursorOffset = doc.globalOffset(prevIdx, 0);
-    return Transaction(
-      operations: [RemoveBlock(prevIdx)],
-      selectionAfter: TextSelection.collapsed(offset: cursorOffset),
+    return InputRuleOutcome(
+      operations: [
+        DeleteText(blockId, 0, 3),
+        ChangeBlockType(blockId, DividerKeys.type),
+        // A new block after the divider for the cursor.
+        InsertBlocks(blockId, [trailing]),
+      ],
+      selectionAfter: DocSelection.collapsed(DocPosition(trailing.id, 0)),
     );
   }
 }
@@ -518,33 +406,29 @@ class DividerBackspaceRule extends InputRule {
 /// Enter inside a code block inserts a literal newline instead of splitting.
 ///
 /// Code blocks store multi-line content as a single block with embedded `\n`.
-/// This rule intercepts SplitBlock and replaces it with InsertText('\n').
-class CodeBlockEnterRule extends InputRule {
+/// This structural interceptor replaces the standard split behavior.
+class CodeBlockEnterRule extends StructuralInputRule {
+  const CodeBlockEnterRule({this.typeKey = CodeBlockKeys.type});
+
+  /// The block type this rule fires for — defaults to the built-in code
+  /// block; custom code-like types pass their own key.
+  final String typeKey;
+
   @override
-  Transaction? tryTransform(
-    Transaction pending,
+  InputRuleOutcome? intercept(
+    StructuralTrigger trigger,
     Document doc,
     EditorSchema schema,
   ) {
-    final splitOp = pending.operations.whereType<SplitBlock>().firstOrNull;
-    if (splitOp == null) return null;
+    if (trigger.kind != StructuralTriggerKind.split) return null;
+    final block = doc.blockById(trigger.blockId);
+    if (block == null || block.blockType != typeKey) return null;
 
-    final block = doc.allBlocks[splitOp.blockIndex];
-    if (schema.blockDef(block.blockType).label != 'Code Block') return null;
-
-    final globalOffset = doc.globalOffset(splitOp.blockIndex, splitOp.offset);
-
-    return Transaction(
-      operations: [InsertText(splitOp.blockIndex, splitOp.offset, '\n')],
-      selectionAfter: TextSelection.collapsed(offset: globalOffset + 1),
+    return InputRuleOutcome(
+      operations: [InsertText(trigger.blockId, trigger.offset, '\n')],
+      selectionAfter: DocSelection.collapsed(
+        DocPosition(trigger.blockId, trigger.offset + 1),
+      ),
     );
   }
-}
-
-/// Find the first InsertText operation in a transaction, if any.
-InsertText? _findInsertOp(Transaction tx) {
-  for (final op in tx.operations) {
-    if (op is InsertText) return op;
-  }
-  return null;
 }

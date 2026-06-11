@@ -1,11 +1,12 @@
 import '../model/inline_entity.dart';
 import 'inline_style_def.dart';
 
-/// Schema definition for a public inline entity.
+/// Schema definition for a public inline entity, registered under a string
+/// key (e.g. `InlineEntityKeys.link`).
 ///
 /// The entity key itself is stored on segments; [style] defines how that
 /// entity renders and serializes.
-class InlineEntityDef<E extends Object> {
+class InlineEntityDef {
   const InlineEntityDef({
     required this.type,
     required this.style,
@@ -15,8 +16,8 @@ class InlineEntityDef<E extends Object> {
     this.defaultText,
   });
 
-  /// Public entity key, e.g. [InlineEntityType.link].
-  final E type;
+  /// The entity's string key, e.g. [InlineEntityKeys.link].
+  final String type;
 
   /// Rendering and codec definition for this entity.
   final InlineStyleDef style;
