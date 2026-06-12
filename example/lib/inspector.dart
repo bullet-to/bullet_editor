@@ -10,8 +10,8 @@ import 'package:flutter/material.dart';
 /// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
 /// left, tabbed debug panes on the right.
 ///
-/// Day 1–2 ships panes 1–2; panes 3–6 (IME window, change stream, perf,
-/// record) land with the subsystems they inspect.
+/// Panes 1–2 (document tree, selection) are live; panes 3–6 (IME window,
+/// change stream, perf, record) land with the subsystems they inspect.
 class InspectorScreen extends StatefulWidget {
   const InspectorScreen({super.key});
 
@@ -20,22 +20,47 @@ class InspectorScreen extends StatefulWidget {
 }
 
 class _InspectorScreenState extends State<InspectorScreen> {
-  final EditorSchema _schema = EditorSchema.standard();
-  late Document _document = buildGauntletDocument();
+  late final EditorController _controller = EditorController(
+    document: buildGauntletDocument(),
+    schema: EditorSchema.standard(),
+  );
   final GlobalKey<BulletEditorState> _editorKey = GlobalKey();
   InlineEntitySnapshot? _lastLinkTap;
   String? _lastLinkTapBlockId;
 
-  void _reloadFixture() {
-    setState(() => _document = buildGauntletDocument());
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onControllerChanged);
   }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onControllerChanged() => setState(() {});
+
+  void _reloadFixture() => _controller.setDocument(buildGauntletDocument());
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('bullet_editor inspector — v3 walking skeleton'),
+        title: const Text('bullet_editor inspector — v3 day 3-4'),
         actions: [
+          IconButton(
+            tooltip: 'Undo',
+            icon: const Icon(Icons.undo),
+            onPressed: _controller.canUndo ? _controller.undo : null,
+          ),
+          IconButton(
+            tooltip: 'Redo',
+            icon: const Icon(Icons.redo),
+            onPressed: _controller.canRedo ? _controller.redo : null,
+          ),
           IconButton(
             tooltip: 'Reload gauntlet fixture',
             icon: const Icon(Icons.refresh),
@@ -52,8 +77,8 @@ class _InspectorScreenState extends State<InspectorScreen> {
               padding: const EdgeInsets.all(8),
               child: BulletEditor(
                 key: _editorKey,
-                document: _document,
-                schema: _schema,
+                controller: _controller,
+                autofocus: true,
                 textStyle: Theme.of(context).textTheme.bodyLarge,
                 padding: const EdgeInsets.all(16),
                 onLinkTap: (blockId, offset, entity) {
@@ -69,8 +94,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
           Expanded(
             flex: 2,
             child: _InspectorPanes(
-              document: _document,
-              schema: _schema,
+              controller: _controller,
               editorKey: _editorKey,
               lastLinkTap: _lastLinkTap,
               lastLinkTapBlockId: _lastLinkTapBlockId,
@@ -84,15 +108,13 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
 class _InspectorPanes extends StatelessWidget {
   const _InspectorPanes({
-    required this.document,
-    required this.schema,
+    required this.controller,
     required this.editorKey,
     required this.lastLinkTap,
     required this.lastLinkTapBlockId,
   });
 
-  final Document document;
-  final EditorSchema schema;
+  final EditorController controller;
   final GlobalKey<BulletEditorState> editorKey;
   final InlineEntitySnapshot? lastLinkTap;
   final String? lastLinkTapBlockId;
@@ -112,15 +134,19 @@ class _InspectorPanes extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
-                _DocumentTreePane(document: document, schema: schema),
+                _DocumentTreePane(
+                  document: controller.document,
+                  schema: controller.schema,
+                ),
                 _SelectionPane(
+                  controller: controller,
                   lastLinkTap: lastLinkTap,
                   lastLinkTapBlockId: lastLinkTapBlockId,
                 ),
               ],
             ),
           ),
-          _LazinessFooter(document: document, editorKey: editorKey),
+          _LazinessFooter(document: controller.document, editorKey: editorKey),
         ],
       ),
     );
@@ -201,16 +227,16 @@ class _DocumentTreePane extends StatelessWidget {
   }
 }
 
-/// Pane 2 — selection + composing. The live DocSelection/ComposingState
-/// wiring arrives with the day 3–4 controller skeleton; until then this pane
-/// shows the structure plus the one live selection-adjacent signal that
-/// exists (link taps through the recognizer surface).
+/// Pane 2 — live DocSelection endpoints, undo state, and the link-tap log.
+/// ComposingState and active styles arrive with their subsystems (days 5–7).
 class _SelectionPane extends StatelessWidget {
   const _SelectionPane({
+    required this.controller,
     required this.lastLinkTap,
     required this.lastLinkTapBlockId,
   });
 
+  final EditorController controller;
   final InlineEntitySnapshot? lastLinkTap;
   final String? lastLinkTapBlockId;
 
@@ -219,17 +245,28 @@ class _SelectionPane extends StatelessWidget {
     final mono = Theme.of(
       context,
     ).textTheme.bodySmall?.copyWith(fontFamily: 'Menlo');
+    final selection = controller.selection;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
         Text('DocSelection', style: Theme.of(context).textTheme.titleSmall),
-        Text('— (controller lands day 3–4)', style: mono),
+        Text(
+          selection == null
+              ? '—'
+              : 'base:   ${selection.base}\n'
+                    'extent: ${selection.extent}\n'
+                    'collapsed: ${selection.isCollapsed}',
+          style: mono,
+        ),
+        const SizedBox(height: 12),
+        Text('Undo', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          'canUndo: ${controller.canUndo}  canRedo: ${controller.canRedo}',
+          style: mono,
+        ),
         const SizedBox(height: 12),
         Text('ComposingState', style: Theme.of(context).textTheme.titleSmall),
         Text('— (IME lands days 5–7)', style: mono),
-        const SizedBox(height: 12),
-        Text('Active styles', style: Theme.of(context).textTheme.titleSmall),
-        Text('— (controller lands day 3–4)', style: mono),
         const SizedBox(height: 12),
         Text('Last link tap', style: Theme.of(context).textTheme.titleSmall),
         Text(
