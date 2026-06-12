@@ -458,8 +458,14 @@ class ImeService extends ChangeNotifier
   /// snapshot whose text equals this was computed by the browser against
   /// the window we just replaced (host-app edit → clause (a)/(b) push → the
   /// in-flight snapshot lands) and must not be diffed against the fresh
-  /// shadow — see [updateEditingValue]. A terminate push clears it: the
-  /// post-terminate flavor of the race is the echo quarantine's territory.
+  /// shadow — see [updateEditingValue]. Cleared the moment the race window
+  /// provably closes: the race can only involve snapshots already in flight
+  /// AT push time, so the first ACCEPTED post-push snapshot (the pure-echo
+  /// acknowledgement or a successfully synthesized value) clears it —
+  /// without that, the user retyping exactly what a push just deleted is
+  /// indistinguishable from the race and gets eaten (the day-8 web dead-key
+  /// double-cycle bug). A terminate push also clears it: the post-terminate
+  /// flavor of the race is the echo quarantine's territory.
   String? _previousShadowText;
 
   /// The one-batch echo quarantine (G7/G10): the terminated composing text
@@ -734,9 +740,24 @@ class ImeService extends ChangeNotifier
   /// that older window, and diffing it against the fresh shadow would
   /// mis-read the host edit's whole window change as typed input — it is
   /// dropped and the authoritative window re-pushed (the guard's accepted
-  /// loss, never corruption). The residual post-terminate flavor of the
-  /// race stays the echo quarantine's territory, exactly as on the delta
-  /// path.
+  /// loss, never corruption). The drop is scoped to the ACTUAL race
+  /// window, because its text signature alone also matches the user
+  /// retyping what the push just deleted (dead keys make this a two-second
+  /// repro: commit é, backspace, compose-and-commit é again):
+  ///
+  /// - Only snapshots already in flight at push time can be stale, so the
+  ///   first accepted post-push snapshot (pure echo or synthesized input)
+  ///   closes the window — [_previousShadowText] clears and later matches
+  ///   are genuine input.
+  /// - A snapshot carrying a live composing region is exempt outright: a
+  ///   non-terminate push is only legal with no live composition (the
+  ///   no-echo invariant), so every snapshot computed against the replaced
+  ///   window was composing-free — a composing match is fresh marked text
+  ///   the browser started AFTER the push, and dropping it severs a live
+  ///   browser composition mid-flight.
+  ///
+  /// The residual post-terminate flavor of the race stays the echo
+  /// quarantine's territory, exactly as on the delta path.
   ///
   /// A value with unchanged text is the `TextEditingDeltaNonTextUpdate`
   /// analogue (§NonTextUpdate analogue): acknowledged into the shadow so
@@ -754,16 +775,29 @@ class ImeService extends ChangeNotifier
     if (_connection == null || _shadow == null) return;
     // The previous-shadow drop (the doc comment's pre-push race): a snapshot
     // shaped like the window the latest push replaced is stale by
-    // construction, not input. Legitimate input is untouched — a snapshot
-    // derived from the CURRENT window either matches the shadow text (the
-    // NonTextUpdate analogue) or differs from both windows.
-    if (value.text != _shadow!.text && value.text == _previousShadowText) {
+    // construction — but only commit-shaped and only while the race window
+    // is still open (see the doc comment's scoping). A composing-carrying
+    // match is fresh marked text: the replaced window was composing-free
+    // (a non-terminate push is illegal mid-composition), so no in-flight
+    // stale snapshot can carry one. Sanitized like the synthesis boundary:
+    // a mis-reported region is no exemption.
+    final composing = _sanitizeComposing(value.composing, value.text);
+    final composingLive = composing.isValid && !composing.isCollapsed;
+    if (value.text != _shadow!.text &&
+        value.text == _previousShadowText &&
+        !composingLive) {
       _recoverAuthoritative('staleSnapshot');
       _scheduleGeometryReport();
       notifyListeners();
       return;
     }
     final delta = _synthesizeDelta(_shadow!, value);
+    // Any accepted post-push snapshot closes the pre-push race window: the
+    // engine is provably working from the pushed window now (the pure echo
+    // acknowledges it; synthesized input is diffed against it). Cleared
+    // BEFORE _processBatch so a push the batch itself triggers (rule fire,
+    // recovery, terminate) opens its own fresh window.
+    _previousShadowText = null;
     if (delta == null) return; // pure echo of our own push
     debugLastDeltas = [delta];
     controller.imeEdit(() => _processBatch([delta]));
@@ -1151,6 +1185,20 @@ class ImeService extends ChangeNotifier
   /// window — through the choke point when the shadow reported composition.
   /// [reason] is both the drop class the inspector reports and the
   /// termination reason when composing was live.
+  ///
+  /// Web caveat (day-15/18 drip row, §web fallback / the v2 Safari scar):
+  /// the recovery push always carries `composing: TextRange.empty`
+  /// ([ImeWindow.toValue]'s default), but `setEditingState` does not make
+  /// the BROWSER abandon a live DOM composition — there is no web analogue
+  /// of the Android connection restart below. A recovery push landing
+  /// mid-browser-composition leaves the engine's composition bookkeeping
+  /// straddling the new (possibly shorter) text, which can surface
+  /// downstream as a `TextEditingValue.fromJSON` range assert when the
+  /// engine reports composing past the text end. Narrowing the
+  /// previous-shadow drop ([updateEditingValue]) removed the known trigger
+  /// (recovery firing on a live dead-key commit); making web recovery
+  /// composition-safe is engine-behavior work, deferred to the day-15/18
+  /// Safari/web polish pass rather than speculatively coded here.
   void _recoverAuthoritative(String reason) {
     debugLastDropReason = reason;
     if (_shadowComposing) {

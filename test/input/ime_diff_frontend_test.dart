@@ -428,6 +428,73 @@ void main() {
       expect(controller.document.blockById('a')!.plainText, 'hello!x');
     });
 
+    test('retype-what-you-just-deleted is NOT the pre-push race: once a '
+        'post-push snapshot has been accepted the race window is closed, '
+        'and a commit matching the replaced text lands as input', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      // Cycle 1: Option+E marks the accent, E commits é (the dead-key
+      // shape — the easiest way to produce the signature, not the cause).
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue('. é', cursor: 3);
+      expect(controller.document.blockById('a')!.plainText, 'é');
+
+      // Hardware backspace: an external edit, clause (a) push of '. ' —
+      // the replaced text '. é' arms the previous-shadow drop.
+      controller.backspace();
+      expect(shadow().text, '. ');
+
+      // Option+E: the marked accent is accepted against the pushed window.
+      // An accepted post-push snapshot proves the engine is working from
+      // the fresh window — the pre-push race window is now closed.
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.composing, isNotNull);
+
+      // E: the commit's text equals the pre-backspace '. é' — the drop's
+      // false-positive signature. It is the user retyping what they just
+      // deleted, never the stale race.
+      sendValue('. é', cursor: 3);
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'é',
+        reason: 'the recommit of just-deleted text is input, not the race',
+      );
+      expect(controller.composing, isNull);
+      expect(service.debugLastDropReason, isNot('staleSnapshot'));
+    });
+
+    test('a stale-shaped snapshot carrying a live composing region is fresh '
+        'marked text, never the race: a non-terminate push only happens '
+        'with no live composition, so the replaced window was '
+        'composing-free', () {
+      build([para('a', '´')], selection: caret('a', 1));
+      expect(shadow().text, '. ´');
+
+      // External backspace deletes the stray ´: push of '. ', replaced
+      // text '. ´' arms the drop.
+      controller.backspace();
+      expect(shadow().text, '. ');
+
+      // Option+E immediately: the FIRST post-push snapshot matches the
+      // replaced text exactly but carries a fresh composition — an
+      // in-flight stale snapshot cannot, so it must not be dropped
+      // (dropping it severs the browser's live composition).
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+
+      expect(controller.document.blockById('a')!.plainText, '´');
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+      );
+      expect(service.debugLastDropReason, isNot('staleSnapshot'));
+
+      // The commit completes the dead-key cycle.
+      sendValue('. é', cursor: 3);
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+    });
+
     test('an out-of-range engine composing region is sanitized to empty — '
         'never a RangeError out of the shadow (the synthesis boundary is '
         'the trust boundary)', () {
@@ -691,6 +758,44 @@ void main() {
       // The next plain keystroke lands normally.
       sendValue('. éx', cursor: 4);
       expect(controller.document.blockById('a')!.plainText, 'éx');
+    });
+
+    test('dead-key double cycle (the day-8 web bug): compose+commit é, '
+        'hardware backspace, compose+commit é again — the second commit '
+        'lands and plain typing afterwards still works', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      // Cycle 1.
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue('. é', cursor: 3);
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+
+      // Hardware backspace removes the é (an external edit + push).
+      controller.backspace();
+      expect(controller.document.blockById('a')!.plainText, '');
+      expect(shadow().text, '. ');
+
+      // Cycle 2: identical keystrokes — the commit snapshot's text equals
+      // the text the backspace push replaced, the drop's false-positive
+      // signature.
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+        reason: 'the marked accent is composing — underlined, not committed',
+      );
+      sendValue('. é', cursor: 3);
+
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+
+      // Typing afterwards must not "get funky": the shadow and the engine
+      // agree, so plain keystrokes land as ordinary insertions.
+      sendValue('. éx', cursor: 4);
+      expect(controller.document.blockById('a')!.plainText, 'éx');
+      sendValue('. éxy', cursor: 5);
+      expect(controller.document.blockById('a')!.plainText, 'éxy');
     });
   });
 
