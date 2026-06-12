@@ -1,29 +1,31 @@
-import 'package:flutter/widgets.dart';
-
+import '../model/doc_selection.dart';
 import '../model/document.dart';
 import 'edit_operation.dart';
 
 /// A transaction is one logical edit: a list of operations + the desired
 /// selection state after the edit is applied.
 ///
-/// The controller creates a transaction from a TextField diff, runs it
-/// through input rules (which may transform it), then applies it to the
-/// document.
+/// Package-private as surface hygiene — the public escape hatch is
+/// `controller.apply(List<EditOperation>)`; a transaction is just the
+/// committed batch record.
 class Transaction {
   Transaction({required this.operations, this.selectionAfter});
 
   final List<EditOperation> operations;
 
-  /// The TextField selection to restore after this transaction is applied.
+  /// The selection to restore after this transaction is applied.
   /// If null, the controller keeps the current selection.
-  final TextSelection? selectionAfter;
+  final DocSelection? selectionAfter;
 
-  /// Apply all operations sequentially to [doc], returning the new document.
-  /// Generic on [B] so the document's block type parameter is preserved.
-  Document<B> apply<B>(Document<B> doc) {
+  /// Apply all operations sequentially to [doc], returning the new document,
+  /// or null if any operation rejects (gone id, out-of-bounds offset, failed
+  /// gate) — the whole batch aborts, never a partial document.
+  Document? apply(Document doc, EditContext ctx) {
     var result = doc;
     for (final op in operations) {
-      result = op.apply(result);
+      final next = op.apply(result, ctx);
+      if (next == null) return null;
+      result = next;
     }
     return result;
   }

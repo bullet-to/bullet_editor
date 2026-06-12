@@ -9,12 +9,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('Hello')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('World')],
         ),
       ]);
@@ -25,10 +25,10 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('Hello '),
-            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment('bold', {InlineStyleKeys.bold}),
             const StyledSegment(' text'),
           ],
         ),
@@ -49,9 +49,9 @@ void main() {
       final segments = doc.blocks[0].segments;
       expect(segments.length, 3);
       expect(segments[0].text, 'Hello ');
-      expect(segments[0].styles, <InlineStyle>{});
+      expect(segments[0].styles, <Object>{});
       expect(segments[1].text, 'bold');
-      expect(segments[1].styles, {InlineStyle.bold});
+      expect(segments[1].styles, {InlineStyleKeys.bold});
       expect(segments[2].text, ' text');
     });
 
@@ -59,7 +59,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.h1,
+          blockType: HeadingKeys.h1,
           segments: [const StyledSegment('Hello')],
         ),
       ]);
@@ -70,7 +70,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('Item')],
         ),
       ]);
@@ -80,14 +80,14 @@ void main() {
     test('decode H1', () {
       final doc = codec.decode('# Hello');
       expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].blockType, HeadingKeys.h1);
       expect(doc.blocks[0].plainText, 'Hello');
     });
 
     test('decode list item', () {
       final doc = codec.decode('- Item');
       expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].blockType, ListItemKeys.type);
       expect(doc.blocks[0].plainText, 'Item');
     });
 
@@ -95,19 +95,19 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.h1,
+          blockType: HeadingKeys.h1,
           segments: [
             const StyledSegment('Hello '),
-            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment('bold', {InlineStyleKeys.bold}),
           ],
         ),
       ]);
       final decoded = codec.decode(codec.encode(doc));
-      expect(decoded.blocks[0].blockType, BlockType.h1);
+      expect(decoded.blocks[0].blockType, HeadingKeys.h1);
       expect(decoded.blocks[0].plainText, 'Hello bold');
       expect(
         decoded.blocks[0].segments.any(
-          (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold),
+          (s) => s.text == 'bold' && s.styles.contains(InlineStyleKeys.bold),
         ),
         isTrue,
       );
@@ -117,12 +117,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('parent')],
           children: [
             TextBlock(
               id: 'b',
-              blockType: BlockType.listItem,
+              blockType: ListItemKeys.type,
               segments: [const StyledSegment('child')],
             ),
           ],
@@ -134,10 +134,10 @@ void main() {
     test('decode nested list items', () {
       final doc = codec.decode('- parent\n  - child');
       expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].blockType, ListItemKeys.type);
       expect(doc.blocks[0].plainText, 'parent');
       expect(doc.blocks[0].children.length, 1);
-      expect(doc.blocks[0].children[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].children[0].blockType, ListItemKeys.type);
       expect(doc.blocks[0].children[0].plainText, 'child');
     });
 
@@ -145,16 +145,16 @@ void main() {
       final original = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('Some '),
-            const StyledSegment('bold', {InlineStyle.bold}),
+            const StyledSegment('bold', {InlineStyleKeys.bold}),
             const StyledSegment(' and normal'),
           ],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('Second paragraph')],
         ),
       ]);
@@ -167,7 +167,7 @@ void main() {
       expect(decoded.blocks[1].plainText, 'Second paragraph');
       expect(
         decoded.blocks[0].segments.any(
-          (s) => s.text == 'bold' && s.styles.contains(InlineStyle.bold),
+          (s) => s.text == 'bold' && s.styles.contains(InlineStyleKeys.bold),
         ),
         isTrue,
       );
@@ -177,10 +177,10 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('normal '),
-            const StyledSegment('italic', {InlineStyle.italic}),
+            const StyledSegment('italic', {InlineStyleKeys.italic}),
             const StyledSegment(' text'),
           ],
         ),
@@ -192,7 +192,8 @@ void main() {
       final doc = codec.decode('normal *italic* text');
       expect(
         doc.blocks[0].segments.any(
-          (s) => s.text == 'italic' && s.styles.contains(InlineStyle.italic),
+          (s) =>
+              s.text == 'italic' && s.styles.contains(InlineStyleKeys.italic),
         ),
         isTrue,
       );
@@ -202,10 +203,10 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('normal '),
-            const StyledSegment('strike', {InlineStyle.strikethrough}),
+            const StyledSegment('strike', {InlineStyleKeys.strikethrough}),
             const StyledSegment(' text'),
           ],
         ),
@@ -219,7 +220,7 @@ void main() {
         doc.blocks[0].segments.any(
           (s) =>
               s.text == 'strike' &&
-              s.styles.contains(InlineStyle.strikethrough),
+              s.styles.contains(InlineStyleKeys.strikethrough),
         ),
         isTrue,
       );
@@ -229,12 +230,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('first')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('second')],
         ),
       ]);
@@ -244,9 +245,9 @@ void main() {
     test('decode numbered list', () {
       final doc = codec.decode('1. first\n2. second');
       expect(doc.blocks.length, 2);
-      expect(doc.blocks[0].blockType, BlockType.numberedList);
+      expect(doc.blocks[0].blockType, NumberedListKeys.type);
       expect(doc.blocks[0].plainText, 'first');
-      expect(doc.blocks[1].blockType, BlockType.numberedList);
+      expect(doc.blocks[1].blockType, NumberedListKeys.type);
       expect(doc.blocks[1].plainText, 'second');
     });
 
@@ -254,13 +255,13 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.taskItem,
+          blockType: TaskItemKeys.type,
           segments: [const StyledSegment('undone')],
           metadata: {'checked': false},
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.taskItem,
+          blockType: TaskItemKeys.type,
           segments: [const StyledSegment('done')],
           metadata: {'checked': true},
         ),
@@ -271,23 +272,23 @@ void main() {
     test('decode task items', () {
       final doc = codec.decode('- [ ] undone\n- [x] done');
       expect(doc.blocks.length, 2);
-      expect(doc.blocks[0].blockType, BlockType.taskItem);
+      expect(doc.blocks[0].blockType, TaskItemKeys.type);
       expect(doc.blocks[0].plainText, 'undone');
       expect(doc.blocks[0].metadata['checked'], false);
-      expect(doc.blocks[1].blockType, BlockType.taskItem);
+      expect(doc.blocks[1].blockType, TaskItemKeys.type);
       expect(doc.blocks[1].plainText, 'done');
       expect(doc.blocks[1].metadata['checked'], true);
     });
 
     test('encode divider', () {
-      final doc = Document([TextBlock(id: 'a', blockType: BlockType.divider)]);
+      final doc = Document([TextBlock(id: 'a', blockType: DividerKeys.type)]);
       expect(codec.encode(doc), '---');
     });
 
     test('decode divider', () {
       final doc = codec.decode('---');
       expect(doc.blocks.length, 1);
-      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].blockType, DividerKeys.type);
       expect(doc.blocks[0].plainText, '');
     });
 
@@ -295,13 +296,13 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('Above')],
         ),
-        TextBlock(id: 'b', blockType: BlockType.divider),
+        TextBlock(id: 'b', blockType: DividerKeys.type),
         TextBlock(
           id: 'c',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('Below')],
         ),
       ]);
@@ -309,29 +310,29 @@ void main() {
       expect(md, 'Above\n\n---\n\nBelow');
       final decoded = codec.decode(md);
       expect(decoded.blocks.length, 3);
-      expect(decoded.blocks[0].blockType, BlockType.paragraph);
+      expect(decoded.blocks[0].blockType, ParagraphKeys.type);
       expect(decoded.blocks[0].plainText, 'Above');
-      expect(decoded.blocks[1].blockType, BlockType.divider);
+      expect(decoded.blocks[1].blockType, DividerKeys.type);
       expect(decoded.blocks[1].plainText, '');
-      expect(decoded.blocks[2].blockType, BlockType.paragraph);
+      expect(decoded.blocks[2].blockType, ParagraphKeys.type);
       expect(decoded.blocks[2].plainText, 'Below');
     });
 
     test('--- with extra text is not a divider', () {
       final doc = codec.decode('--- extra');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
     });
 
     test('encode link segment', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('Visit '),
             const StyledSegment(
               'Google',
-              {InlineEntityType.link},
+              {InlineEntityKeys.link},
               {'url': 'https://google.com'},
             ),
             const StyledSegment(' today'),
@@ -348,7 +349,7 @@ void main() {
       expect(segs[0].text, 'Visit ');
       expect(segs[0].styles, isEmpty);
       expect(segs[1].text, 'Google');
-      expect(segs[1].styles, {InlineEntityType.link});
+      expect(segs[1].styles, {InlineEntityKeys.link});
       expect(segs[1].attributes['url'], 'https://google.com');
       expect(segs[2].text, ' today');
     });
@@ -357,12 +358,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
-            const StyledSegment('Click ', {InlineStyle.bold}),
+            const StyledSegment('Click ', {InlineStyleKeys.bold}),
             const StyledSegment(
               'here',
-              {InlineEntityType.link},
+              {InlineEntityKeys.link},
               {'url': 'https://example.com'},
             ),
           ],
@@ -375,7 +376,7 @@ void main() {
         decoded.blocks[0].segments.any(
           (s) =>
               s.text == 'here' &&
-              s.styles.contains(InlineEntityType.link) &&
+              s.styles.contains(InlineEntityKeys.link) &&
               s.attributes['url'] == 'https://example.com',
         ),
         isTrue,
@@ -397,17 +398,17 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('first')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('second')],
         ),
         TextBlock(
           id: 'c',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('paragraph after')],
         ),
       ]);
@@ -422,12 +423,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('first')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('second')],
         ),
       ]);
@@ -439,11 +440,14 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
-            const StyledSegment('1 ', {InlineStyle.bold}),
-            const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
-            const StyledSegment(' 3', {InlineStyle.bold}),
+            const StyledSegment('1 ', {InlineStyleKeys.bold}),
+            const StyledSegment('2', {
+              InlineStyleKeys.bold,
+              InlineStyleKeys.italic,
+            }),
+            const StyledSegment(' 3', {InlineStyleKeys.bold}),
           ],
         ),
       ]);
@@ -456,22 +460,25 @@ void main() {
       // Should produce 3 segments: bold, bold+italic, bold.
       expect(segs.length, 3);
       expect(segs[0].text, '1 ');
-      expect(segs[0].styles, {InlineStyle.bold});
+      expect(segs[0].styles, {InlineStyleKeys.bold});
       expect(segs[1].text, '2');
-      expect(segs[1].styles, {InlineStyle.bold, InlineStyle.italic});
+      expect(segs[1].styles, {InlineStyleKeys.bold, InlineStyleKeys.italic});
       expect(segs[2].text, ' 3');
-      expect(segs[2].styles, {InlineStyle.bold});
+      expect(segs[2].styles, {InlineStyleKeys.bold});
     });
 
     test('round-trip bold span with italic subset', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
-            const StyledSegment('1 ', {InlineStyle.bold}),
-            const StyledSegment('2', {InlineStyle.bold, InlineStyle.italic}),
-            const StyledSegment(' 3', {InlineStyle.bold}),
+            const StyledSegment('1 ', {InlineStyleKeys.bold}),
+            const StyledSegment('2', {
+              InlineStyleKeys.bold,
+              InlineStyleKeys.italic,
+            }),
+            const StyledSegment(' 3', {InlineStyleKeys.bold}),
           ],
         ),
       ]);
@@ -479,9 +486,9 @@ void main() {
       final decoded = codec.decode(md);
       final segs = decoded.blocks[0].segments;
       expect(segs.length, 3);
-      expect(segs[0].styles, {InlineStyle.bold});
-      expect(segs[1].styles, {InlineStyle.bold, InlineStyle.italic});
-      expect(segs[2].styles, {InlineStyle.bold});
+      expect(segs[0].styles, {InlineStyleKeys.bold});
+      expect(segs[1].styles, {InlineStyleKeys.bold, InlineStyleKeys.italic});
+      expect(segs[2].styles, {InlineStyleKeys.bold});
     });
 
     test('encode bold link uses nested delimiters', () {
@@ -489,12 +496,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
             const StyledSegment('plain '),
             const StyledSegment(
               'click',
-              {InlineStyle.bold, InlineEntityType.link},
+              {InlineStyleKeys.bold, InlineEntityKeys.link},
               {'url': 'https://x.com'},
             ),
             const StyledSegment(' more'),
@@ -509,7 +516,7 @@ void main() {
       final segs = doc.blocks[0].segments;
       expect(segs.length, 1);
       expect(segs[0].text, 'text');
-      expect(segs[0].styles, {InlineStyle.bold, InlineStyle.italic});
+      expect(segs[0].styles, {InlineStyleKeys.bold, InlineStyleKeys.italic});
     });
 
     test('encode empty paragraph adds one extra blank line', () {
@@ -519,25 +526,25 @@ void main() {
       final withEmpty = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('above')],
         ),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+        TextBlock(id: 'b', blockType: ParagraphKeys.type, segments: const []),
         TextBlock(
           id: 'c',
-          blockType: BlockType.h2,
+          blockType: HeadingKeys.h2,
           segments: [const StyledSegment('Heading')],
         ),
       ]);
       final without = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('above')],
         ),
         TextBlock(
           id: 'c',
-          blockType: BlockType.h2,
+          blockType: HeadingKeys.h2,
           segments: [const StyledSegment('Heading')],
         ),
       ]);
@@ -576,19 +583,19 @@ void main() {
 
     test('decode H1 with trailing #', () {
       final doc = codec.decode('# foo #');
-      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].blockType, HeadingKeys.h1);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('decode H2 with multiple trailing ##', () {
       final doc = codec.decode('## foo ##');
-      expect(doc.blocks[0].blockType, BlockType.h2);
+      expect(doc.blocks[0].blockType, HeadingKeys.h2);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('decode H3 trailing ### with extra spaces', () {
       final doc = codec.decode('### bar    ###');
-      expect(doc.blocks[0].blockType, BlockType.h3);
+      expect(doc.blocks[0].blockType, HeadingKeys.h3);
       expect(doc.blocks[0].plainText, 'bar');
     });
 
@@ -606,19 +613,19 @@ void main() {
 
     test('decode empty H2 (## alone)', () {
       final doc = codec.decode('##');
-      expect(doc.blocks[0].blockType, BlockType.h2);
+      expect(doc.blocks[0].blockType, HeadingKeys.h2);
       expect(doc.blocks[0].plainText, '');
     });
 
     test('decode empty H1 (# alone)', () {
       final doc = codec.decode('#');
-      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].blockType, HeadingKeys.h1);
       expect(doc.blocks[0].plainText, '');
     });
 
     test('decode ### ### as empty H3', () {
       final doc = codec.decode('### ###');
-      expect(doc.blocks[0].blockType, BlockType.h3);
+      expect(doc.blocks[0].blockType, HeadingKeys.h3);
       expect(doc.blocks[0].plainText, '');
     });
 
@@ -626,15 +633,15 @@ void main() {
 
     test('decode heading with 1-3 leading spaces', () {
       final doc = codec.decode(' # foo');
-      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].blockType, HeadingKeys.h1);
       expect(doc.blocks[0].plainText, 'foo');
 
       final doc2 = codec.decode('  ## bar');
-      expect(doc2.blocks[0].blockType, BlockType.h2);
+      expect(doc2.blocks[0].blockType, HeadingKeys.h2);
       expect(doc2.blocks[0].plainText, 'bar');
 
       final doc3 = codec.decode('   ### baz');
-      expect(doc3.blocks[0].blockType, BlockType.h3);
+      expect(doc3.blocks[0].blockType, HeadingKeys.h3);
       expect(doc3.blocks[0].plainText, 'baz');
     });
 
@@ -642,32 +649,32 @@ void main() {
 
     test('decode *** as divider', () {
       final doc = codec.decode('***');
-      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].blockType, DividerKeys.type);
     });
 
     test('decode ___ as divider', () {
       final doc = codec.decode('___');
-      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].blockType, DividerKeys.type);
     });
 
     test('decode spaced thematic breaks', () {
       final doc = codec.decode('- - -');
-      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].blockType, DividerKeys.type);
 
       final doc2 = codec.decode('*  *  *  *  *');
-      expect(doc2.blocks[0].blockType, BlockType.divider);
+      expect(doc2.blocks[0].blockType, DividerKeys.type);
     });
 
     test('decode long thematic break', () {
       final doc = codec.decode('_____________________________________');
-      expect(doc.blocks[0].blockType, BlockType.divider);
+      expect(doc.blocks[0].blockType, DividerKeys.type);
     });
 
     test('encode divider always produces ---', () {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.divider,
+          blockType: DividerKeys.type,
           segments: [const StyledSegment('')],
         ),
       ]);
@@ -691,13 +698,13 @@ void main() {
 
     test('decode escaped # in heading content', () {
       final doc = codec.decode(r'# foo \#');
-      expect(doc.blocks[0].blockType, BlockType.h1);
+      expect(doc.blocks[0].blockType, HeadingKeys.h1);
       expect(doc.blocks[0].plainText, 'foo #');
     });
 
     test('escaped ## does not create heading', () {
       final doc = codec.decode(r'\## foo');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
       expect(doc.blocks[0].plainText, '## foo');
     });
 
@@ -705,7 +712,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('foo *bar* baz')],
         ),
       ]);
@@ -716,9 +723,9 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
-            const StyledSegment('hello *world*', {InlineStyle.bold}),
+            const StyledSegment('hello *world*', {InlineStyleKeys.bold}),
           ],
         ),
       ]);
@@ -730,7 +737,7 @@ void main() {
       final doc = codec.decode('# foo #');
       final encoded = codec.encode(doc);
       final reDecoded = codec.decode(encoded);
-      expect(reDecoded.blocks[0].blockType, BlockType.h1);
+      expect(reDecoded.blocks[0].blockType, HeadingKeys.h1);
       expect(reDecoded.blocks[0].plainText, 'foo');
     });
 
@@ -738,7 +745,7 @@ void main() {
       final doc = codec.decode(r'\## foo');
       final encoded = codec.encode(doc);
       final reDecoded = codec.decode(encoded);
-      expect(reDecoded.blocks[0].blockType, BlockType.paragraph);
+      expect(reDecoded.blocks[0].blockType, ParagraphKeys.type);
       expect(reDecoded.blocks[0].plainText, '## foo');
     });
 
@@ -746,48 +753,48 @@ void main() {
 
     test('decode H4', () {
       final doc = codec.decode('#### foo');
-      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].blockType, HeadingKeys.h4);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('decode H5', () {
       final doc = codec.decode('##### foo');
-      expect(doc.blocks[0].blockType, BlockType.h5);
+      expect(doc.blocks[0].blockType, HeadingKeys.h5);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('decode H6', () {
       final doc = codec.decode('###### foo');
-      expect(doc.blocks[0].blockType, BlockType.h6);
+      expect(doc.blocks[0].blockType, HeadingKeys.h6);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('encode H4-H6 round-trip', () {
       final md = '#### H4\n\n##### H5\n\n###### H6';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.h4);
-      expect(doc.blocks[1].blockType, BlockType.h5);
-      expect(doc.blocks[2].blockType, BlockType.h6);
+      expect(doc.blocks[0].blockType, HeadingKeys.h4);
+      expect(doc.blocks[1].blockType, HeadingKeys.h5);
+      expect(doc.blocks[2].blockType, HeadingKeys.h6);
       final reEncoded = codec.encode(doc);
       expect(reEncoded, md);
     });
 
     test('empty H4-H6', () {
-      expect(codec.decode('####').blocks[0].blockType, BlockType.h4);
+      expect(codec.decode('####').blocks[0].blockType, HeadingKeys.h4);
       expect(codec.decode('####').blocks[0].plainText, '');
-      expect(codec.decode('#####').blocks[0].blockType, BlockType.h5);
-      expect(codec.decode('######').blocks[0].blockType, BlockType.h6);
+      expect(codec.decode('#####').blocks[0].blockType, HeadingKeys.h5);
+      expect(codec.decode('######').blocks[0].blockType, HeadingKeys.h6);
     });
 
     test('H4 trailing # stripping', () {
       final doc = codec.decode('#### foo ####');
-      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].blockType, HeadingKeys.h4);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('H4 with leading spaces', () {
       final doc = codec.decode('  #### foo');
-      expect(doc.blocks[0].blockType, BlockType.h4);
+      expect(doc.blocks[0].blockType, HeadingKeys.h4);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
@@ -797,14 +804,14 @@ void main() {
       final doc = codec.decode('foo `bar` baz');
       expect(doc.blocks[0].segments.length, 3);
       expect(doc.blocks[0].segments[1].text, 'bar');
-      expect(doc.blocks[0].segments[1].styles, {InlineStyle.code});
+      expect(doc.blocks[0].segments[1].styles, {InlineStyleKeys.code});
     });
 
     test('inline code content is literal (no italic)', () {
       final doc = codec.decode('`*foo*`');
       expect(doc.blocks[0].segments.length, 1);
       expect(doc.blocks[0].segments[0].text, '*foo*');
-      expect(doc.blocks[0].segments[0].styles, {InlineStyle.code});
+      expect(doc.blocks[0].segments[0].styles, {InlineStyleKeys.code});
     });
 
     test('encode inline code round-trip', () {
@@ -817,7 +824,7 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('foo ` bar')],
         ),
       ]);
@@ -829,7 +836,7 @@ void main() {
       final encoded = codec.encode(doc);
       final reDecoded = codec.decode(encoded);
       expect(reDecoded.blocks[0].segments[0].text, 'hello world');
-      expect(reDecoded.blocks[0].segments[0].styles, {InlineStyle.code});
+      expect(reDecoded.blocks[0].segments[0].styles, {InlineStyleKeys.code});
     });
 
     // --- Autolinks ---
@@ -838,7 +845,7 @@ void main() {
       final doc = codec.decode('see <https://example.com> here');
       expect(doc.blocks[0].segments.length, 3);
       expect(doc.blocks[0].segments[1].text, 'https://example.com');
-      expect(doc.blocks[0].segments[1].styles, {InlineEntityType.link});
+      expect(doc.blocks[0].segments[1].styles, {InlineEntityKeys.link});
       expect(
         doc.blocks[0].segments[1].attributes['url'],
         'https://example.com',
@@ -849,7 +856,7 @@ void main() {
       final doc = codec.decode('visit https://flutter.dev today');
       expect(doc.blocks[0].segments.length, 3);
       expect(doc.blocks[0].segments[1].text, 'https://flutter.dev');
-      expect(doc.blocks[0].segments[1].styles, {InlineEntityType.link});
+      expect(doc.blocks[0].segments[1].styles, {InlineEntityKeys.link});
       expect(
         doc.blocks[0].segments[1].attributes['url'],
         'https://flutter.dev',
@@ -875,14 +882,14 @@ void main() {
 
     test('mixed text with image syntax stays paragraph', () {
       final doc = codec.decode('before ![img](url) after');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
     });
 
     // --- Block quotes ---
 
     test('decode block quote', () {
       final doc = codec.decode('> Hello world');
-      expect(doc.blocks[0].blockType, BlockType.blockQuote);
+      expect(doc.blocks[0].blockType, BlockQuoteKeys.type);
       expect(doc.blocks[0].plainText, 'Hello world');
     });
 
@@ -895,18 +902,18 @@ void main() {
     test('block quote with indented children', () {
       final md = '> Parent quote\n  - Child item';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.blockQuote);
+      expect(doc.blocks[0].blockType, BlockQuoteKeys.type);
       expect(doc.blocks[0].plainText, 'Parent quote');
       expect(doc.blocks[0].children.length, 1);
-      expect(doc.blocks[0].children[0].blockType, BlockType.listItem);
+      expect(doc.blocks[0].children[0].blockType, ListItemKeys.type);
       expect(doc.blocks[0].children[0].plainText, 'Child item');
     });
 
     test('consecutive block quotes use tight separator', () {
       final doc = codec.decode('> First\n> Second');
       expect(doc.blocks.length, 2);
-      expect(doc.blocks[0].blockType, BlockType.blockQuote);
-      expect(doc.blocks[1].blockType, BlockType.blockQuote);
+      expect(doc.blocks[0].blockType, BlockQuoteKeys.type);
+      expect(doc.blocks[1].blockType, BlockQuoteKeys.type);
     });
 
     test('block quote round-trip with children', () {
@@ -914,7 +921,7 @@ void main() {
       final doc = codec.decode(md);
       final encoded = codec.encode(doc);
       final reDecoded = codec.decode(encoded);
-      expect(reDecoded.blocks[0].blockType, BlockType.blockQuote);
+      expect(reDecoded.blocks[0].blockType, BlockQuoteKeys.type);
       expect(reDecoded.blocks[0].children.length, 1);
     });
 
@@ -923,14 +930,14 @@ void main() {
     test('decode fenced code block', () {
       final md = '```\nfoo\nbar\n```';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].blockType, CodeBlockKeys.type);
       expect(doc.blocks[0].plainText, 'foo\nbar');
     });
 
     test('decode fenced code block with language', () {
       final md = '```dart\nvoid main() {}\n```';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].blockType, CodeBlockKeys.type);
       expect(doc.blocks[0].metadata['language'], 'dart');
       expect(doc.blocks[0].plainText, 'void main() {}');
     });
@@ -938,7 +945,7 @@ void main() {
     test('fenced code block preserves blank lines inside', () {
       final md = '```\nline1\n\nline3\n```';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].blockType, CodeBlockKeys.type);
       expect(doc.blocks[0].plainText, 'line1\n\nline3');
     });
 
@@ -960,14 +967,14 @@ void main() {
     test('tilde fenced code block', () {
       final md = '~~~\nfoo\n~~~';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].blockType, CodeBlockKeys.type);
       expect(doc.blocks[0].plainText, 'foo');
     });
 
     test('unclosed fence includes rest as content', () {
       final md = '```\nfoo\nbar';
       final doc = codec.decode(md);
-      expect(doc.blocks[0].blockType, BlockType.codeBlock);
+      expect(doc.blocks[0].blockType, CodeBlockKeys.type);
       expect(doc.blocks[0].plainText, 'foo\nbar');
     });
 
@@ -975,9 +982,9 @@ void main() {
       final md = 'before\n\n```\ncode\n```\n\nafter';
       final doc = codec.decode(md);
       expect(doc.blocks.length, 3);
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
-      expect(doc.blocks[1].blockType, BlockType.codeBlock);
-      expect(doc.blocks[2].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
+      expect(doc.blocks[1].blockType, CodeBlockKeys.type);
+      expect(doc.blocks[2].blockType, ParagraphKeys.type);
     });
 
     // -------------------------------------------------------------------------
@@ -1024,7 +1031,7 @@ void main() {
       test('encode: \\n in block content → two trailing spaces + newline', () {
         final block = TextBlock(
           id: 'b1',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [StyledSegment('line one\nline two')],
         );
         final doc = Document([block]);
@@ -1035,7 +1042,7 @@ void main() {
       test('encode: multiple \\n in content', () {
         final block = TextBlock(
           id: 'b1',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [StyledSegment('a\nb\nc')],
         );
         final doc = Document([block]);
@@ -1046,7 +1053,7 @@ void main() {
       test('round-trip: hard break survives encode→decode', () {
         final block = TextBlock(
           id: 'b1',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [StyledSegment('hello\nworld')],
         );
         final doc = Document([block]);
@@ -1059,9 +1066,9 @@ void main() {
       test('round-trip: hard break with inline styles', () {
         final block = TextBlock(
           id: 'b1',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [
-            StyledSegment('bold line', {InlineStyle.bold}),
+            StyledSegment('bold line', {InlineStyleKeys.bold}),
             StyledSegment('\nplain line'),
           ],
         );
@@ -1077,7 +1084,7 @@ void main() {
         () {
           final block = TextBlock(
             id: 'b1',
-            blockType: BlockType.codeBlock,
+            blockType: CodeBlockKeys.type,
             segments: [StyledSegment('line 1\nline 2')],
             metadata: const {'language': 'dart'},
           );
@@ -1093,7 +1100,7 @@ void main() {
       test('indented list with no parent decodes as root-level', () {
         final doc = codec.decode('  - Parent\n    - Child');
         expect(doc.blocks.length, 1);
-        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].blockType, ListItemKeys.type);
         expect(doc.blocks[0].plainText, 'Parent');
         expect(doc.blocks[0].children.length, 1);
         expect(doc.blocks[0].children[0].plainText, 'Child');
@@ -1104,8 +1111,8 @@ void main() {
       test('heading followed by indented list keeps them as siblings', () {
         final doc = codec.decode('# Header\n\n  - Item');
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.h1);
-        expect(doc.blocks[1].blockType, BlockType.listItem);
+        expect(doc.blocks[0].blockType, HeadingKeys.h1);
+        expect(doc.blocks[1].blockType, ListItemKeys.type);
         expect(doc.depthOf(0), 0);
         expect(doc.depthOf(1), 0);
       });
@@ -1135,12 +1142,12 @@ void main() {
           '  - Bullet\n  1. Numbered\n    - [ ] Task child',
         );
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].blockType, ListItemKeys.type);
         expect(doc.blocks[0].plainText, 'Bullet');
-        expect(doc.blocks[1].blockType, BlockType.numberedList);
+        expect(doc.blocks[1].blockType, NumberedListKeys.type);
         expect(doc.blocks[1].plainText, 'Numbered');
         expect(doc.blocks[1].children.length, 1);
-        expect(doc.blocks[1].children[0].blockType, BlockType.taskItem);
+        expect(doc.blocks[1].children[0].blockType, TaskItemKeys.type);
       });
 
       test('heading followed by odd-space-indented siblings', () {
@@ -1148,7 +1155,7 @@ void main() {
           '# Header\n\n   - One\n   - Two\n      - Child',
         );
         expect(doc.blocks.length, 3, reason: 'Header, One, Two as roots');
-        expect(doc.blocks[0].blockType, BlockType.h1);
+        expect(doc.blocks[0].blockType, HeadingKeys.h1);
         expect(doc.blocks[1].plainText, 'One');
         expect(doc.blocks[1].children, isEmpty);
         expect(doc.blocks[2].plainText, 'Two');
@@ -1212,16 +1219,16 @@ void main() {
       test('* marker decodes as bullet list', () {
         final doc = codec.decode('* Alpha\n* Beta');
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].blockType, ListItemKeys.type);
         expect(doc.blocks[0].plainText, 'Alpha');
-        expect(doc.blocks[1].blockType, BlockType.listItem);
+        expect(doc.blocks[1].blockType, ListItemKeys.type);
         expect(doc.blocks[1].plainText, 'Beta');
       });
 
       test('+ marker decodes as bullet list', () {
         final doc = codec.decode('+ Alpha\n+ Beta');
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.listItem);
+        expect(doc.blocks[0].blockType, ListItemKeys.type);
         expect(doc.blocks[0].plainText, 'Alpha');
       });
 
@@ -1236,12 +1243,12 @@ void main() {
       test('* task items decode correctly', () {
         final doc = codec.decode('* [x] Done\n* [ ] Todo');
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.taskItem);
+        expect(doc.blocks[0].blockType, TaskItemKeys.type);
         expect(doc.blocks[0].plainText, 'Done');
-        expect(doc.blocks[0].metadata[kCheckedKey], true);
-        expect(doc.blocks[1].blockType, BlockType.taskItem);
+        expect(doc.blocks[0].metadata[TaskItemKeys.checked], true);
+        expect(doc.blocks[1].blockType, TaskItemKeys.type);
         expect(doc.blocks[1].plainText, 'Todo');
-        expect(doc.blocks[1].metadata[kCheckedKey], false);
+        expect(doc.blocks[1].metadata[TaskItemKeys.checked], false);
       });
 
       test('encoding always uses - marker', () {
@@ -1255,9 +1262,9 @@ void main() {
       test(') delimiter decodes as numbered list', () {
         final doc = codec.decode('1) First\n2) Second');
         expect(doc.blocks.length, 2);
-        expect(doc.blocks[0].blockType, BlockType.numberedList);
+        expect(doc.blocks[0].blockType, NumberedListKeys.type);
         expect(doc.blocks[0].plainText, 'First');
-        expect(doc.blocks[1].blockType, BlockType.numberedList);
+        expect(doc.blocks[1].blockType, NumberedListKeys.type);
         expect(doc.blocks[1].plainText, 'Second');
       });
 

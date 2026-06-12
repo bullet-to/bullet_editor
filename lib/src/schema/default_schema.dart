@@ -7,8 +7,11 @@ import '../codec/inline_codec.dart';
 import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
-import '../model/document.dart';
 import '../model/inline_entity.dart';
+import '../view/components/default_text_component.dart';
+import '../view/components/divider_block.dart';
+import '../view/components/image_block.dart';
+import '../view/standard_prefixes.dart';
 import 'block_def.dart';
 import 'editor_schema.dart';
 import 'inline_entity_def.dart';
@@ -38,12 +41,14 @@ class HeadingStyle {
   final FontWeight? fontWeight;
 }
 
-// Note: built-in input rules now use schema.isListLike() directly,
-// so no standalone isListLike function is needed here.
-
 // ---------------------------------------------------------------------------
 // Blocks — built-in block definitions for assembling a custom schema.
 // ---------------------------------------------------------------------------
+
+/// CommonMark thematic break pattern: 3+ of the same char (`-`, `*`, `_`),
+/// optionally interspersed with spaces/tabs, nothing else on the line.
+/// Leading spaces are already stripped by `_decodeBlock`.
+final _thematicBreakPattern = RegExp(r'^([-*_])[ \t]*(\1[ \t]*){2,}$');
 
 /// Built-in [BlockDef] factories. Use these to hand-pick which blocks your
 /// schema includes, or to override a single built-in while keeping the rest.
@@ -51,18 +56,13 @@ class HeadingStyle {
 /// ```dart
 /// EditorSchema(
 ///   blocks: {
-///     BlockType.h1: Blocks.h1(),
-///     BlockType.paragraph: Blocks.paragraph(),
-///     myCustomType: BlockDef(label: 'Custom', ...),
+///     HeadingKeys.h1: Blocks.h1(),
+///     ParagraphKeys.type: Blocks.paragraph(),
+///     'myCustomType': BlockDef(label: 'Custom', ...),
 ///   },
 ///   ...
 /// );
 /// ```
-/// CommonMark thematic break pattern: 3+ of the same char (`-`, `*`, `_`),
-/// optionally interspersed with spaces/tabs, nothing else on the line.
-/// Leading spaces are already stripped by `_decodeBlock`.
-final _thematicBreakPattern = RegExp(r'^([-*_])[ \t]*(\1[ \t]*){2,}$');
-
 abstract final class Blocks {
   /// Escape trailing `#` in heading content that `_stripTrailingHashes`
   /// would strip on re-decode. E.g. content `foo ###` → `foo \###`.
@@ -98,215 +98,118 @@ abstract final class Blocks {
     return s;
   }
 
-  /// Heading 6.
-  static BlockDef h6({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
+  /// Shared heading definition. Level-specific defaults live in the public
+  /// h1–h6 factories.
+  static BlockDef _heading({
+    required int level,
+    required String key,
+    required double defaultScale,
+    required double defaultLineHeight,
+    required double defaultSpacingBefore,
+    required FontWeight defaultWeight,
+    HeadingStyle? style,
+  }) {
+    final hashes = '#' * level;
     return BlockDef(
-      label: 'Heading 6',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 0.4,
+      label: 'Heading $level',
+      headingLevel: level,
+      backspaceAtStart: BackspaceAtStartPolicy.convertToDefault,
+      spacingBefore: style?.spacingBefore ?? defaultSpacingBefore,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
       baseStyle: (base) {
         final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 0.85);
+            (base?.fontSize ?? kFallbackFontSize) *
+            (style?.scale ?? defaultScale);
         return (base ?? const TextStyle()).copyWith(
           fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.w600,
-          height: style?.lineHeight ?? 1.3,
+          fontWeight: style?.fontWeight ?? defaultWeight,
+          height: style?.lineHeight ?? defaultLineHeight,
         );
       },
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) =>
-              '${ctx.indent}###### ${_escapeTrailingHashes(ctx.content)}',
+              '${ctx.indent}$hashes ${_escapeTrailingHashes(ctx.content)}',
           decode: (line) {
-            if (line == '######' || line.startsWith('###### ')) {
-              final raw = line.length <= 7 ? '' : line.substring(7);
+            if (line == hashes || line.startsWith('$hashes ')) {
+              final raw = line.length <= hashes.length + 1
+                  ? ''
+                  : line.substring(hashes.length + 1);
               return DecodeMatch(_stripTrailingHashes(raw));
             }
             return null;
           },
         ),
       },
-      inputRules: [
-        PrefixBlockRule('######', BlockType.h6),
-        HeadingBackspaceRule(),
-      ],
-    );
-  }
-
-  /// Heading 5.
-  static BlockDef h5({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
-    return BlockDef(
-      label: 'Heading 5',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 0.4,
-      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      baseStyle: (base) {
-        final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 0.875);
-        return (base ?? const TextStyle()).copyWith(
-          fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.w600,
-          height: style?.lineHeight ?? 1.3,
-        );
-      },
-      codecs: {
-        Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}##### ${_escapeTrailingHashes(ctx.content)}',
-          decode: (line) {
-            if (line == '#####' || line.startsWith('##### ')) {
-              final raw = line.length <= 6 ? '' : line.substring(6);
-              return DecodeMatch(_stripTrailingHashes(raw));
-            }
-            return null;
-          },
-        ),
-      },
-      inputRules: [
-        PrefixBlockRule('#####', BlockType.h5),
-        HeadingBackspaceRule(),
-      ],
-    );
-  }
-
-  /// Heading 4.
-  static BlockDef h4({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
-    return BlockDef(
-      label: 'Heading 4',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 0.5,
-      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      baseStyle: (base) {
-        final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 1.0);
-        return (base ?? const TextStyle()).copyWith(
-          fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.w600,
-          height: style?.lineHeight ?? 1.3,
-        );
-      },
-      codecs: {
-        Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}#### ${_escapeTrailingHashes(ctx.content)}',
-          decode: (line) {
-            if (line == '####' || line.startsWith('#### ')) {
-              final raw = line.length <= 5 ? '' : line.substring(5);
-              return DecodeMatch(_stripTrailingHashes(raw));
-            }
-            return null;
-          },
-        ),
-      },
-      inputRules: [
-        PrefixBlockRule('####', BlockType.h4),
-        HeadingBackspaceRule(),
-      ],
-    );
-  }
-
-  /// Heading 3.
-  static BlockDef h3({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
-    return BlockDef(
-      label: 'Heading 3',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 0.6,
-      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      baseStyle: (base) {
-        final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 1.125);
-        return (base ?? const TextStyle()).copyWith(
-          fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.w600,
-          height: style?.lineHeight ?? 1.3,
-        );
-      },
-      codecs: {
-        Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}### ${_escapeTrailingHashes(ctx.content)}',
-          decode: (line) {
-            if (line == '###' || line.startsWith('### ')) {
-              final raw = line.length <= 4 ? '' : line.substring(4);
-              return DecodeMatch(_stripTrailingHashes(raw));
-            }
-            return null;
-          },
-        ),
-      },
-      inputRules: [
-        PrefixBlockRule('###', BlockType.h3),
-        HeadingBackspaceRule(),
-      ],
-    );
-  }
-
-  /// Heading 2.
-  static BlockDef h2({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
-    return BlockDef(
-      label: 'Heading 2',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 0.8,
-      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      baseStyle: (base) {
-        final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 1.375);
-        return (base ?? const TextStyle()).copyWith(
-          fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.bold,
-          height: style?.lineHeight ?? 1.4,
-        );
-      },
-      codecs: {
-        Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}## ${_escapeTrailingHashes(ctx.content)}',
-          decode: (line) {
-            if (line == '##' || line.startsWith('## ')) {
-              final raw = line.length <= 3 ? '' : line.substring(3);
-              return DecodeMatch(_stripTrailingHashes(raw));
-            }
-            return null;
-          },
-        ),
-      },
-      inputRules: [PrefixBlockRule('##', BlockType.h2), HeadingBackspaceRule()],
+      inputRules: [PrefixBlockRule(hashes, key)],
     );
   }
 
   /// Heading 1.
-  static BlockDef h1({HeadingStyle? style, double prefixWidthFactor = 1.5}) {
-    return BlockDef(
-      label: 'Heading 1',
-      isHeading: true,
-      spacingBefore: style?.spacingBefore ?? 1.0,
-      policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      baseStyle: (base) {
-        final size =
-            (base?.fontSize ?? kFallbackFontSize) * (style?.scale ?? 1.75);
-        return (base ?? const TextStyle()).copyWith(
-          fontSize: size,
-          fontWeight: style?.fontWeight ?? FontWeight.bold,
-          height: style?.lineHeight ?? 1.4,
-        );
-      },
-      codecs: {
-        Format.markdown: BlockCodec(
-          encode: (block, ctx) =>
-              '${ctx.indent}# ${_escapeTrailingHashes(ctx.content)}',
-          decode: (line) {
-            if (line == '#' || line.startsWith('# ')) {
-              final raw = line.length <= 2 ? '' : line.substring(2);
-              return DecodeMatch(_stripTrailingHashes(raw));
-            }
-            return null;
-          },
-        ),
-      },
-      inputRules: [HeadingRule(), HeadingBackspaceRule()],
-    );
-  }
+  static BlockDef h1({HeadingStyle? style}) => _heading(
+    level: 1,
+    key: HeadingKeys.h1,
+    defaultScale: 1.75,
+    defaultLineHeight: 1.4,
+    defaultSpacingBefore: 1.2,
+    defaultWeight: FontWeight.bold,
+    style: style,
+  );
+
+  /// Heading 2.
+  static BlockDef h2({HeadingStyle? style}) => _heading(
+    level: 2,
+    key: HeadingKeys.h2,
+    defaultScale: 1.375,
+    defaultLineHeight: 1.4,
+    defaultSpacingBefore: 1.0,
+    defaultWeight: FontWeight.bold,
+    style: style,
+  );
+
+  /// Heading 3.
+  static BlockDef h3({HeadingStyle? style}) => _heading(
+    level: 3,
+    key: HeadingKeys.h3,
+    defaultScale: 1.125,
+    defaultLineHeight: 1.3,
+    defaultSpacingBefore: 0.8,
+    defaultWeight: FontWeight.w600,
+    style: style,
+  );
+
+  /// Heading 4.
+  static BlockDef h4({HeadingStyle? style}) => _heading(
+    level: 4,
+    key: HeadingKeys.h4,
+    defaultScale: 1.0,
+    defaultLineHeight: 1.3,
+    defaultSpacingBefore: 0.6,
+    defaultWeight: FontWeight.w600,
+    style: style,
+  );
+
+  /// Heading 5.
+  static BlockDef h5({HeadingStyle? style}) => _heading(
+    level: 5,
+    key: HeadingKeys.h5,
+    defaultScale: 0.875,
+    defaultLineHeight: 1.3,
+    defaultSpacingBefore: 0.6,
+    defaultWeight: FontWeight.w600,
+    style: style,
+  );
+
+  /// Heading 6.
+  static BlockDef h6({HeadingStyle? style}) => _heading(
+    level: 6,
+    key: HeadingKeys.h6,
+    defaultScale: 0.85,
+    defaultLineHeight: 1.3,
+    defaultSpacingBefore: 0.6,
+    defaultWeight: FontWeight.w600,
+    style: style,
+  );
 
   /// Task / checkbox item.
   static BlockDef taskItem({
@@ -320,14 +223,20 @@ abstract final class Blocks {
         canHaveChildren: true,
         maxDepth: 6,
       ),
-      isListLike: true,
-      splitInheritsType: true,
-      prefixBuilder: (doc, i, block, style) =>
-          _taskPrefix(doc, i, block, style, prefixWidthFactor, accentColor),
+      split: SplitPolicy.listLike,
+      backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
+      metadataKeys: const {TaskItemKeys.checked},
+      newBlockMetadata: (splitBlock) => {TaskItemKeys.checked: false},
+      prefixBuilder: (block, gutter, style) => taskPrefix(
+        block,
+        style,
+        prefixWidthFactor: prefixWidthFactor,
+        accentColor: accentColor,
+      ),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {
-            final checked = block.metadata[kCheckedKey] == true;
+            final checked = block.metadata[TaskItemKeys.checked] == true;
             return '${ctx.indent}- [${checked ? 'x' : ' '}] ${ctx.content}';
           },
           decode: (line) {
@@ -336,13 +245,13 @@ abstract final class Blocks {
               if (line.startsWith('$m[x] ')) {
                 return DecodeMatch(
                   line.substring(m.length + 4),
-                  metadata: {kCheckedKey: true},
+                  metadata: {TaskItemKeys.checked: true},
                 );
               }
               if (line.startsWith('$m[ ] ')) {
                 return DecodeMatch(
                   line.substring(m.length + 4),
-                  metadata: {kCheckedKey: false},
+                  metadata: {TaskItemKeys.checked: false},
                 );
               }
             }
@@ -350,7 +259,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [TaskItemRule()],
+      inputRules: const [TaskItemRule()],
     );
   }
 
@@ -366,10 +275,13 @@ abstract final class Blocks {
         canHaveChildren: true,
         maxDepth: 6,
       ),
-      isListLike: true,
-      splitInheritsType: true,
-      prefixBuilder: (doc, i, block, style) =>
-          _bulletPrefix(doc, i, block, style, prefixWidthFactor, bulletChar),
+      split: SplitPolicy.listLike,
+      backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
+      prefixBuilder: (block, gutter, style) => bulletPrefix(
+        style,
+        prefixWidthFactor: prefixWidthFactor,
+        bulletChar: bulletChar,
+      ),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
@@ -383,11 +295,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [
-        ListItemRule(),
-        EmptyListItemRule(),
-        ListItemBackspaceRule(),
-      ],
+      inputRules: const [ListItemRule()],
     );
   }
 
@@ -400,10 +308,10 @@ abstract final class Blocks {
         canHaveChildren: true,
         maxDepth: 6,
       ),
-      isListLike: true,
-      splitInheritsType: true,
-      prefixBuilder: (doc, i, block, style) =>
-          _numberedPrefix(doc, i, block, style, prefixWidthFactor),
+      split: SplitPolicy.listLike,
+      backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
+      prefixBuilder: (block, gutter, style) =>
+          numberedPrefix(gutter, style, prefixWidthFactor: prefixWidthFactor),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
@@ -414,34 +322,51 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [NumberedListRule()],
+      inputRules: const [NumberedListRule()],
     );
   }
 
   /// Fenced code block. Content is literal text (no inline styles).
-  /// Language stored in metadata `{'language': 'dart'}`.
+  /// Language stored in metadata `{CodeBlockKeys.language: 'dart'}`.
+  ///
+  /// Rendered as a real container block — full-width fill + padding through
+  /// the parameterizable default text component (checkpoint-1 finding: the
+  /// v2 per-glyph backgroundColor trick highlighted only to each line's
+  /// glyph end, not the block).
   static BlockDef codeBlock() {
     return BlockDef(
       label: 'Code Block',
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      split: SplitPolicy.lineBreak,
+      spacingBefore: 0.5,
+      spacingAfter: 0.5,
+      metadataKeys: const {CodeBlockKeys.language},
+      newBlockMetadata: (splitBlock) => const {},
       baseStyle: (base) => (base ?? const TextStyle()).copyWith(
         fontFamily: _monoFontFamily,
         fontFamilyFallback: _monoFontFallbacks,
         fontSize: ((base?.fontSize ?? kFallbackFontSize) * 0.9),
-        backgroundColor: const Color(0x30808080),
+      ),
+      componentBuilder: (ctx) => DefaultTextComponent(
+        ctx,
+        background: const Color(0x1A808080),
+        padding: const EdgeInsets.all(12),
       ),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {
-            final lang = block.metadata['language'] ?? '';
+            final lang = block.metadata[CodeBlockKeys.language] ?? '';
             final content = block.plainText;
             return '${ctx.indent}```$lang\n$content\n```';
           },
-          // Decode handled specially in MarkdownCodec._decodeBlock
-          // for multi-line fenced content.
+          decodeFenced: (info, content) => DecodeMatch(
+            content,
+            metadata: info.isNotEmpty
+                ? {CodeBlockKeys.language: info}
+                : const {},
+          ),
         ),
       },
-      inputRules: [CodeBlockEnterRule()],
     );
   }
 
@@ -463,26 +388,10 @@ abstract final class Blocks {
           height: 1.5,
         );
       },
-      spacingBefore: 0.1,
-      spacingAfter: 0.1,
-      prefixBuilder: (doc, i, block, style) {
-        final fontSize = style.fontSize ?? kFallbackFontSize;
-        final barHeight = fontSize * 1.4;
-        return SizedBox(
-          width: 16,
-          height: barHeight,
-          child: Center(
-            child: Container(
-              width: 3,
-              height: barHeight,
-              decoration: BoxDecoration(
-                color: barColor ?? const Color(0xFFBDBDBD),
-                borderRadius: BorderRadius.circular(1.5),
-              ),
-            ),
-          ),
-        );
-      },
+      spacingBefore: 0.4,
+      spacingAfter: 0.4,
+      prefixBuilder: (block, gutter, style) =>
+          quoteBarPrefix(style, barColor: barColor),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}> ${ctx.content}',
@@ -492,10 +401,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [
-        PrefixBlockRule('>', BlockType.blockQuote),
-        NestedBackspaceRule(),
-      ],
+      inputRules: const [PrefixBlockRule('>', BlockQuoteKeys.type)],
     );
   }
 
@@ -504,9 +410,13 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Divider',
       isVoid: true,
+      voidBackspace: VoidBackspacePolicy.immediateDelete,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      prefixBuilder: (doc, i, block, style) =>
-          _dividerPrefix(doc, i, block, style, color),
+      // v2 hardcoded 8px margins inside the prefix widget; v3 expresses the
+      // same gap as block spacing policy (0.5em = 8px at the default size).
+      spacingBefore: 0.5,
+      spacingAfter: 0.5,
+      componentBuilder: (ctx) => DividerBlockComponent(ctx, color: color),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}---',
@@ -518,7 +428,7 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [DividerRule(), DividerBackspaceRule()],
+      inputRules: const [DividerRule()],
     );
   }
 
@@ -527,54 +437,24 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Image',
       isVoid: true,
+      voidBackspace: VoidBackspacePolicy.selectFirst,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      prefixBuilder: (doc, i, block, style) {
-        final url = block.metadata['url'] ?? '';
-        final alt = block.plainText;
-        final label = alt.isNotEmpty ? alt : url;
-        final fontSize = style.fontSize ?? kFallbackFontSize;
-        return Container(
-          width: double.infinity,
-          height: fontSize * 1.4,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: const Color(0x15808080),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: const Color(0x30808080)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                const IconData(0xe3f4, fontFamily: 'MaterialIcons'),
-                size: fontSize,
-                color: style.color?.withValues(alpha: 0.35),
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: fontSize * 0.8,
-                    color: style.color?.withValues(alpha: 0.5),
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+      metadataKeys: const {ImageKeys.url},
+      newBlockMetadata: (splitBlock) => const {},
+      componentBuilder: (ctx) => ImageBlockComponent(ctx),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {
-            final url = block.metadata['url'] ?? '';
+            final url = block.metadata[ImageKeys.url] ?? '';
             return '${ctx.indent}![${ctx.content}]($url)';
           },
           decode: (line) {
             final m = RegExp(r'^!\[([^\]]*)\]\(([^)]+)\)$').firstMatch(line);
             if (m == null) return null;
-            return DecodeMatch(m.group(1)!, metadata: {'url': m.group(2)!});
+            return DecodeMatch(
+              m.group(1)!,
+              metadata: {ImageKeys.url: m.group(2)!},
+            );
           },
         ),
       },
@@ -586,7 +466,7 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Paragraph',
       policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
-      spacingBefore: 0.3,
+      spacingBefore: 0.5,
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {
@@ -599,7 +479,6 @@ abstract final class Blocks {
           },
         ),
       },
-      inputRules: [NestedBackspaceRule()],
     );
   }
 }
@@ -613,8 +492,8 @@ abstract final class Blocks {
 /// ```dart
 /// EditorSchema(
 ///   inlineEntities: {
-///     InlineEntityType.link: InlineEntityDef(
-///       type: InlineEntityType.link,
+///     InlineEntityKeys.link: InlineEntityDef(
+///       type: InlineEntityKeys.link,
 ///       style: Inlines.link(color: Colors.teal),
 ///       label: 'Link',
 ///       decode: _decodeLink,
@@ -650,7 +529,7 @@ abstract final class Inlines {
       codecs: {
         Format.markdown: InlineCodec(
           encode: (text, attributes) {
-            final url = attributes['url'] ?? '';
+            final url = attributes[InlineEntityKeys.linkUrl] ?? '';
             return '[$text]($url)';
           },
           decode: (text) {
@@ -660,7 +539,7 @@ abstract final class Inlines {
               return InlineDecodeMatch(
                 text: inline.group(1)!,
                 fullMatchLength: inline.end,
-                attributes: {'url': inline.group(2)!},
+                attributes: {InlineEntityKeys.linkUrl: inline.group(2)!},
               );
             }
             // Autolink: <https://...> or <http://...>
@@ -670,7 +549,7 @@ abstract final class Inlines {
               return InlineDecodeMatch(
                 text: url,
                 fullMatchLength: angle.end,
-                attributes: {'url': url},
+                attributes: {InlineEntityKeys.linkUrl: url},
               );
             }
             // Bare URL: https://... or http://...
@@ -680,7 +559,7 @@ abstract final class Inlines {
               return InlineDecodeMatch(
                 text: url,
                 fullMatchLength: bare.end,
-                attributes: {'url': url},
+                attributes: {InlineEntityKeys.linkUrl: url},
               );
             }
             return null;
@@ -751,7 +630,7 @@ abstract final class Inlines {
           },
         ),
       },
-      inputRules: [InlineWrapRule('`', InlineStyle.code)],
+      inputRules: [InlineWrapRule('`', InlineStyleKeys.code)],
     );
   }
 }
@@ -769,18 +648,14 @@ abstract final class Inlines {
 /// For full control, use [Blocks] and [Inlines] to hand-pick which
 /// definitions your [EditorSchema] includes.
 ///
-/// [additionalBlocks] and [additionalInlineStyles] are merged after the
-/// built-ins, so custom keys (your own enum) can never collide with future
-/// built-in types. Passing a built-in key (e.g. [BlockType.h1]) intentionally
-/// overrides that definition.
-///
 /// **Block ordering matters for input rules and codec decode.** More-specific
 /// prefixes must come before shorter ones (h3 before h2 before h1, taskItem
 /// before listItem) so they are tried first.
 ///
-/// The `additional*` maps are merged after built-ins, so they can override
-/// standard definitions.
-EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
+/// The `additional*` maps are merged after built-ins, so custom string keys
+/// can never collide with future built-in types, and passing a built-in key
+/// (e.g. [HeadingKeys.h1]) intentionally overrides that definition.
+EditorSchema buildStandardSchema({
   // Per-heading overrides (null fields keep defaults).
   HeadingStyle? h1,
   HeadingStyle? h2,
@@ -797,56 +672,56 @@ EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
   double? indentPerDepthFactor,
   String? bulletChar,
   // Extensions — merged after built-ins.
-  Map<BlockType, BlockDef>? additionalBlocks,
-  Map<InlineStyle, InlineStyleDef>? additionalInlineStyles,
-  Map<InlineEntityType, InlineEntityDef<InlineEntityType>>?
-  additionalInlineEntities,
+  Map<String, BlockDef>? additionalBlocks,
+  Map<String, InlineStyleDef>? additionalInlineStyles,
+  Map<String, InlineEntityDef>? additionalInlineEntities,
 }) {
   final pwf = prefixWidthFactor ?? 1.5;
 
-  return EditorSchema<BlockType, InlineStyle, InlineEntityType>(
-    defaultBlockType: BlockType.paragraph,
+  return EditorSchema(
+    defaultBlockType: ParagraphKeys.type,
     prefixWidthFactor: pwf,
     indentPerDepthFactor: indentPerDepthFactor ?? 1.5,
     blocks: {
       // --- Order: specific prefix rules before general ones ---
-      BlockType.h6: Blocks.h6(style: h6, prefixWidthFactor: pwf),
-      BlockType.h5: Blocks.h5(style: h5, prefixWidthFactor: pwf),
-      BlockType.h4: Blocks.h4(style: h4, prefixWidthFactor: pwf),
-      BlockType.h3: Blocks.h3(style: h3, prefixWidthFactor: pwf),
-      BlockType.h2: Blocks.h2(style: h2, prefixWidthFactor: pwf),
-      BlockType.h1: Blocks.h1(style: h1, prefixWidthFactor: pwf),
-      BlockType.taskItem: Blocks.taskItem(
+      HeadingKeys.h6: Blocks.h6(style: h6),
+      HeadingKeys.h5: Blocks.h5(style: h5),
+      HeadingKeys.h4: Blocks.h4(style: h4),
+      HeadingKeys.h3: Blocks.h3(style: h3),
+      HeadingKeys.h2: Blocks.h2(style: h2),
+      HeadingKeys.h1: Blocks.h1(style: h1),
+      TaskItemKeys.type: Blocks.taskItem(
         accentColor: accentColor,
         prefixWidthFactor: pwf,
       ),
-      BlockType.listItem: Blocks.listItem(
+      ListItemKeys.type: Blocks.listItem(
         bulletChar: bulletChar ?? '•',
         prefixWidthFactor: pwf,
       ),
-      BlockType.numberedList: Blocks.numberedList(prefixWidthFactor: pwf),
-      BlockType.blockQuote: Blocks.blockQuote(),
-      BlockType.codeBlock: Blocks.codeBlock(),
-      BlockType.divider: Blocks.divider(color: dividerColor),
-      // BlockType.image: Blocks.image(), // disabled — needs multi-widget arch
-      BlockType.paragraph: Blocks.paragraph(),
+      NumberedListKeys.type: Blocks.numberedList(prefixWidthFactor: pwf),
+      BlockQuoteKeys.type: Blocks.blockQuote(),
+      CodeBlockKeys.type: Blocks.codeBlock(),
+      DividerKeys.type: Blocks.divider(color: dividerColor),
+      ImageKeys.type: Blocks.image(),
+      ParagraphKeys.type: Blocks.paragraph(),
       if (additionalBlocks != null) ...additionalBlocks,
     },
     inlineStyles: {
-      InlineStyle.code: Inlines.code(),
-      InlineStyle.bold: Inlines.bold(),
-      InlineStyle.italic: Inlines.italic(),
-      InlineStyle.strikethrough: Inlines.strikethrough(),
+      InlineStyleKeys.code: Inlines.code(),
+      InlineStyleKeys.bold: Inlines.bold(),
+      InlineStyleKeys.italic: Inlines.italic(),
+      InlineStyleKeys.strikethrough: Inlines.strikethrough(),
       if (additionalInlineStyles != null) ...additionalInlineStyles,
     },
     inlineEntities: {
-      InlineEntityType.link: InlineEntityDef(
-        type: InlineEntityType.link,
+      InlineEntityKeys.link: InlineEntityDef(
+        type: InlineEntityKeys.link,
         style: Inlines.link(color: linkColor),
         label: 'Link',
-        decode: (attributes) =>
-            LinkData(url: attributes['url'] as String? ?? ''),
-        encode: (data) => {'url': (data as LinkData).url},
+        decode: (attributes) => LinkData(
+          url: attributes[InlineEntityKeys.linkUrl] as String? ?? '',
+        ),
+        encode: (data) => {InlineEntityKeys.linkUrl: (data as LinkData).url},
         defaultText: (data) => (data as LinkData).url,
       ),
       if (additionalInlineEntities != null) ...additionalInlineEntities,
@@ -855,7 +730,7 @@ EditorSchema<BlockType, InlineStyle, InlineEntityType> buildStandardSchema({
 }
 
 // ---------------------------------------------------------------------------
-// Prefix builders — moved from span_builder.dart
+// Shared style constants
 // ---------------------------------------------------------------------------
 
 /// Fallback font size when no style is provided.
@@ -871,150 +746,3 @@ const List<String> _monoFontFallbacks = [
   'Roboto Mono',
   'monospace',
 ];
-
-/// Compute prefix width from a resolved font size and factor.
-double prefixWidth(double fontSize, [double factor = 1.5]) => fontSize * factor;
-
-/// Compute indent per depth level from a base font size and factor.
-double indentPerDepth(double fontSize, [double factor = 1.5]) =>
-    fontSize * factor;
-
-Widget? _bulletPrefix(
-  Document doc,
-  int flatIndex,
-  TextBlock block,
-  TextStyle resolvedStyle,
-  double pwf,
-  String bullet,
-) {
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Text(
-        bullet,
-        style: TextStyle(fontSize: fontSize * 1.2, height: 1),
-      ),
-    ),
-  );
-}
-
-Widget? _numberedPrefix(
-  Document doc,
-  int flatIndex,
-  TextBlock block,
-  TextStyle resolvedStyle,
-  double pwf,
-) {
-  final ordinal = computeOrdinal(doc, flatIndex);
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Text('$ordinal.', style: TextStyle(fontSize: fontSize, height: 1)),
-    ),
-  );
-}
-
-Widget? _dividerPrefix(
-  Document doc,
-  int flatIndex,
-  TextBlock block,
-  TextStyle resolvedStyle,
-  Color? overrideColor,
-) {
-  final color =
-      overrideColor ??
-      (resolvedStyle.color ?? const Color(0xFF000000)).withOpacity(0.2);
-  return Container(
-    width: double.infinity,
-    height: 1,
-    margin: const EdgeInsets.symmetric(vertical: 8),
-    color: color,
-  );
-}
-
-Widget? _taskPrefix(
-  Document doc,
-  int flatIndex,
-  TextBlock block,
-  TextStyle resolvedStyle,
-  double pwf,
-  Color? overrideAccent,
-) {
-  final checked = block.metadata[kCheckedKey] == true;
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  final size = fontSize * 0.85;
-  final borderRadius = size * 0.2;
-  final textColor = resolvedStyle.color ?? const Color(0xFF333333);
-  final Color accentColor;
-  if (overrideAccent != null) {
-    accentColor = overrideAccent;
-  } else {
-    final isDark = textColor.computeLuminance() > 0.5;
-    accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF2196F3);
-  }
-
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(borderRadius),
-          border: Border.all(
-            color: checked ? accentColor : textColor.withOpacity(0.4),
-            width: 1.5,
-          ),
-          color: checked ? accentColor : null,
-        ),
-        child: checked
-            ? CustomPaint(
-                painter: _CheckPainter(color: const Color(0xFFFFFFFF)),
-              )
-            : null,
-      ),
-    ),
-  );
-}
-
-class _CheckPainter extends CustomPainter {
-  _CheckPainter({required this.color});
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = size.width * 0.15
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
-    final path = Path()
-      ..moveTo(size.width * 0.2, size.height * 0.5)
-      ..lineTo(size.width * 0.42, size.height * 0.72)
-      ..lineTo(size.width * 0.8, size.height * 0.28);
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(_CheckPainter old) => color != old.color;
-}
-
-/// Compute the 1-based ordinal for a numbered list item among its siblings.
-///
-/// Exported so it can be reused by custom numbered-list block defs.
-int computeOrdinal(Document doc, int flatIndex) {
-  var ordinal = 1;
-  final flat = doc.allBlocks;
-  final depth = doc.depthOf(flatIndex);
-
-  for (var j = flatIndex - 1; j >= 0; j--) {
-    if (doc.depthOf(j) != depth) break;
-    if (flat[j].blockType != BlockType.numberedList) break;
-    ordinal++;
-  }
-  return ordinal;
-}

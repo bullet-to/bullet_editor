@@ -1,4 +1,10 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Archived v2 tests awaiting port/harvest (see test_archive/README.md) —
+    # they reference deleted v2 APIs and are not run by `flutter test`.
+    - test_archive/**
+
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

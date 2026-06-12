@@ -1,0 +1,291 @@
+import 'dart:async';
+
+import 'package:bullet_editor/bullet_editor.dart';
+// The gauntlet fixture is a dev/test artifact, deliberately not in the
+// package barrel; the inspector is the other sanctioned consumer.
+// ignore: implementation_imports
+import 'package:bullet_editor/src/dev/gauntlet_document.dart';
+import 'package:flutter/material.dart';
+
+/// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
+/// left, tabbed debug panes on the right.
+///
+/// Day 1–2 ships panes 1–2; panes 3–6 (IME window, change stream, perf,
+/// record) land with the subsystems they inspect.
+class InspectorScreen extends StatefulWidget {
+  const InspectorScreen({super.key});
+
+  @override
+  State<InspectorScreen> createState() => _InspectorScreenState();
+}
+
+class _InspectorScreenState extends State<InspectorScreen> {
+  final EditorSchema _schema = EditorSchema.standard();
+  late Document _document = buildGauntletDocument();
+  final GlobalKey<BulletEditorState> _editorKey = GlobalKey();
+  InlineEntitySnapshot? _lastLinkTap;
+  String? _lastLinkTapBlockId;
+
+  void _reloadFixture() {
+    setState(() => _document = buildGauntletDocument());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('bullet_editor inspector — v3 walking skeleton'),
+        actions: [
+          IconButton(
+            tooltip: 'Reload gauntlet fixture',
+            icon: const Icon(Icons.refresh),
+            onPressed: _reloadFixture,
+          ),
+        ],
+      ),
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 3,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: BulletEditor(
+                key: _editorKey,
+                document: _document,
+                schema: _schema,
+                textStyle: Theme.of(context).textTheme.bodyLarge,
+                padding: const EdgeInsets.all(16),
+                onLinkTap: (blockId, offset, entity) {
+                  setState(() {
+                    _lastLinkTap = entity;
+                    _lastLinkTapBlockId = blockId;
+                  });
+                },
+              ),
+            ),
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(
+            flex: 2,
+            child: _InspectorPanes(
+              document: _document,
+              schema: _schema,
+              editorKey: _editorKey,
+              lastLinkTap: _lastLinkTap,
+              lastLinkTapBlockId: _lastLinkTapBlockId,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InspectorPanes extends StatelessWidget {
+  const _InspectorPanes({
+    required this.document,
+    required this.schema,
+    required this.editorKey,
+    required this.lastLinkTap,
+    required this.lastLinkTapBlockId,
+  });
+
+  final Document document;
+  final EditorSchema schema;
+  final GlobalKey<BulletEditorState> editorKey;
+  final InlineEntitySnapshot? lastLinkTap;
+  final String? lastLinkTapBlockId;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          const TabBar(
+            tabs: [
+              Tab(text: 'Document tree'),
+              Tab(text: 'Selection'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _DocumentTreePane(document: document, schema: schema),
+                _SelectionPane(
+                  lastLinkTap: lastLinkTap,
+                  lastLinkTapBlockId: lastLinkTapBlockId,
+                ),
+              ],
+            ),
+          ),
+          _LazinessFooter(document: document, editorKey: editorKey),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pane 1 — the live block tree: short ids, types, depth, metadata, segment
+/// styles. (The v2 "node tree" pane that was very helpful, ported.)
+class _DocumentTreePane extends StatelessWidget {
+  const _DocumentTreePane({required this.document, required this.schema});
+
+  final Document document;
+  final EditorSchema schema;
+
+  @override
+  Widget build(BuildContext context) {
+    final mono = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(fontFamily: 'Menlo');
+    final blocks = document.allBlocks;
+
+    return ListView.builder(
+      itemCount: blocks.length,
+      itemBuilder: (context, index) {
+        final block = blocks[index];
+        final depth = document.depthOf(index);
+        final shortId = block.id.length > 8
+            ? block.id.substring(0, 8)
+            : block.id;
+        final def = schema.blockDef(block.blockType);
+
+        final segmentSummary = block.segments.isEmpty
+            ? (def.isVoid ? '∅ void' : '∅ empty')
+            : block.segments
+                  .map((s) {
+                    final styles = s.styles.isEmpty
+                        ? ''
+                        : '{${s.styles.join(',')}}';
+                    final text = s.text.length > 18
+                        ? '${s.text.substring(0, 18)}…'
+                        : s.text;
+                    return '"$text"$styles';
+                  })
+                  .join(' ');
+
+        return Padding(
+          padding: EdgeInsets.only(left: 8.0 + depth * 16, right: 8),
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '$shortId ',
+                  style: mono?.copyWith(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+                TextSpan(
+                  text: '${block.blockType} ',
+                  style: mono?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                if (block.metadata.isNotEmpty)
+                  TextSpan(
+                    text: '${block.metadata} ',
+                    style: mono?.copyWith(
+                      color: Theme.of(context).colorScheme.tertiary,
+                    ),
+                  ),
+                TextSpan(text: segmentSummary, style: mono),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Pane 2 — selection + composing. The live DocSelection/ComposingState
+/// wiring arrives with the day 3–4 controller skeleton; until then this pane
+/// shows the structure plus the one live selection-adjacent signal that
+/// exists (link taps through the recognizer surface).
+class _SelectionPane extends StatelessWidget {
+  const _SelectionPane({
+    required this.lastLinkTap,
+    required this.lastLinkTapBlockId,
+  });
+
+  final InlineEntitySnapshot? lastLinkTap;
+  final String? lastLinkTapBlockId;
+
+  @override
+  Widget build(BuildContext context) {
+    final mono = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(fontFamily: 'Menlo');
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Text('DocSelection', style: Theme.of(context).textTheme.titleSmall),
+        Text('— (controller lands day 3–4)', style: mono),
+        const SizedBox(height: 12),
+        Text('ComposingState', style: Theme.of(context).textTheme.titleSmall),
+        Text('— (IME lands days 5–7)', style: mono),
+        const SizedBox(height: 12),
+        Text('Active styles', style: Theme.of(context).textTheme.titleSmall),
+        Text('— (controller lands day 3–4)', style: mono),
+        const SizedBox(height: 12),
+        Text('Last link tap', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          lastLinkTap == null ? '—' : 'block $lastLinkTapBlockId\n$lastLinkTap',
+          style: mono,
+        ),
+      ],
+    );
+  }
+}
+
+/// Footer — laid-out block count against the document total (validates D5
+/// laziness at a glance; graduates into the full perf pane on day 10).
+class _LazinessFooter extends StatefulWidget {
+  const _LazinessFooter({required this.document, required this.editorKey});
+
+  final Document document;
+  final GlobalKey<BulletEditorState> editorKey;
+
+  @override
+  State<_LazinessFooter> createState() => _LazinessFooterState();
+}
+
+class _LazinessFooterState extends State<_LazinessFooter> {
+  // The registry mutates as the user scrolls; poll on a coarse tick. (The
+  // real perf pane with rebuild counters is booked for day 10.)
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final registry = widget.editorKey.currentState?.registry;
+    final laidOut = registry?.layoutCount ?? 0;
+    final total = widget.document.allBlocks.length;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Text(
+        'laid out: $laidOut / $total blocks (lazy if ≪ total)',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
+}

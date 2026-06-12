@@ -1,8 +1,11 @@
-import 'package:flutter/widgets.dart';
-
+import '../model/doc_selection.dart';
 import '../model/document.dart';
 
 /// A snapshot of the editor state at a point in time.
+///
+/// ComposingState is deliberately NOT part of the snapshot — a composition
+/// can never be restored because the engine's conversion state is gone
+/// (architecture §Undo).
 class UndoEntry {
   const UndoEntry({
     required this.document,
@@ -11,7 +14,7 @@ class UndoEntry {
   });
 
   final Document document;
-  final TextSelection selection;
+  final DocSelection? selection;
   final DateTime timestamp;
 }
 
@@ -30,10 +33,8 @@ bool defaultUndoGrouping(UndoEntry previous, UndoEntry current) =>
 /// The grouping strategy is swappable via [ShouldGroupUndo].
 /// Stack size is bounded by [maxStackSize] — oldest entries are dropped.
 class UndoManager {
-  UndoManager({
-    ShouldGroupUndo? grouping,
-    this.maxStackSize = 100,
-  }) : _grouping = grouping ?? defaultUndoGrouping;
+  UndoManager({ShouldGroupUndo? grouping, this.maxStackSize = 100})
+    : _grouping = grouping ?? defaultUndoGrouping;
 
   final ShouldGroupUndo _grouping;
   final int maxStackSize;

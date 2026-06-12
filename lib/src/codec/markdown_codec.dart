@@ -1,4 +1,5 @@
 import '../model/block.dart';
+import '../model/block_policies.dart';
 import '../model/document.dart';
 import '../schema/editor_schema.dart';
 import 'block_codec.dart';
@@ -42,23 +43,71 @@ String escapeMarkdown(String text) {
 ///
 /// This class owns the format-level grammar: paragraph splitting (`\n\n`),
 /// indentation (2-space nesting), and tree building.
-class MarkdownCodec<B extends Object> {
-  MarkdownCodec({EditorSchema<B, Object, Object>? schema})
-    : _schema =
-          schema ?? EditorSchema.standard() as EditorSchema<B, Object, Object>;
+class MarkdownCodec {
+  MarkdownCodec({EditorSchema? schema})
+    : _schema = schema ?? EditorSchema.standard();
 
-  /// Convenience constructor that returns a codec typed for the built-in
-  /// [BlockType] enum using the standard schema.
-  static MarkdownCodec<BlockType> standard() =>
-      MarkdownCodec<BlockType>(schema: EditorSchema.standard());
+  /// Convenience constructor using the standard schema.
+  static MarkdownCodec standard() =>
+      MarkdownCodec(schema: EditorSchema.standard());
 
-  final EditorSchema<B, Object, Object> _schema;
+  final EditorSchema _schema;
+
+  // -- Hoisted inline codec tables --
+  //
+  // The schema is immutable for the codec's lifetime, so every derived
+  // lookup table is built once, lazily, instead of per encode/decode call.
+
+  /// Inline style key → wrap string, for encoding simple styles.
+  late final Map<Object, String> _wrapMap = _buildInlineWrapMap();
+
+  /// Inline style key → encode function, for data-carrying styles.
+  late final Map<Object, String Function(String, Map<String, dynamic>)>
+  _encodeMap = _buildInlineEncodeMap();
+
+  /// Fixed nesting order for encoding: longer delimiters are outer
+  /// (bold before italic), ties broken lexically for determinism.
+  late final List<Object> _wrapOrder = _wrapMap.keys.toList()
+    ..sort((a, b) {
+      final cmp = _wrapMap[b]!.length.compareTo(_wrapMap[a]!.length);
+      return cmp != 0 ? cmp : _wrapMap[a]!.compareTo(_wrapMap[b]!);
+    });
+
+  /// Wrap entries for decoding, longest delimiter first.
+  late final List<_InlineWrapEntry> _wrapEntries = _buildInlineWrapEntries()
+    ..sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
+
+  /// Decode entries for data-carrying styles.
+  late final List<_InlineDecodeEntry> _decodeEntries =
+      _buildInlineDecodeEntries();
+
+  /// Combined-delimiter entries for overlapping styles (e.g. `***` for
+  /// bold+italic), longest first.
+  late final List<_InlineCombinedWrapEntry> _combinedEntries =
+      _buildCombinedEntries();
+
+  /// Alternation regex over combined then individual wrap delimiters.
+  /// Null when no wrap styles are registered.
+  late final RegExp? _wrapPattern = _buildWrapPattern();
+
+  /// The block type that decodes fenced regions, declared by the schema via
+  /// [BlockCodec.decodeFenced]. Null if no registered type opts in.
+  late final ({String key, BlockCodec codec})? _fenceTarget =
+      _findFenceTarget();
+
+  /// Whether consecutive siblings of this type join tightly (single \n).
+  /// List-shaped types are exactly those whose split policy inherits the
+  /// type (lists continue on Enter) — the codec half of the deleted
+  /// `isListLike` boolean.
+  bool _isTight(String blockType) =>
+      _schema.splitPolicyOf(blockType).newBlockType ==
+      SplitNewBlockType.inherit;
 
   // -----------------------------------------------------------------------
   // Encode
   // -----------------------------------------------------------------------
 
-  String encode(Document<B> doc) {
+  String encode(Document doc) {
     final entries = <_EncodedLine>[];
     _encodeBlocks(doc.blocks, 0, entries);
 
@@ -69,9 +118,7 @@ class MarkdownCodec<B extends Object> {
       if (i > 0) {
         final prev = entries[i - 1];
         final curr = entries[i];
-        final tightPair =
-            _schema.isListLike(prev.blockType) &&
-            _schema.isListLike(curr.blockType);
+        final tightPair = _isTight(prev.blockType) && _isTight(curr.blockType);
         // An empty block already contributes "" as its line, so the \n\n
         // separator before it produces one blank line. Use \n after
         // an empty line so the next block isn't double-spaced.
@@ -84,25 +131,29 @@ class MarkdownCodec<B extends Object> {
   }
 
   void _encodeBlocks(
-    List<TextBlock<B>> blocks,
+    List<TextBlock> blocks,
     int depth,
     List<_EncodedLine> entries,
   ) {
-    var numberedOrdinal = 0;
+    // 1-based ordinal among consecutive same-type siblings — numbered-list
+    // codecs read it; other codecs ignore it.
+    var runOrdinal = 0;
+    String? runType;
     for (final block in blocks) {
       final content = _encodeSegments(block.segments);
       final indent = '  ' * depth;
 
-      if (block.blockType == BlockType.numberedList) {
-        numberedOrdinal++;
+      if (block.blockType == runType) {
+        runOrdinal++;
       } else {
-        numberedOrdinal = 0;
+        runType = block.blockType;
+        runOrdinal = 1;
       }
 
       final ctx = EncodeContext(
         depth: depth,
         indent: indent,
-        ordinal: numberedOrdinal,
+        ordinal: runOrdinal,
         content: content,
       );
 
@@ -124,15 +175,9 @@ class MarkdownCodec<B extends Object> {
   ///
   /// Data-carrying styles (links) use their full encode function.
   String _encodeSegments(List<StyledSegment> segments) {
-    final wrapMap = _inlineWrapMap();
-    final encodeMap = _inlineEncodeMap();
-
-    // Fixed nesting order: longer delimiters are outer (bold before italic).
-    final wrapOrder = wrapMap.keys.toList()
-      ..sort((a, b) {
-        final cmp = wrapMap[b]!.length.compareTo(wrapMap[a]!.length);
-        return cmp != 0 ? cmp : wrapMap[a]!.compareTo(wrapMap[b]!);
-      });
+    final wrapMap = _wrapMap;
+    final encodeMap = _encodeMap;
+    final wrapOrder = _wrapOrder;
 
     final buffer = StringBuffer();
     final open = <Object>[]; // Currently open wrap styles, in wrapOrder.
@@ -202,7 +247,7 @@ class MarkdownCodec<B extends Object> {
   /// optionally followed by a language identifier.
   static final _fenceOpen = RegExp(r'^(`{3,}|~{3,})(.*)$');
 
-  Document<B> decode(String markdown) {
+  Document decode(String markdown) {
     if (markdown.isEmpty) {
       return Document.empty(_schema.defaultBlockType);
     }
@@ -219,7 +264,7 @@ class MarkdownCodec<B extends Object> {
       // Check for fenced code block (multi-line string starting with ```)
       final fenceMatch = _fenceOpen.firstMatch(text.split('\n').first);
       if (fenceMatch != null) {
-        return (0, _decodeFencedCodeBlock(text, fenceMatch));
+        return (0, _decodeFencedBlock(text, fenceMatch));
       }
       final (depth, content) = _stripIndent(text);
       return (depth, _decodeBlock(content));
@@ -297,10 +342,12 @@ class MarkdownCodec<B extends Object> {
     return blocks;
   }
 
-  /// Decode a fenced code block from its multi-line string.
-  TextBlock<B> _decodeFencedCodeBlock(String text, RegExpMatch fenceMatch) {
+  /// Decode a fenced region from its multi-line string. The engine owns the
+  /// fence grammar (delimiters, content extraction); what the region *means*
+  /// comes from the schema's declared fence target ([BlockCodec.decodeFenced]).
+  TextBlock _decodeFencedBlock(String text, RegExpMatch fenceMatch) {
     final lines = text.split('\n');
-    final lang = fenceMatch.group(2)!.trim();
+    final info = fenceMatch.group(2)!.trim();
     final fenceDelim = fenceMatch.group(1)!;
     final closingChar = fenceDelim[0];
     final closingPattern = RegExp('^$closingChar{${fenceDelim.length},}\$');
@@ -317,21 +364,25 @@ class MarkdownCodec<B extends Object> {
     // Content is everything between opening and closing fence.
     final content = lines.sublist(1, endIndex).join('\n');
 
-    // Look up the code block type key from the schema.
-    B? codeBlockKey;
-    for (final entry in _schema.blocks.entries) {
-      if (entry.value.label == 'Code Block') {
-        codeBlockKey = entry.key;
-        break;
+    final target = _fenceTarget;
+    if (target != null) {
+      final match = target.codec.decodeFenced!(info, content);
+      if (match != null) {
+        return TextBlock(
+          id: generateBlockId(),
+          blockType: target.key,
+          segments: [StyledSegment(match.content)],
+          metadata: match.metadata,
+        );
       }
     }
-    codeBlockKey ??= _schema.defaultBlockType;
 
+    // No fence target registered — preserve the literal content as a
+    // default-type block.
     return TextBlock(
       id: generateBlockId(),
-      blockType: codeBlockKey,
+      blockType: _schema.defaultBlockType,
       segments: [StyledSegment(content)],
-      metadata: lang.isNotEmpty ? {'language': lang} : const {},
     );
   }
 
@@ -343,8 +394,8 @@ class MarkdownCodec<B extends Object> {
   /// When collapsing a block, the entire subsequent group at depth >= the
   /// original depth is shifted down by 1, preserving sibling relationships.
   /// Iterates until stable (typically 1-2 passes).
-  List<(int, TextBlock<B>)> _normalizeDepths(List<(int, TextBlock<B>)> parsed) {
-    final adj = List<(int, TextBlock<B>)>.of(parsed);
+  List<(int, TextBlock)> _normalizeDepths(List<(int, TextBlock)> parsed) {
+    final adj = List<(int, TextBlock)>.of(parsed);
     var changed = true;
     while (changed) {
       changed = false;
@@ -429,7 +480,7 @@ class MarkdownCodec<B extends Object> {
   /// Try all registered block decoders. If multiple match, pick the most
   /// specific one (the decoder that consumed the most prefix, i.e. whose
   /// DecodeMatch.content is shortest). Falls back to the default block type.
-  TextBlock<B> _decodeBlock(String text) {
+  TextBlock _decodeBlock(String text) {
     // CommonMark allows up to 3 leading spaces on block-level constructs.
     // Strip them before trying decoders (4+ spaces = indented code block,
     // which we don't support, but we still avoid stripping those).
@@ -442,7 +493,7 @@ class MarkdownCodec<B extends Object> {
     }
     if (leading > 0) stripped = text.substring(leading);
 
-    B? bestKey;
+    String? bestKey;
     DecodeMatch? bestMatch;
 
     for (final entry in _schema.blocks.entries) {
@@ -491,43 +542,13 @@ class MarkdownCodec<B extends Object> {
   /// Wrap matches are recursively decoded so that `**1 *2* 3**` correctly
   /// produces bold("1 ") + bold+italic("2") + bold(" 3").
   List<StyledSegment> _decodeSegments(String text, [int depth = 0]) {
-    final wrapEntries = _inlineWrapEntries();
-    final decodeEntries = _inlineDecodeEntries();
+    final wrapEntries = _wrapEntries;
+    final decodeEntries = _decodeEntries;
+    final combinedEntries = _combinedEntries;
+    final wrapPattern = _wrapPattern;
 
     if (wrapEntries.isEmpty && decodeEntries.isEmpty) {
       return [StyledSegment(text)];
-    }
-
-    // Build wrap regex with combined delimiters for overlapping styles.
-    // E.g. bold(**) + italic(*) → combined ***(.+?)*** tried first.
-    RegExp? wrapPattern;
-    final combinedEntries = <_InlineCombinedWrapEntry>[];
-    if (wrapEntries.isNotEmpty) {
-      wrapEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
-
-      // Generate combined entries for all pairs of wrap styles.
-      for (var i = 0; i < wrapEntries.length; i++) {
-        for (var j = i + 1; j < wrapEntries.length; j++) {
-          final combined = wrapEntries[i].wrap + wrapEntries[j].wrap;
-          combinedEntries.add(
-            _InlineCombinedWrapEntry({
-              wrapEntries[i].key,
-              wrapEntries[j].key,
-            }, combined),
-          );
-        }
-      }
-      // Sort combined by length descending so longest matches first.
-      combinedEntries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
-
-      // Build regex: combined patterns first, then individual.
-      final alternatives = <String>[
-        for (final e in combinedEntries)
-          '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
-        for (final e in wrapEntries)
-          '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
-      ];
-      wrapPattern = RegExp(alternatives.join('|'));
     }
 
     final segments = <StyledSegment>[];
@@ -657,7 +678,7 @@ class MarkdownCodec<B extends Object> {
   }
 
   /// Build a map of inline style key → wrap string for encoding (simple styles).
-  Map<Object, String> _inlineWrapMap() {
+  Map<Object, String> _buildInlineWrapMap() {
     final map = <Object, String>{};
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
@@ -676,7 +697,7 @@ class MarkdownCodec<B extends Object> {
 
   /// Build a map of inline style key → encode function for data-carrying styles.
   Map<Object, String Function(String, Map<String, dynamic>)>
-  _inlineEncodeMap() {
+  _buildInlineEncodeMap() {
     final map = <Object, String Function(String, Map<String, dynamic>)>{};
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
@@ -694,7 +715,7 @@ class MarkdownCodec<B extends Object> {
   }
 
   /// Collect inline wrap entries for decoding (key + wrap string).
-  List<_InlineWrapEntry> _inlineWrapEntries() {
+  List<_InlineWrapEntry> _buildInlineWrapEntries() {
     final entries = <_InlineWrapEntry>[];
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
@@ -711,8 +732,51 @@ class MarkdownCodec<B extends Object> {
     return entries;
   }
 
+  /// Generate combined-delimiter entries for all pairs of wrap styles
+  /// (e.g. bold `**` + italic `*` → `***`), longest first.
+  List<_InlineCombinedWrapEntry> _buildCombinedEntries() {
+    final entries = <_InlineCombinedWrapEntry>[];
+    for (var i = 0; i < _wrapEntries.length; i++) {
+      for (var j = i + 1; j < _wrapEntries.length; j++) {
+        entries.add(
+          _InlineCombinedWrapEntry({
+            _wrapEntries[i].key,
+            _wrapEntries[j].key,
+          }, _wrapEntries[i].wrap + _wrapEntries[j].wrap),
+        );
+      }
+    }
+    entries.sort((a, b) => b.wrap.length.compareTo(a.wrap.length));
+    return entries;
+  }
+
+  /// Build the wrap alternation regex: combined patterns first (so `***`
+  /// beats `**`), then individual.
+  RegExp? _buildWrapPattern() {
+    if (_wrapEntries.isEmpty) return null;
+    final alternatives = <String>[
+      for (final e in _combinedEntries)
+        '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
+      for (final e in _wrapEntries)
+        '${RegExp.escape(e.wrap)}(.+?)${RegExp.escape(e.wrap)}',
+    ];
+    return RegExp(alternatives.join('|'));
+  }
+
+  /// First registered block type whose markdown codec declares
+  /// [BlockCodec.decodeFenced].
+  ({String key, BlockCodec codec})? _findFenceTarget() {
+    for (final entry in _schema.blocks.entries) {
+      final codec = entry.value.codecs?[Format.markdown];
+      if (codec?.decodeFenced != null) {
+        return (key: entry.key, codec: codec!);
+      }
+    }
+    return null;
+  }
+
   /// Collect inline decode entries for data-carrying styles.
-  List<_InlineDecodeEntry> _inlineDecodeEntries() {
+  List<_InlineDecodeEntry> _buildInlineDecodeEntries() {
     final entries = <_InlineDecodeEntry>[];
     for (final entry in _schema.inlineStyles.entries) {
       final codec = entry.value.codecs?[Format.markdown];
@@ -771,6 +835,6 @@ class _InlineCombinedWrapEntry {
 class _EncodedLine {
   const _EncodedLine(this.line, this.blockType, this.depth);
   final String line;
-  final Object blockType;
+  final String blockType;
   final int depth;
 }

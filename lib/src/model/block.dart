@@ -4,8 +4,8 @@
 /// Adjacent segments with identical styles AND attributes should be merged.
 ///
 /// [styles] holds on/off inline keys (bold, italic, link entity, etc.).
-/// Keys are opaque [Object]s — use the built-in [InlineStyle] enum,
-/// `InlineEntityType`, or your own enum/class.
+/// Keys are opaque [Object]s — use the built-in [InlineStyleKeys] /
+/// [InlineEntityKeys] string constants, or your own keys.
 /// [attributes] holds per-segment data for inline entities
 /// (e.g. `{'url': '...'}` for links, `{'userId': '...'}` for mentions).
 class StyledSegment {
@@ -58,38 +58,82 @@ class StyledSegment {
   }
 }
 
-/// Built-in block type keys. Use these with the standard schema, or define
-/// your own enum/class for custom block types.
-enum BlockType {
-  paragraph,
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6,
-  listItem,
-  numberedList,
-  taskItem,
-  divider,
-  image,
-  blockQuote,
-  codeBlock,
+// -- Built-in type keys --
+//
+// Block types, inline styles, and inline entities are addressed by string
+// keys. These holders exist for typo-safety; custom block types register
+// their own string keys in the schema.
+
+abstract final class ParagraphKeys {
+  static const type = 'paragraph';
 }
 
-/// Built-in formatting-style keys. Use these with the standard schema, or
-/// define your own enum/class for custom formatting styles.
-enum InlineStyle { bold, italic, strikethrough, code }
+abstract final class HeadingKeys {
+  static const h1 = 'h1';
+  static const h2 = 'h2';
+  static const h3 = 'h3';
+  static const h4 = 'h4';
+  static const h5 = 'h5';
+  static const h6 = 'h6';
 
-/// Standard metadata key for task item checked state.
-const kCheckedKey = 'checked';
+  /// All heading keys, in level order.
+  static const all = [h1, h2, h3, h4, h5, h6];
+}
+
+abstract final class ListItemKeys {
+  static const type = 'listItem';
+}
+
+abstract final class NumberedListKeys {
+  static const type = 'numberedList';
+}
+
+abstract final class TaskItemKeys {
+  static const type = 'taskItem';
+  static const checked = 'checked';
+}
+
+abstract final class BlockQuoteKeys {
+  static const type = 'blockQuote';
+}
+
+abstract final class CodeBlockKeys {
+  static const type = 'codeBlock';
+  static const language = 'language';
+}
+
+abstract final class DividerKeys {
+  static const type = 'divider';
+}
+
+abstract final class ImageKeys {
+  static const type = 'image';
+
+  /// Metadata key holding the image source URL (v2 markdown-codec shape).
+  static const url = 'url';
+}
+
+abstract final class InlineStyleKeys {
+  static const bold = 'bold';
+  static const italic = 'italic';
+  static const strikethrough = 'strikethrough';
+  static const code = 'code';
+}
+
+abstract final class InlineEntityKeys {
+  static const link = 'link';
+
+  /// Attribute key holding a link's destination URL.
+  static const linkUrl = 'url';
+}
 
 /// A single block in the document.
 ///
 /// Immutable. Use [copyWith] to produce modified versions.
 ///
-/// [B] is the block type key — typically an enum like [BlockType].
-class TextBlock<B> {
+/// [blockType] is a string key registered in the schema (see [ParagraphKeys]
+/// and friends for the built-in keys).
+class TextBlock {
   TextBlock({
     required this.id,
     required this.blockType,
@@ -99,25 +143,26 @@ class TextBlock<B> {
   });
 
   final String id;
-  final B blockType;
+  final String blockType;
   final List<StyledSegment> segments;
-  final List<TextBlock<B>> children;
+  final List<TextBlock> children;
 
   /// Arbitrary key-value metadata for the block.
-  /// Used for task checked state (`'checked': true/false`), etc.
+  /// Used for task checked state (`TaskItemKeys.checked`), image source, etc.
   final Map<String, dynamic> metadata;
 
-  /// Plain text content of this block (no formatting).
-  String get plainText => segments.map((s) => s.text).join();
+  /// Plain text content of this block (no formatting). Cached — the block
+  /// is immutable and ops bounds-check against it constantly.
+  late final String plainText = segments.map((s) => s.text).join();
 
   /// Total character length of this block's text.
-  int get length => plainText.length;
+  late final int length = plainText.length;
 
-  TextBlock<B> copyWith({
+  TextBlock copyWith({
     String? id,
-    B? blockType,
+    String? blockType,
     List<StyledSegment>? segments,
-    List<TextBlock<B>>? children,
+    List<TextBlock>? children,
     Map<String, dynamic>? metadata,
   }) {
     return TextBlock(
@@ -155,6 +200,149 @@ List<StyledSegment> mergeSegments(List<StyledSegment> segments) {
     }
   }
   return result;
+}
+
+/// Insert [text] at [offset] in [segments].
+///
+/// If [styles] is provided, the new text gets those styles explicitly.
+/// If null, inherits from the segment at the insertion point.
+/// [attributes] is passed through for data-carrying styles.
+List<StyledSegment> spliceInsert(
+  List<StyledSegment> segments,
+  int offset,
+  String text, {
+  Set<Object>? styles,
+  Map<String, dynamic>? attributes,
+}) {
+  if (segments.isEmpty) {
+    return [StyledSegment(text, styles ?? const {}, attributes ?? const {})];
+  }
+
+  final result = <StyledSegment>[];
+  var pos = 0;
+  var inserted = false;
+
+  for (final seg in segments) {
+    final segStart = pos;
+    final segEnd = pos + seg.text.length;
+
+    if (!inserted && offset <= segEnd) {
+      final localOffset = offset - segStart;
+      final before = seg.text.substring(0, localOffset);
+      final after = seg.text.substring(localOffset);
+      final insertStyles = styles ?? seg.styles;
+      final insertAttrs =
+          attributes ??
+          (styles != null ? const <String, dynamic>{} : seg.attributes);
+      if (before.isNotEmpty) {
+        result.add(StyledSegment(before, seg.styles, seg.attributes));
+      }
+      result.add(StyledSegment(text, insertStyles, insertAttrs));
+      if (after.isNotEmpty) {
+        result.add(StyledSegment(after, seg.styles, seg.attributes));
+      }
+      inserted = true;
+    } else {
+      result.add(seg);
+    }
+
+    pos = segEnd;
+  }
+
+  if (!inserted) {
+    result.add(
+      StyledSegment(
+        text,
+        styles ?? segments.last.styles,
+        attributes ?? const {},
+      ),
+    );
+  }
+
+  return result;
+}
+
+/// Delete [length] characters starting at [offset] from segments,
+/// preserving styles on remaining text.
+List<StyledSegment> spliceDelete(
+  List<StyledSegment> segments,
+  int offset,
+  int length,
+) {
+  final result = <StyledSegment>[];
+  var pos = 0;
+  final deleteStart = offset;
+  final deleteEnd = offset + length;
+
+  for (final seg in segments) {
+    final segStart = pos;
+    final segEnd = pos + seg.text.length;
+
+    if (segEnd <= deleteStart || segStart >= deleteEnd) {
+      // Entirely outside the delete range — keep as-is.
+      result.add(seg);
+    } else {
+      // Partially or fully inside the delete range.
+      final keepBefore = seg.text.substring(
+        0,
+        (deleteStart - segStart).clamp(0, seg.text.length),
+      );
+      final keepAfter = seg.text.substring(
+        (deleteEnd - segStart).clamp(0, seg.text.length),
+      );
+      if (keepBefore.isNotEmpty) {
+        result.add(StyledSegment(keepBefore, seg.styles, seg.attributes));
+      }
+      if (keepAfter.isNotEmpty) {
+        result.add(StyledSegment(keepAfter, seg.styles, seg.attributes));
+      }
+    }
+
+    pos = segEnd;
+  }
+
+  return result;
+}
+
+/// Split segment list at [offset], returning both halves.
+///
+/// Returns a record `(before, after)` where `before` contains segments
+/// up to [offset] and `after` contains segments from [offset] onward.
+(List<StyledSegment>, List<StyledSegment>) splitSegmentsAt(
+  List<StyledSegment> segments,
+  int offset,
+) {
+  var pos = 0;
+  final before = <StyledSegment>[];
+  final after = <StyledSegment>[];
+
+  for (final seg in segments) {
+    final segStart = pos;
+    final segEnd = pos + seg.text.length;
+
+    if (segEnd <= offset) {
+      before.add(seg);
+    } else if (segStart >= offset) {
+      after.add(seg);
+    } else {
+      // Split point is inside this segment.
+      final splitAt = offset - segStart;
+      before.add(
+        StyledSegment(
+          seg.text.substring(0, splitAt),
+          seg.styles,
+          seg.attributes,
+        ),
+      );
+      after.add(
+        StyledSegment(seg.text.substring(splitAt), seg.styles, seg.attributes),
+      );
+    }
+
+    pos = segEnd;
+  }
+
+  return (before, after);
 }
 
 bool _setsEqual<T>(Set<T> a, Set<T> b) {

@@ -245,13 +245,13 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('above')],
         ),
-        TextBlock(id: 'b', blockType: BlockType.paragraph, segments: const []),
+        TextBlock(id: 'b', blockType: ParagraphKeys.type, segments: const []),
         TextBlock(
           id: 'c',
-          blockType: BlockType.h2,
+          blockType: HeadingKeys.h2,
           segments: [const StyledSegment('Heading')],
         ),
       ]);
@@ -389,18 +389,18 @@ void main() {
 
     test('hash without space is not heading', () {
       final doc = codec.decode('#hashtag');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
       expect(doc.blocks[0].plainText, '#hashtag');
     });
 
     test('dash without space is not list', () {
       final doc = codec.decode('-no space');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
     });
 
     test('number without dot-space is not numbered list', () {
       final doc = codec.decode('1.no space');
-      expect(doc.blocks[0].blockType, BlockType.paragraph);
+      expect(doc.blocks[0].blockType, ParagraphKeys.type);
     });
 
     test('deeply nested list does not stack overflow', () {
@@ -417,12 +417,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('one')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('two')],
         ),
       ]);
@@ -433,12 +433,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('item')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.paragraph,
+          blockType: ParagraphKeys.type,
           segments: [const StyledSegment('para')],
         ),
       ]);
@@ -449,17 +449,17 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('a')],
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('b')],
         ),
         TextBlock(
           id: 'c',
-          blockType: BlockType.numberedList,
+          blockType: NumberedListKeys.type,
           segments: [const StyledSegment('c')],
         ),
       ]);
@@ -470,12 +470,12 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.listItem,
+          blockType: ListItemKeys.type,
           segments: [const StyledSegment('parent')],
           children: [
             TextBlock(
               id: 'b',
-              blockType: BlockType.listItem,
+              blockType: ListItemKeys.type,
               segments: [const StyledSegment('child')],
             ),
           ],
@@ -488,13 +488,13 @@ void main() {
       final doc = Document([
         TextBlock(
           id: 'a',
-          blockType: BlockType.taskItem,
+          blockType: TaskItemKeys.type,
           segments: [const StyledSegment('a')],
           metadata: {'checked': false},
         ),
         TextBlock(
           id: 'b',
-          blockType: BlockType.taskItem,
+          blockType: TaskItemKeys.type,
           segments: [const StyledSegment('b')],
           metadata: {'checked': true},
         ),
