@@ -113,15 +113,18 @@ void main() {
       }
     });
 
-    test('paragraph takes the default policies', () {
+    test('paragraph takes the default split policy', () {
       final schema = EditorSchema.standard();
       final split = schema.splitPolicyOf(ParagraphKeys.type);
       expect(split.onEnter, OnEnter.split);
       expect(split.newBlockType, SplitNewBlockType.defaultType);
       expect(split.onSplitEmpty, OnSplitEmpty.none);
+      // v2 muscle memory (day 3-4): nested paragraphs outdent on backspace
+      // at start; at root the convert half is the identity, so the
+      // controller's structural-backspace path merges.
       expect(
         schema.backspaceAtStartOf(ParagraphKeys.type),
-        BackspaceAtStartPolicy.merge,
+        BackspaceAtStartPolicy.outdentOrConvert,
       );
       expect(schema.blockDef(ParagraphKeys.type).headingLevel, isNull);
     });

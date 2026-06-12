@@ -337,6 +337,7 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Code Block',
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      backspaceAtStart: BackspaceAtStartPolicy.convertToDefault,
       split: SplitPolicy.lineBreak,
       spacingBefore: 0.5,
       spacingAfter: 0.5,
@@ -379,6 +380,7 @@ abstract final class Blocks {
         canHaveChildren: true,
         maxDepth: 6,
       ),
+      backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
       baseStyle: (base) {
         final size = (base?.fontSize ?? kFallbackFontSize) * 1.1;
         return (base ?? const TextStyle()).copyWith(
@@ -466,6 +468,9 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Paragraph',
       policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
+      // v2 muscle memory: a nested paragraph outdents on backspace-at-start;
+      // at root the convert half is the identity, so the controller merges.
+      backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
       spacingBefore: 0.5,
       codecs: {
         Format.markdown: BlockCodec(

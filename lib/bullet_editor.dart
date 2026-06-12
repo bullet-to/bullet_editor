@@ -7,6 +7,7 @@ export 'src/codec/inline_codec.dart';
 export 'src/codec/markdown_codec.dart';
 // Editor
 export 'src/editor/edit_operation.dart';
+export 'src/editor/editor_controller.dart';
 export 'src/editor/input_rule.dart';
 export 'src/editor/text_diff.dart';
 export 'src/editor/undo_manager.dart';

@@ -19,6 +19,7 @@ environment:
   flutter: ">=1.17.0"
 
 dependencies:
+  characters: ^1.4.0
   flutter:
     sdk: flutter
 
