@@ -572,6 +572,9 @@ class ImeService extends ChangeNotifier
     if (shadow != null &&
         shadow.text == window.text &&
         _selectionsEquivalent(shadow.selection, window.selection)) {
+      // Same buffer, but the mapping may have gained real spans (e.g. the
+      // first selection into an empty block after a selection-less attach).
+      _window = window;
       return;
     }
     _push(window.toValue(), window);

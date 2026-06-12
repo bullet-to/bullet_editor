@@ -19,6 +19,7 @@ class BlockComponentContext {
     required this.gutter,
     required this.resolvedStyle,
     this.caretOffset,
+    this.composing,
     this.isSelected = false,
     this.onLinkTap,
   });
@@ -37,6 +38,12 @@ class BlockComponentContext {
   /// The collapsed caret's block-local offset, when the caret is in this
   /// block and the editor has focus; null otherwise.
   final int? caretOffset;
+
+  /// The block-local IME composing range when the active composition lives
+  /// in this block; null otherwise. The component paints the composing
+  /// underline itself — in Flutter the framework draws it, not the keyboard
+  /// (G3 visibility: CJK marked text must not look committed).
+  final TextRange? composing;
 
   /// Whether this (void) block is atomically selected — its `[0,1)` is the
   /// whole selection (D3). Range-spanning selection slices arrive day 10.

@@ -19,6 +19,26 @@ void main() {
 
   late EditorController controller;
 
+  /// Types [text] the way a platform engine does: an insertion delta at the
+  /// shadow caret through the editor's IME client (day 5–7 — character key
+  /// events no longer insert; the IME owns characters).
+  void typeViaIme(WidgetTester tester, String text) {
+    final ime = tester
+        .state<BulletEditorState>(find.byType(BulletEditor))
+        .imeService;
+    final shadow = ime.currentTextEditingValue!;
+    final offset = shadow.selection.extentOffset;
+    ime.updateEditingValueWithDeltas([
+      TextEditingDeltaInsertion(
+        oldText: shadow.text,
+        textInserted: text,
+        insertionOffset: offset,
+        selection: TextSelection.collapsed(offset: offset + text.length),
+        composing: TextRange.empty,
+      ),
+    ]);
+  }
+
   Future<void> pumpEditor(
     WidgetTester tester,
     List<TextBlock> blocks, {
@@ -248,15 +268,36 @@ void main() {
   });
 
   group('hardware-key skeleton (checkpoint 2)', () {
-    testWidgets('typing a character inserts at the caret', (tester) async {
+    testWidgets('typing arrives as an IME delta and inserts at the caret', (
+      tester,
+    ) async {
       await pumpEditor(tester, [para('a', 'helo')], autofocus: true);
       controller.setSelection(DocSelection.collapsed(DocPosition('a', 3)));
       await tester.pump();
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyL);
+      typeViaIme(tester, 'l');
       await tester.pump();
 
       expect(controller.document.blockById('a')!.plainText, 'hello');
+    });
+
+    testWidgets('character key events do NOT insert (the IME owns them)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'text')], autofocus: true);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 4)));
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
+      await tester.pump();
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'text',
+        reason:
+            'a hardware character insert would double-type against the '
+            'engine connection',
+      );
     });
 
     testWidgets('Enter splits, Backspace merges back', (tester) async {
@@ -349,7 +390,7 @@ void main() {
       controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
       await tester.pump();
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyH);
+      typeViaIme(tester, 'h');
       await tester.pump();
       expect(controller.document.blockById('a')!.plainText, 'h');
 
