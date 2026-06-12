@@ -333,6 +333,129 @@ void main() {
       expect(controller.composing, isNull);
     });
 
+    testWidgets('the full composing gate (day-10 pull-forward): ←/→ '
+        'mid-composition defer to the IME — the caret must not walk through '
+        'the document text (the manual Safari/Chrome symptom: → mid-'
+        'composition copies the text to the start of the next line)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello'), para('b', 'world')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 5)));
+      await tester.pump();
+
+      sendInsertion(tester, 'か', composing: const TextRange(start: 7, end: 8));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      final selectionBefore = controller.selection;
+      final ime = imeOf(tester);
+      ime.journal.clear();
+
+      // An ungated arrow fires moveCaret → setSelection →
+      // terminateComposition('externalEdit'): the marked text commits as-is
+      // on the first candidate/segment-navigation keystroke and the IME's
+      // internal buffer diverges from the document (§hardware keyboard).
+      // The raw key result is NOT asserted: once the editor defers, ambient
+      // app-level shortcuts (focus traversal) may still mark the event
+      // handled upstream — the invariant is the model state and the gate's
+      // journaled decision.
+      await simulateKeyDownEvent(LogicalKeyboardKey.arrowRight);
+      await simulateKeyUpEvent(LogicalKeyboardKey.arrowRight);
+      await simulateKeyDownEvent(LogicalKeyboardKey.arrowLeft);
+      await simulateKeyUpEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+
+      expect(
+        controller.composing,
+        isNotNull,
+        reason: 'arrows must not terminate the composition',
+      );
+      expect(controller.selection, selectionBefore);
+      expect(ime.debugLastTerminateReason, isNull);
+      expect(controller.document.blockById('a')!.plainText, 'helloか');
+      expect(controller.document.blockById('b')!.plainText, 'world');
+      final downs = [
+        for (final e in ime.journal.events)
+          if (e.kind == 'key' && e.payload['kind'] == 'down')
+            (e.payload['key'], e.payload['deferred']),
+      ];
+      expect(downs, [
+        ('Arrow Right', true),
+        ('Arrow Left', true),
+      ], reason: 'both arrows deferred via the composing gate');
+    });
+
+    testWidgets('the full composing gate: ↑/↓ (candidate-menu cycling) and '
+        'Home/End/PageUp/PageDown defer while composing — the cursor must '
+        'not be pushed through the document text', (tester) async {
+      await pumpEditor(tester, [para('a', 'hello')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 5)));
+      await tester.pump();
+
+      sendInsertion(tester, 'か', composing: const TextRange(start: 7, end: 8));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      final ime = imeOf(tester);
+      ime.journal.clear();
+
+      const gated = [
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.home,
+        LogicalKeyboardKey.end,
+        LogicalKeyboardKey.pageUp,
+        LogicalKeyboardKey.pageDown,
+      ];
+      // The raw key result is not asserted (ambient app-level shortcuts —
+      // scroll, focus traversal — may handle the deferred event upstream);
+      // the invariant is the journaled gate decision plus untouched state.
+      for (final key in gated) {
+        await simulateKeyDownEvent(key);
+        await simulateKeyUpEvent(key);
+      }
+      await tester.pump();
+
+      expect(controller.composing, isNotNull);
+      expect(ime.debugLastTerminateReason, isNull);
+      // The gate's decision is journaled: every key-down above was deferred
+      // to the IME, not merely unhandled.
+      final downs = [
+        for (final e in ime.journal.events)
+          if (e.kind == 'key' && e.payload['kind'] == 'down')
+            (e.payload['key'], e.payload['deferred']),
+      ];
+      expect(downs, hasLength(gated.length));
+      for (final (key, deferred) in downs) {
+        expect(deferred, isTrue, reason: '$key must defer via the gate');
+      }
+    });
+
+    testWidgets('the composing gate whitelist: Cmd/Ctrl+Z mid-composition '
+        'stays handled — undo is a first-class composition terminator (G7)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', '')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      sendInsertion(tester, 'か', composing: const TextRange(start: 2, end: 3));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+
+      await simulateKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      expect(
+        await simulateKeyDownEvent(LogicalKeyboardKey.keyZ),
+        isTrue,
+        reason: 'undo passes the gate — the one whitelisted terminator',
+      );
+      await simulateKeyUpEvent(LogicalKeyboardKey.keyZ);
+      await simulateKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+
+      expect(controller.composing, isNull);
+      expect(imeOf(tester).debugLastTerminateReason, 'undo');
+      expect(controller.document.blockById('a')!.plainText, '');
+    });
+
     testWidgets('the composing gate defers Enter and Tab to the IME while '
         'marked text exists, and releases them when it clears', (tester) async {
       await pumpEditor(tester, [para('a', 'ab')]);

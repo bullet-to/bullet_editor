@@ -17,8 +17,10 @@ import 'editor_view_scope.dart';
 /// [ImeService], never as key events: engine deltas on delta platforms,
 /// diffed full-value snapshots behind the web fallback, per [imeFrontend]),
 /// and the hardware-key handlers the IME doesn't own (Enter, Backspace,
-/// Tab, arrows, undo). Day 10 brings the full shortcut matrix with the
-/// composing gate over all handlers.
+/// Tab, arrows, undo) behind the full composing gate (day-10 work pulled
+/// forward — see [_classifyKeyEvent]). Day 10 brings the full key MATRIX
+/// (new bindings: ↑/↓ caret movement, Cmd+arrows, Alt+↑/↓ `MoveBlock`); the
+/// gate itself has landed.
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -218,7 +220,8 @@ class BulletEditorState extends State<BulletEditor> {
   // --- Hardware keys (the division of labor: keys the IME doesn't own.
   // Character input goes through the IME delta path exclusively — a
   // hardware character-insert here would double-type against the engine
-  // connection. The composing gate over all handlers is day-10 work.) ---
+  // connection. The composing gate covers ALL handlers below; day 10 adds
+  // the remaining key matrix under the same gate.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     final (result, handler, deferred, action) = _classifyKeyEvent(event);
@@ -263,6 +266,13 @@ class BulletEditorState extends State<BulletEditor> {
     final isShortcut = pressed.isMetaPressed || pressed.isControlPressed;
 
     if (isShortcut) {
+      // The composing gate's explicit whitelist (architecture §hardware
+      // keyboard: "a whitelist over an ignore-all default, not a per-key
+      // blacklist"): Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z stay handled even while
+      // a composition is live — undo is a first-class composition terminator
+      // (G7): the controller restores the pre-composition snapshot and the
+      // IME push routes through terminateComposition('undo'), quarantine
+      // armed. Every other key defers through the gate below.
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
         return pressed.isShiftPressed
             ? (KeyEventResult.handled, 'redo', false, controller.redo)
@@ -271,34 +281,43 @@ class BulletEditorState extends State<BulletEditor> {
       return ignored;
     }
 
-    // The minimal composing gate — day-10 work pulled forward (the full
-    // matrix over ALL editing/navigation handlers still lands day 10).
-    // While a composition is live the editing keys belong to the IME: on
-    // macOS the text input plugin is a SECONDARY key responder, so a key
-    // event the framework marks handled never reaches NSTextInputContext —
-    // handling backspace here while marked text exists both starves the IME
-    // of the keystroke it must consume (a dead key's marked-text removal)
-    // and edits the document out from under the live composition
-    // (terminateComposition → quarantine armed → the re-typed accent's
-    // signature). Returning ignored lets the platform IME consume the key
-    // and report the resulting edit as a delta. Undo deliberately stays
-    // above this gate: it is a first-class composition terminator (G7).
+    // The full composing gate — day-10 work pulled forward (architecture
+    // §hardware keyboard: "the composing gate covers ALL of keyboard_service,
+    // not just Enter/Backspace — ignore-everything-while-composing with an
+    // explicit whitelist"; the whitelist is the shortcut block above). Day 10
+    // retains only the full key MATRIX (new bindings: ↑/↓ caret movement,
+    // Cmd+arrows, Alt+↑/↓ MoveBlock) — each lands under this same gate.
+    // While a composition is live EVERY editing/navigation key belongs to
+    // the IME: on macOS the text input plugin is a SECONDARY key responder,
+    // so a key event the framework marks handled never reaches
+    // NSTextInputContext — handling backspace here while marked text exists
+    // both starves the IME of the keystroke it must consume (a dead key's
+    // marked-text removal) and edits the document out from under the live
+    // composition (terminateComposition → quarantine armed → the re-typed
+    // accent's signature). Arrows are NOT exempt: Japanese conversion uses
+    // ←/→ for clause segments and ↑/↓ for candidates — an ungated arrow
+    // fires setSelection → terminateComposition('externalEdit'), committing
+    // the marked text on the first navigation keystroke (the live
+    // Safari/Chrome symptoms: → mid-composition walks the caret through the
+    // text and copies it to the start of the next line; ↑/↓ while cycling
+    // the candidate menu push the cursor through the document). Returning
+    // ignored lets the platform IME consume the key and report the
+    // resulting edit as a delta/snapshot.
     if (controller.composing != null) {
-      switch (event.logicalKey) {
-        case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
-          // A gate-deferred Enter is noted with the service: it proves the
-          // keydown-first ordering (Chrome/Firefox — keyCode 229 while the
-          // composition is live), so the composing-clear this key produces
-          // must not arm the commit-key suppression below.
-          return (
-            KeyEventResult.ignored,
-            'ignored',
-            true,
-            imeService.noteCommitKeyDeferred,
-          );
-        case LogicalKeyboardKey.backspace || LogicalKeyboardKey.tab:
-          return (KeyEventResult.ignored, 'ignored', true, null);
+      if (event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+        // A gate-deferred Enter is noted with the service: it proves the
+        // keydown-first ordering (Chrome/Firefox — keyCode 229 while the
+        // composition is live), so the composing-clear this key produces
+        // must not arm the commit-key suppression below.
+        return (
+          KeyEventResult.ignored,
+          'ignored',
+          true,
+          imeService.noteCommitKeyDeferred,
+        );
       }
+      return (KeyEventResult.ignored, 'ignored', true, null);
     }
 
     switch (event.logicalKey) {
