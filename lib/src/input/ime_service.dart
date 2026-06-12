@@ -351,14 +351,16 @@ ImeWindow serializeImeWindow(
   );
 }
 
-/// One `ImeService` owning one engine connection with the delta model
-/// enabled (architecture §IME). Responsibilities:
+/// One `ImeService` owning one engine connection (architecture §IME: one
+/// strategy, two frontends, one core — the delta model per [frontend], or
+/// the web non-delta diff fallback over the same core). Responsibilities:
 ///
 /// - the shadow buffer — text AND selection AND composing region as last
 ///   pushed to or acknowledged from the engine; the no-echo comparison
 ///   covers all three;
 /// - delta → op translation through the controller's IME surface (one
-///   choke point for every mutation);
+///   choke point for every mutation), fed by engine deltas or by deltas
+///   synthesized from full-value diffs (§web fallback);
 /// - the stale-delta guard (pre-push races) and the post-terminate echo
 ///   quarantine (post-push races) — complementary, neither alone suffices;
 /// - [terminateComposition] — the ONE path allowed to push while the shadow
