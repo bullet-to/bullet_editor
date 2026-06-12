@@ -1108,6 +1108,84 @@ void main() {
     });
   });
 
+  group("WebKit's range-selection-over-composing snapshots (the Safari "
+      'Japanese capture)', () {
+    test('a composing snapshot whose selection is the composing RANGE '
+        'survives: no terminate, nothing pushed, the engine selection '
+        'honored as a model range', () {
+      build([para('a', '')], selection: caret('a', 0));
+      final pushesBefore = connection().pushed.length;
+
+      // The captured seq-6 shape (Safari, Japanese romaji 'n'): the first
+      // composing snapshot transiently reports the marked text as SELECTED
+      // — selection == composing, a non-collapsed range. The applied
+      // insertion leaves a collapsed model caret, so the batch-end
+      // selection comparison diverges — but nothing structural happened:
+      // terminating here de-marks Safari's live composition and every
+      // later compositionupdate INSERTS instead of replacing (the
+      // "nににhにほ…" accumulation).
+      sendValue(
+        '. n',
+        cursor: 3,
+        cursorBase: 2,
+        composing: const TextRange(start: 2, end: 3),
+      );
+
+      expect(controller.document.blockById('a')!.plainText, 'n');
+      expect(service.debugLastTerminateReason, isNull);
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+        reason: 'the composition survives the transient range selection',
+      );
+      expect(
+        connection().pushed.length,
+        pushesBefore,
+        reason: '#1641: a push mid-composition restarts the composition',
+      );
+      // The engine's selection is adopted verbatim (a range within the
+      // marked text is a legal model selection — see _finishBatch's
+      // adoption rule for why range-over-collapse keeps the no-echo triple
+      // genuinely convergent).
+      expect(
+        controller.selection,
+        DocSelection(
+          base: const DocPosition('a', 0),
+          extent: const DocPosition('a', 1),
+        ),
+      );
+
+      // The composition continues as marked-text replacement (what Safari
+      // sends once the composition was never de-marked) and converges.
+      sendValue('. に', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.document.blockById('a')!.plainText, 'に');
+      expect(controller.composing, isNotNull);
+      expect(connection().pushed.length, pushesBefore);
+    });
+
+    test('the structural rule still fires when the selection ESCAPES the '
+        'composing region (text converged, selection outside the marked '
+        'text is NOT the WebKit transient)', () {
+      build([para('a', 'abc')], selection: caret('a', 3));
+      expect(shadow().text, '. abc');
+
+      // A composing insertion whose snapshot selection lands outside the
+      // marked range — unexplained mid-composition, the G10 shape.
+      service.updateEditingValue(
+        const TextEditingValue(
+          text: '. abcか',
+          selection: TextSelection(baseOffset: 2, extentOffset: 4),
+          composing: TextRange(start: 5, end: 6),
+        ),
+      );
+
+      expect(controller.document.blockById('a')!.plainText, 'abcか');
+      expect(service.debugLastTerminateReason, 'structuralDelta');
+      expect(controller.composing, isNull);
+      expect(connection().pushed.last.composing, TextRange.empty);
+    });
+  });
+
   group('inspector surface (pane 3 honesty)', () {
     test('the last diff result is recorded for the inspector', () {
       build([para('a', 'hi')], selection: caret('a', 2));

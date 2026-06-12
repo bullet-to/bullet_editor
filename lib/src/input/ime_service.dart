@@ -1404,6 +1404,10 @@ class ImeService extends ChangeNotifier
   ///
   /// - Equal with live composing — the merge-via-replacement case (G10
   ///   refined): keep ComposingState remapped block-locally, send nothing.
+  /// - Equal text with live composing but a divergent shadow selection that
+  ///   lies WITHIN the composing region — WebKit's transient
+  ///   marked-text-selected report: adopt the engine's selection into the
+  ///   model ([_adoptComposingSelection]) and keep the composition live.
   /// - Divergent with live composing — the G10 split: route through
   ///   `terminateComposition('structuralDelta')`.
   /// - Composing empty: run the input rules (immediately with this batch's
@@ -1429,11 +1433,18 @@ class ImeService extends ChangeNotifier
       final mapped = textConverged
           ? _mapComposing(shadow.composing, window)
           : null;
-      if (!textConverged || mapped == null || !selectionConverged) {
+      final selectionAdopted =
+          !selectionConverged &&
+          textConverged &&
+          mapped != null &&
+          _adoptComposingSelection(shadow, window);
+      if (!textConverged ||
+          mapped == null ||
+          !(selectionConverged || selectionAdopted)) {
         // The window diverged from the shadow (split moved it to a new
         // block, G1 merged across the sentinel) — or the composing region
-        // no longer maps into one block. Terminating is the ONLY legal way
-        // to push here.
+        // no longer maps into one block, or the selection escaped the
+        // composing region. Terminating is the ONLY legal way to push here.
         terminateComposition('structuralDelta');
         return;
       }
@@ -1472,6 +1483,64 @@ class ImeService extends ChangeNotifier
     if (ruleFired || !textConverged || !selectionConverged) {
       _pushAuthoritativeWindow();
     }
+  }
+
+  /// WebKit's range-selection-over-composing snapshot (the Safari Japanese
+  /// capture, `test/input/ime_safari_capture_replay_test.dart`): Safari
+  /// transiently reports the marked text as SELECTED — the first composing
+  /// snapshot of a romaji keystroke carries `selection == composing`, a
+  /// non-collapsed range, which the applied insertion's collapsed model
+  /// caret can never match. That shape is NOT structural divergence: the
+  /// text converged and the composing region maps cleanly into one block —
+  /// only the engine's selection sits inside the marked text where our
+  /// applied caret does not. Terminating there is the #1641 pathology by
+  /// our own hand: the viaTerminate push de-marks Safari's live composition
+  /// while the IME keeps its internal buffer, so every later
+  /// compositionupdate INSERTS its full text at the caret instead of
+  /// replacing the no-longer-marked range — the captured
+  /// `nににhにほにほnにほんg日本語` accumulation.
+  ///
+  /// The rule: a shadow selection (range or collapsed) lying WITHIN the
+  /// composing region is honored as the real model selection — mapped
+  /// block-locally, the same mapping a `NonTextUpdate` gets. Honored as a
+  /// range rather than collapsed to its downstream end, by ComposingState's
+  /// lifecycle rules (architecture §Selection): composing is
+  /// selection-adjacent state with NO collapsed-while-composing invariant —
+  /// the controller's ime verbs accept any normalized selection, and the
+  /// hardware-key composing gate / underline / geometry reporting are all
+  /// indifferent to the selection's shape. Adopting the engine's selection
+  /// verbatim is also what keeps the no-echo triple genuinely convergent:
+  /// `window.selection` equals `shadow.selection` again, leaving no
+  /// special-cased residual divergence for the next batch to re-litigate.
+  ///
+  /// Genuinely structural shapes keep terminating: a selection spanning
+  /// blocks or escaping the window cannot lie within a composing region
+  /// that mapped into a single text span (the caller checks `mapped !=
+  /// null` first), and a selection outside the composing region — same
+  /// block or not — stays the G10 divergence this rule deliberately does
+  /// not cover. Shared `_finishBatch`, so a DELTA carrying a range
+  /// selection inside its composing region survives identically.
+  ///
+  /// Returns whether the selection was adopted; on true the model selection
+  /// mirrors [shadow]'s and the caller treats the batch as converged.
+  bool _adoptComposingSelection(TextEditingValue shadow, ImeWindow window) {
+    final selection = shadow.selection;
+    if (!selection.isValid) return false;
+    final composing = shadow.composing;
+    if (selection.start < composing.start || selection.end > composing.end) {
+      return false;
+    }
+    final mapped = _mapBufferSelection(window, selection);
+    if (mapped == null) return false;
+    controller.imeSetSelection(mapped);
+    journal.record(
+      'composingSelectionAdopted',
+      () => {
+        'sel': [selection.baseOffset, selection.extentOffset],
+        'composing': ImeJournal.describeRange(composing),
+      },
+    );
+    return true;
   }
 
   /// Drops the remainder of the batch and re-pushes the authoritative

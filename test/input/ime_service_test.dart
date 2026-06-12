@@ -1188,6 +1188,44 @@ void main() {
         expect(controller.document.blockById('b')!.plainText, 'two');
       });
 
+      test('a delta whose selection is a RANGE inside the composing region '
+          'survives (the WebKit transient through the shared _finishBatch — '
+          'the delta frontend benefits identically)', () {
+        build([para('a', '')], selection: caret('a', 0));
+        final pushesBefore = connection().pushed.length;
+
+        // The diff frontend's captured Safari shape, synthesized here as a
+        // raw delta: insertion with selection == composing, non-collapsed.
+        sendDeltas([
+          const TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: 'n',
+            insertionOffset: 2,
+            selection: TextSelection(baseOffset: 2, extentOffset: 3),
+            composing: TextRange(start: 2, end: 3),
+          ),
+        ]);
+
+        expect(controller.document.blockById('a')!.plainText, 'n');
+        expect(service.debugLastTerminateReason, isNull);
+        expect(
+          controller.composing,
+          const ComposingState(
+            blockId: 'a',
+            range: TextRange(start: 0, end: 1),
+          ),
+        );
+        expect(connection().pushed.length, pushesBefore, reason: 'no echo');
+        expect(
+          controller.selection,
+          DocSelection(
+            base: const DocPosition('a', 0),
+            extent: const DocPosition('a', 1),
+          ),
+          reason: 'the engine selection is adopted into the model',
+        );
+      });
+
       test('type-over of a selection spanning a void: one replacement delta '
           'removes the swept void and merges the text endpoints', () {
         build([

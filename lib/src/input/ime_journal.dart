@@ -48,6 +48,9 @@ class ImeJournalEvent {
 ///   no text change).
 /// - `composingSanitized` / `staleComposingSuppressed` — the composing
 ///   region filters changed what the synthesis sees.
+/// - `composingSelectionAdopted` — batch-end reconciliation honored an
+///   engine selection lying within the composing region instead of
+///   terminating (WebKit's transient marked-text-selected report).
 /// - `synthesized` — the delta synthesized from a snapshot (null = pure
 ///   echo of our own push); carries `deadKeyRewrite` when the append-shaped
 ///   commit compensation fired.
