@@ -19,8 +19,8 @@ import 'undo_manager.dart';
 /// notified only after a batch fully commits, and a rejected batch leaves
 /// document and selection untouched. Synchronous producers (gestures,
 /// hardware keys, app calls) arrive pre-serialized on the UI thread; the
-/// day 5–7 `ImeService` feeds its async delta batches through this same
-/// choke point in arrival order.
+/// `ImeService` feeds its delta batches through this same choke point in
+/// arrival order (the IME surface below).
 class EditorController extends ChangeNotifier {
   EditorController({
     required Document document,
@@ -52,7 +52,8 @@ class EditorController extends ChangeNotifier {
   //
   // The internal Focus widget is package-private, so focusing a new note or
   // dismissing the keyboard on save/navigate has no app-side workaround
-  // without this. Day 5–7 routes these through the IME connection lifecycle.
+  // without this. The widget's focus listener drives the IME connection
+  // lifecycle off this node (ImeService attach/detach).
 
   FocusNode? _focusNode;
 
