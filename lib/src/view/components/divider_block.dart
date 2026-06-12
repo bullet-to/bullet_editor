@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../block_component_context.dart';
-import 'default_text_component.dart' show BlockGeometryRegistration;
+import '../block_geometry_mixins.dart';
 import 'void_block_geometry.dart';
 
 /// Component for the void divider block: a thin horizontal rule.
@@ -24,15 +24,6 @@ class _DividerBlockComponentState extends State<DividerBlockComponent>
     with BlockGeometryRegistration, VoidBlockGeometry {
   @override
   String get geometryBlockId => widget.componentContext.block.id;
-
-  @override
-  void didUpdateWidget(DividerBlockComponent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.componentContext.block.id !=
-        widget.componentContext.block.id) {
-      geometryBlockIdChanged(oldWidget.componentContext.block.id);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

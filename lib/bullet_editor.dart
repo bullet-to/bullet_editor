@@ -25,6 +25,7 @@ export 'src/schema/inline_entity_def.dart';
 export 'src/schema/inline_style_def.dart';
 // View
 export 'src/view/block_component_context.dart';
+export 'src/view/block_geometry_mixins.dart';
 export 'src/view/block_layout_registry.dart';
 export 'src/view/block_list_view.dart' show BlockListView;
 export 'src/view/bullet_editor.dart';

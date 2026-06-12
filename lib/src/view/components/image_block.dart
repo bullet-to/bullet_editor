@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../model/block.dart';
 import '../block_component_context.dart';
-import 'default_text_component.dart' show BlockGeometryRegistration;
+import '../block_geometry_mixins.dart';
 import 'void_block_geometry.dart';
 
 /// Component for the void image block: full-width image, atomic selection,
@@ -24,15 +24,6 @@ class _ImageBlockComponentState extends State<ImageBlockComponent>
     with BlockGeometryRegistration, VoidBlockGeometry {
   @override
   String get geometryBlockId => widget.componentContext.block.id;
-
-  @override
-  void didUpdateWidget(ImageBlockComponent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.componentContext.block.id !=
-        widget.componentContext.block.id) {
-      geometryBlockIdChanged(oldWidget.componentContext.block.id);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

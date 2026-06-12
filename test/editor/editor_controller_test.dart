@@ -104,6 +104,20 @@ void main() {
       expect(shape(c.document), before);
     });
 
+    test('an empty batch commits nothing: no undo entry, redo intact', () {
+      final c = controller([para('a', 'hello')]);
+      c.setSelection(caret('a', 0));
+      c.insertText('x');
+      c.undo();
+      expect(c.canRedo, isTrue);
+
+      final result = c.apply(const []);
+
+      expect(result, isA<EditApplied>());
+      expect(c.canUndo, isFalse);
+      expect(c.canRedo, isTrue, reason: 'an empty batch must not clear redo');
+    });
+
     test('selectionAfter is honored and normalized', () {
       final c = controller([para('a', 'hi')]);
       c.apply(

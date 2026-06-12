@@ -1,109 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../model/inline_entity.dart';
 import '../block_component_context.dart';
+import '../block_geometry_mixins.dart';
 import '../block_layout_registry.dart';
-import '../editor_view_scope.dart';
-
-/// Registry lifecycle for any component implementing [BlockGeometry]:
-/// registers on mount, re-registers when the rendered block id changes,
-/// deregisters on dispose. Geometry queries are left to a sibling mixin —
-/// [BlockGeometryMixin] for text components, `VoidBlockGeometry` for voids.
-mixin BlockGeometryRegistration<T extends StatefulWidget> on State<T>
-    implements BlockGeometry {
-  /// The id of the block this component renders.
-  String get geometryBlockId;
-
-  BlockLayoutRegistry? _registry;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final registry = EditorViewScope.maybeOf(context)?.registry;
-    if (!identical(registry, _registry)) {
-      _registry?.unregister(geometryBlockId, this);
-      _registry = registry;
-      _registry?.register(geometryBlockId, this);
-    }
-  }
-
-  /// Call from `didUpdateWidget` when the rendered block id changed.
-  void geometryBlockIdChanged(String oldId) {
-    _registry?.unregister(oldId, this);
-    _registry?.register(geometryBlockId, this);
-  }
-
-  @override
-  void dispose() {
-    _registry?.unregister(geometryBlockId, this);
-    _registry = null;
-    super.dispose();
-  }
-}
-
-/// Implements the [BlockGeometry] contract over the `RenderParagraph` of a
-/// component's `RichText` child.
-///
-/// This is the piece a custom text-like component must never re-derive:
-/// apply `with BlockGeometryRegistration, BlockGeometryMixin`, provide
-/// [BlockGeometryRegistration.geometryBlockId], and attach [richTextKey] to
-/// your `RichText`. (Both reference editors export exactly this seam:
-/// appflowy's `SelectableMixin`, super_editor's `TextComponent`.)
-mixin BlockGeometryMixin<T extends StatefulWidget>
-    on BlockGeometryRegistration<T> {
-  /// Attach to the component's `RichText` child.
-  final GlobalKey richTextKey = GlobalKey();
-
-  RenderParagraph? get _paragraph {
-    final renderObject = richTextKey.currentContext?.findRenderObject();
-    if (renderObject is! RenderParagraph || !renderObject.hasSize) return null;
-    return renderObject;
-  }
-
-  @override
-  Rect? rectForOffset(int offset) {
-    final paragraph = _paragraph;
-    if (paragraph == null) return null;
-    final position = TextPosition(offset: offset);
-    final caretOffset = paragraph.getOffsetForCaret(position, Rect.zero);
-    final height = paragraph.getFullHeightForCaret(position);
-    return caretOffset & Size(1, height);
-  }
-
-  @override
-  List<Rect> rectsForRange(int start, int end) {
-    final paragraph = _paragraph;
-    if (paragraph == null) return const [];
-    return paragraph
-        .getBoxesForSelection(
-          TextSelection(baseOffset: start, extentOffset: end),
-        )
-        .map((box) => box.toRect())
-        .toList();
-  }
-
-  @override
-  int offsetForLocalPoint(Offset point) {
-    final paragraph = _paragraph;
-    if (paragraph == null) return 0;
-    return paragraph.getPositionForOffset(point).offset;
-  }
-
-  @override
-  TextRange wordBoundaryAt(int offset) {
-    final paragraph = _paragraph;
-    if (paragraph == null) return TextRange.collapsed(offset);
-    return paragraph.getWordBoundary(TextPosition(offset: offset));
-  }
-
-  @override
-  RenderBox get renderBox =>
-      richTextKey.currentContext!.findRenderObject()! as RenderBox;
-}
 
 /// The public, parameterizable text component (architecture §Rendering).
 ///
@@ -156,10 +59,6 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
   @override
   void didUpdateWidget(DefaultTextComponent oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.componentContext.block.id !=
-        widget.componentContext.block.id) {
-      geometryBlockIdChanged(oldWidget.componentContext.block.id);
-    }
     if (oldWidget.componentContext.caretOffset !=
         widget.componentContext.caretOffset) {
       // The caret is solid on arrival and on every move (standard rhythm).

@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../block_geometry_mixins.dart';
 import '../block_layout_registry.dart';
-import 'default_text_component.dart' show BlockGeometryRegistration;
 
 /// Implements the [BlockGeometry] contract for void blocks (image, divider)
 /// over the component's own render box.

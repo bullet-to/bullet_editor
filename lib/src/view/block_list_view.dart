@@ -96,10 +96,12 @@ TextBlock _lastDescendant(TextBlock block) =>
 /// Renders one block — gutter slot (prefixBuilder) + component — plus its
 /// children Column, recursing through the componentBuilder registry.
 ///
-/// Consumes only plain values (the [BlockComponentContext] seam plus what the
-/// parent walk already knows) — never the [Document]. This keeps every input
-/// value-comparable for the day-10 rebuild-skip predicate: a keystroke
-/// elsewhere must not change this widget's inputs.
+/// Consumes only plain values (the [BlockComponentContext] seam plus what
+/// the parent walk already knows) — never the [Document]. One caveat for
+/// the day-10 rebuild-skip predicate: [selection] is the doc-global
+/// selection (it changes on every caret move anywhere), so the predicate
+/// must compare the DERIVED slice ([_caretOffset], [_isSelected]) — the
+/// value-comparable rebuild key — not this constructor input.
 class BlockSubtree extends StatelessWidget {
   const BlockSubtree({
     super.key,

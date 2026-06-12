@@ -76,41 +76,51 @@ class BulletEditorState extends State<BulletEditor> {
 
   Offset? _pointerDownPosition;
 
+  /// The controller/focus-node pair is attached and detached symmetrically —
+  /// one helper pair covers mount, every didUpdateWidget swap combination
+  /// (controller, node, or both), and unmount.
+  void _attach(EditorController controller, FocusNode node) {
+    controller.addListener(_onControllerChanged);
+    controller.attachFocusNode(node);
+    node.addListener(_onFocusChanged);
+  }
+
+  void _detach(EditorController controller, FocusNode node) {
+    controller.removeListener(_onControllerChanged);
+    controller.detachFocusNode(node);
+    node.removeListener(_onFocusChanged);
+  }
+
   @override
   void initState() {
     super.initState();
     // GATE-K: schema validation at the editor boundary, debug-mode.
     assert(widget.controller.schema.validate());
-    widget.controller.addListener(_onControllerChanged);
-    widget.controller.attachFocusNode(_focusNode);
-    _focusNode.addListener(_onFocusChanged);
+    _attach(widget.controller, _focusNode);
   }
 
   @override
   void didUpdateWidget(BulletEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(widget.controller, oldWidget.controller)) {
-      oldWidget.controller.removeListener(_onControllerChanged);
-      oldWidget.controller.detachFocusNode(_focusNode);
-      // GATE-K also covers a schema swapped in via a new controller.
-      assert(widget.controller.schema.validate());
-      widget.controller.addListener(_onControllerChanged);
-      widget.controller.attachFocusNode(_focusNode);
-    }
-    if (!identical(widget.focusNode, oldWidget.focusNode)) {
-      final old = oldWidget.focusNode ?? _ownedFocusNode;
-      old?.removeListener(_onFocusChanged);
-      widget.controller.detachFocusNode(old ?? _focusNode);
-      _focusNode.addListener(_onFocusChanged);
-      widget.controller.attachFocusNode(_focusNode);
-    }
+    final controllerChanged = !identical(
+      widget.controller,
+      oldWidget.controller,
+    );
+    final nodeChanged = !identical(widget.focusNode, oldWidget.focusNode);
+    if (!controllerChanged && !nodeChanged) return;
+
+    // The node the old pair was attached with (the owned node when the old
+    // widget supplied none — initState guarantees it exists by now).
+    final oldNode = (oldWidget.focusNode ?? _ownedFocusNode)!;
+    _detach(oldWidget.controller, oldNode);
+    // GATE-K also covers a schema swapped in via a new controller.
+    assert(!controllerChanged || widget.controller.schema.validate());
+    _attach(widget.controller, _focusNode);
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onControllerChanged);
-    widget.controller.detachFocusNode(_focusNode);
-    _focusNode.removeListener(_onFocusChanged);
+    _detach(widget.controller, _focusNode);
     _ownedScrollController?.dispose();
     _ownedFocusNode?.dispose();
     super.dispose();
@@ -177,89 +187,21 @@ class BulletEditorState extends State<BulletEditor> {
         pressed.isShiftPressed ? controller.outdent() : controller.indent();
         return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowLeft:
-        _moveCaret(-1);
+        controller.moveCaret(-1);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowRight:
-        _moveCaret(1);
+        controller.moveCaret(1);
         return KeyEventResult.handled;
     }
 
     final character = event.character;
     if (character != null &&
         character.isNotEmpty &&
-        !character.codeUnits.every((u) => u < 0x20)) {
+        character.codeUnits.any((u) => u >= 0x20)) {
       controller.insertText(character);
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
-  }
-
-  /// Grapheme-aware left/right caret movement with block hops. Vertical
-  /// movement needs line geometry and lands with the day-10 key matrix.
-  void _moveCaret(int direction) {
-    final controller = widget.controller;
-    final sel = controller.selection;
-    if (sel == null) return;
-
-    final doc = controller.document;
-
-    if (!sel.isCollapsed) {
-      // Off a void's atomic selection: hop to the adjacent block (collapsing
-      // onto the void would just re-normalize to the atomic selection).
-      final sameBlock = sel.base.blockId == sel.extent.blockId;
-      final block = doc.blockById(sel.extent.blockId);
-      if (sameBlock &&
-          block != null &&
-          controller.schema.isVoid(block.blockType)) {
-        _hopToAdjacentBlock(doc.idToFlatIndex[block.id]!, direction);
-        return;
-      }
-      // Otherwise collapse to the directional edge (standard behavior).
-      final (start, end) = sel.normalized(doc);
-      controller.setSelection(
-        DocSelection.collapsed(direction < 0 ? start : end),
-      );
-      return;
-    }
-
-    final caret = sel.extent;
-    final block = doc.blockById(caret.blockId);
-    final flatIndex = doc.idToFlatIndex[caret.blockId];
-    if (block == null || flatIndex == null) return;
-
-    final text = block.plainText;
-    if (direction < 0 && caret.offset > 0) {
-      final step = text.substring(0, caret.offset).characters.last.length;
-      controller.setSelection(
-        DocSelection.collapsed(DocPosition(caret.blockId, caret.offset - step)),
-      );
-      return;
-    }
-    if (direction > 0 && caret.offset < block.length) {
-      final step = text.substring(caret.offset).characters.first.length;
-      controller.setSelection(
-        DocSelection.collapsed(DocPosition(caret.blockId, caret.offset + step)),
-      );
-      return;
-    }
-
-    _hopToAdjacentBlock(flatIndex, direction);
-  }
-
-  void _hopToAdjacentBlock(int fromFlatIndex, int direction) {
-    final controller = widget.controller;
-    final doc = controller.document;
-    final targetIndex = fromFlatIndex + (direction < 0 ? -1 : 1);
-    if (targetIndex < 0 || targetIndex >= doc.allBlocks.length) return;
-    final target = doc.allBlocks[targetIndex];
-    final offset = controller.schema.isVoid(target.blockType)
-        ? 0 // setSelection normalizes to the atomic selection
-        : direction < 0
-        ? target.length
-        : 0;
-    controller.setSelection(
-      DocSelection.collapsed(DocPosition(target.id, offset)),
-    );
   }
 
   @override

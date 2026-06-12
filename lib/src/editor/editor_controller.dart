@@ -189,18 +189,12 @@ class EditorController extends ChangeNotifier {
       if (next == null) return EditRejected(op);
       doc = next;
     }
-    if (identical(doc, _document) && ops.isNotEmpty) {
-      // Every op no-oped (e.g. a boundary MoveBlock): nothing to commit or
-      // snapshot.
+    if (identical(doc, _document)) {
+      // Nothing to commit (empty batch, or every op no-oped — e.g. a
+      // boundary MoveBlock): no undo entry, redo stack untouched.
       return const EditApplied();
     }
-    _undoManager.push(
-      UndoEntry(
-        document: _document,
-        selection: _selection,
-        timestamp: DateTime.now(),
-      ),
-    );
+    _undoManager.push(_snapshotNow());
     _document = doc;
     final desired = selectionAfter?.call(doc);
     _selection = desired == null
@@ -211,17 +205,17 @@ class EditorController extends ChangeNotifier {
 
   // --- Undo / redo ---
 
+  UndoEntry _snapshotNow() => UndoEntry(
+    document: _document,
+    selection: _selection,
+    timestamp: DateTime.now(),
+  );
+
   void undo() {
     _edit(() {
       final entry = _undoManager.undo();
       if (entry == null) return;
-      _undoManager.pushRedo(
-        UndoEntry(
-          document: _document,
-          selection: _selection,
-          timestamp: DateTime.now(),
-        ),
-      );
+      _undoManager.pushRedo(_snapshotNow());
       _restore(entry);
     });
   }
@@ -230,13 +224,7 @@ class EditorController extends ChangeNotifier {
     _edit(() {
       final entry = _undoManager.redo();
       if (entry == null) return;
-      _undoManager.pushUndoRaw(
-        UndoEntry(
-          document: _document,
-          selection: _selection,
-          timestamp: DateTime.now(),
-        ),
-      );
+      _undoManager.pushUndoRaw(_snapshotNow());
       _restore(entry);
     });
   }
@@ -274,33 +262,33 @@ class EditorController extends ChangeNotifier {
       final plan = _rangeDeletionPlan(sel);
       if (plan == null) return;
 
-      final anchor = plan.insertAnchor;
-      if (anchor != null) {
-        _applyBatch(
-          [...plan.ops, InsertText(anchor.blockId, anchor.offset, text)],
-          selectionAfter: (_) => DocSelection.collapsed(
-            DocPosition(anchor.blockId, anchor.offset + text.length),
-          ),
-        );
-        return;
+      switch (plan) {
+        case _TextRangeDeletion(:final ops, :final anchor):
+          _applyBatch(
+            [...ops, InsertText(anchor.blockId, anchor.offset, text)],
+            selectionAfter: (_) => DocSelection.collapsed(
+              DocPosition(anchor.blockId, anchor.offset + text.length),
+            ),
+          );
+        case _VoidDeletion(:final ops, :final voidId):
+          // Type-over a selected void: a default-type block carrying the
+          // text takes its place. The replacement chains after the void's
+          // id, so it must insert BEFORE the removal runs.
+          final replacement = TextBlock(
+            id: generateBlockId(),
+            blockType: schema.defaultBlockType,
+            segments: [StyledSegment(text)],
+          );
+          _applyBatch(
+            [
+              InsertBlocks(voidId, [replacement]),
+              ...ops,
+            ],
+            selectionAfter: (_) => DocSelection.collapsed(
+              DocPosition(replacement.id, text.length),
+            ),
+          );
       }
-
-      // Type-over a selected void: a default-type block carrying the text
-      // takes its place. The replacement chains after the void's id, so it
-      // must insert BEFORE the removal runs.
-      final replacement = TextBlock(
-        id: generateBlockId(),
-        blockType: schema.defaultBlockType,
-        segments: [StyledSegment(text)],
-      );
-      _applyBatch(
-        [
-          InsertBlocks(plan.removedVoidId!, [replacement]),
-          ...plan.ops,
-        ],
-        selectionAfter: (_) =>
-            DocSelection.collapsed(DocPosition(replacement.id, text.length)),
-      );
     });
   }
 
@@ -346,21 +334,16 @@ class EditorController extends ChangeNotifier {
         return;
       }
 
+      // Splitting at offset 0 of a non-empty block inserts an empty block
+      // ABOVE and the caret stays in the original block; otherwise the caret
+      // lands at the start of the split-off block, whose id the op carries.
       final splitAtStart = caret.offset == 0 && block.plainText.isNotEmpty;
-      final oldIds = _document.idToFlatIndex;
+      final splitOp = SplitBlock(caret.blockId, caret.offset);
       _applyBatch(
-        [SplitBlock(caret.blockId, caret.offset)],
-        selectionAfter: (newDoc) {
-          if (splitAtStart) {
-            // Empty block inserted above; the caret stays at the start of
-            // the original block.
-            return DocSelection.collapsed(DocPosition(caret.blockId, 0));
-          }
-          final newBlock = newDoc.allBlocks.firstWhere(
-            (b) => !oldIds.containsKey(b.id),
-          );
-          return DocSelection.collapsed(DocPosition(newBlock.id, 0));
-        },
+        [splitOp],
+        selectionAfter: (_) => DocSelection.collapsed(
+          DocPosition(splitAtStart ? caret.blockId : splitOp.newBlockId, 0),
+        ),
       );
     });
   }
@@ -385,8 +368,7 @@ class EditorController extends ChangeNotifier {
 
       if (caret.offset > 0) {
         // Delete one grapheme cluster, never half a surrogate pair.
-        final before = block.plainText.substring(0, caret.offset);
-        final length = before.characters.last.length;
+        final length = _graphemeLengthBefore(block.plainText, caret.offset);
         _applyBatch(
           [DeleteText(caret.blockId, caret.offset - length, length)],
           selectionAfter: (_) => DocSelection.collapsed(
@@ -399,6 +381,14 @@ class EditorController extends ChangeNotifier {
       _structuralBackspace(block);
     });
   }
+
+  /// Length in code units of the grapheme cluster ending at [offset].
+  static int _graphemeLengthBefore(String text, int offset) =>
+      text.substring(0, offset).characters.last.length;
+
+  /// Length in code units of the grapheme cluster starting at [offset].
+  static int _graphemeLengthAfter(String text, int offset) =>
+      text.substring(offset).characters.first.length;
 
   void _structuralBackspace(TextBlock block) {
     var policy = schema.backspaceAtStartOf(block.blockType);
@@ -455,6 +445,69 @@ class EditorController extends ChangeNotifier {
     );
   }
 
+  /// Moves the caret one grapheme cluster left ([direction] < 0) or right
+  /// (> 0). Horizontal movement is pure selection-model logic: it steps
+  /// within the block, hops to the adjacent flat block at the edges, and
+  /// atomic-selects voids on entry (arrowing off a void hops past it). A
+  /// non-collapsed text selection collapses to its directional edge.
+  /// Vertical movement needs line geometry and lands with the day-10 key
+  /// matrix.
+  void moveCaret(int direction) {
+    _edit(() {
+      final sel = _selection;
+      if (sel == null) return;
+      final doc = _document;
+
+      if (!sel.isCollapsed) {
+        final block = doc.blockById(sel.extent.blockId);
+        final sameBlock = sel.base.blockId == sel.extent.blockId;
+        if (sameBlock && block != null && schema.isVoid(block.blockType)) {
+          // Off a void's atomic selection: collapsing onto the void would
+          // just re-normalize to the atomic selection.
+          _hopToAdjacentBlock(doc.idToFlatIndex[block.id]!, direction);
+          return;
+        }
+        final (start, end) = sel.normalized(doc);
+        _selection = DocSelection.collapsed(direction < 0 ? start : end);
+        return;
+      }
+
+      final caret = sel.extent;
+      final block = doc.blockById(caret.blockId);
+      final flatIndex = doc.idToFlatIndex[caret.blockId];
+      if (block == null || flatIndex == null) return;
+
+      final text = block.plainText;
+      if (direction < 0 && caret.offset > 0) {
+        final step = _graphemeLengthBefore(text, caret.offset);
+        _selection = DocSelection.collapsed(
+          DocPosition(caret.blockId, caret.offset - step),
+        );
+        return;
+      }
+      if (direction > 0 && caret.offset < block.length) {
+        final step = _graphemeLengthAfter(text, caret.offset);
+        _selection = DocSelection.collapsed(
+          DocPosition(caret.blockId, caret.offset + step),
+        );
+        return;
+      }
+
+      _hopToAdjacentBlock(flatIndex, direction);
+    });
+  }
+
+  void _hopToAdjacentBlock(int fromFlatIndex, int direction) {
+    final doc = _document;
+    final targetIndex = fromFlatIndex + (direction < 0 ? -1 : 1);
+    if (targetIndex < 0 || targetIndex >= doc.allBlocks.length) return;
+    final target = doc.allBlocks[targetIndex];
+    final position = schema.isVoid(target.blockType)
+        ? DocPosition(target.id, 0) // normalized to the atomic selection
+        : DocPosition(target.id, direction < 0 ? target.length : 0);
+    _selection = _normalizeSelection(DocSelection.collapsed(position), doc);
+  }
+
   /// Deletes the current selection (no-op when collapsed or absent).
   void deleteSelection() {
     _edit(() {
@@ -477,7 +530,7 @@ class EditorController extends ChangeNotifier {
   /// previous text block's end, else next text block's start, else the
   /// last-block empty-paragraph fallback), and cross-block ranges with text
   /// endpoints. Full void-endpoint range normalization is day-14 work.
-  _RangeDeletionPlan? _rangeDeletionPlan(DocSelection sel) {
+  _DeletionPlan? _rangeDeletionPlan(DocSelection sel) {
     final (start, end) = sel.normalized(_document);
     final startBlock = _document.blockById(start.blockId);
     final endBlock = _document.blockById(end.blockId);
@@ -489,11 +542,9 @@ class EditorController extends ChangeNotifier {
       }
       final length = end.offset - start.offset;
       if (length <= 0) return null;
-      return _RangeDeletionPlan(
+      return _TextRangeDeletion(
         ops: [DeleteText(start.blockId, start.offset, length)],
-        caretAfter: (_) =>
-            DocSelection.collapsed(DocPosition(start.blockId, start.offset)),
-        insertAnchor: DocPosition(start.blockId, start.offset),
+        anchor: DocPosition(start.blockId, start.offset),
       );
     }
 
@@ -503,16 +554,14 @@ class EditorController extends ChangeNotifier {
       'Cross-block ranges with void endpoints need the day-14 range-op '
       'builder normalization; tap-produced selections cannot reach this.',
     );
-    return _RangeDeletionPlan(
+    return _TextRangeDeletion(
       ops: [DeleteRange(start, end)],
-      caretAfter: (_) =>
-          DocSelection.collapsed(DocPosition(start.blockId, start.offset)),
-      insertAnchor: DocPosition(start.blockId, start.offset),
+      anchor: DocPosition(start.blockId, start.offset),
     );
   }
 
   /// Removes a selected void; caret per G9.
-  _RangeDeletionPlan _voidRemovalPlan(TextBlock voidBlock) {
+  _VoidDeletion _voidRemovalPlan(TextBlock voidBlock) {
     final flatIndex = _document.idToFlatIndex[voidBlock.id]!;
     final flat = _document.allBlocks;
 
@@ -533,7 +582,8 @@ class EditorController extends ChangeNotifier {
       }
     }
 
-    return _RangeDeletionPlan(
+    return _VoidDeletion(
+      voidId: voidBlock.id,
       ops: [RemoveBlock(voidBlock.id)],
       caretAfter: (newDoc) {
         if (prevText != null) {
@@ -550,10 +600,6 @@ class EditorController extends ChangeNotifier {
           DocPosition(newDoc.allBlocks.first.id, 0),
         );
       },
-      // Type-over a void: the replacement block is inserted by
-      // typeOverInsertOps, not anchored in surviving text.
-      insertAnchor: null,
-      removedVoidId: voidBlock.id,
     );
   }
 
@@ -632,20 +678,34 @@ class EditorController extends ChangeNotifier {
   }
 }
 
-/// Deletion ops for a range plus caret placement; [insertAnchor] is where
-/// type-over text lands. It is null exactly when the range was a selected
-/// void ([removedVoidId] set) — type-over then inserts a replacement block
-/// instead of text.
-class _RangeDeletionPlan {
-  _RangeDeletionPlan({
-    required this.ops,
-    required this.caretAfter,
-    required this.insertAnchor,
-    this.removedVoidId,
-  });
+/// Deletion ops for a range plus caret placement. The two cases differ in
+/// where type-over text lands: a text-range deletion has a surviving
+/// [_TextRangeDeletion.anchor]; a void deletion has none — type-over inserts
+/// a replacement block at the void's position instead.
+sealed class _DeletionPlan {
+  _DeletionPlan({required this.ops, required this.caretAfter});
 
   final List<EditOperation> ops;
   final DocSelection? Function(Document newDoc) caretAfter;
-  final DocPosition? insertAnchor;
-  final String? removedVoidId;
+}
+
+class _TextRangeDeletion extends _DeletionPlan {
+  _TextRangeDeletion({required super.ops, required this.anchor})
+    : super(caretAfter: (_) => DocSelection.collapsed(anchor));
+
+  /// The surviving position where the range began — caret and type-over
+  /// text both land here.
+  final DocPosition anchor;
+}
+
+class _VoidDeletion extends _DeletionPlan {
+  _VoidDeletion({
+    required super.ops,
+    required super.caretAfter,
+    required this.voidId,
+  });
+
+  /// The removed void's id — type-over chains its replacement block after
+  /// this id (before the removal op runs).
+  final String voidId;
 }
