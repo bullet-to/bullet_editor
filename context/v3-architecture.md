@@ -260,8 +260,10 @@ plus machinery that already exists:
   blocks insert a literal `\n` at the caret instead of splitting — this absorbs v2's
   `CodeBlockEnterRule`, the last structural rule), `newBlockType: inherit | defaultType` (list
   items inherit their type; headings and paragraphs produce the schema default), and
-  `onSplitEmpty: convertToDefault | none` (an empty list item + Enter converts to the default
-  paragraph; others just split). This absorbs `splitInheritsType` and the Enter-related half of
+  `onSplitEmpty: convertToDefault | none` (an empty list item + Enter climbs the outdent-or-convert
+  ladder — outdent one level if nested, convert to the default paragraph at root, the standard
+  outliner escape; adopted at checkpoint 2/3 over convert-in-place, which stranded paragraphs
+  mid-list; others just split). This absorbs `splitInheritsType` and the Enter-related half of
   `isListLike`.
 - **`backspaceAtStart: BackspaceAtStartPolicy`** — what backspace at offset 0 does, for TEXT
   blocks (voids keep their separate `voidBackspace` policy): `merge` (default — merge with
@@ -471,8 +473,9 @@ Two op-vocabulary changes, owned by days 1–2 / day 10:
   is threaded at construction. The new block's *type* reaches the op the same way:
   `ctx.splitPolicyOf(block.blockType).newBlockType` — `inherit` for list items, `defaultType`
   otherwise. The `onSplitEmpty: convertToDefault` half is consulted by the controller's Enter path
-  *before* an op is chosen — an empty list item emits `ChangeBlockType` to the default instead of
-  a split — so the op stays pure. `newBlockMetadata` is a *new* policy field, not pre-existing v2
+  *before* an op is chosen — an empty list item emits `OutdentBlock` while nested (one level per
+  Enter, the checkpoint-2/3 ladder, sharing the `backspaceAtStart: outdentOrConvert` mechanics)
+  and `ChangeBlockType` to the default at root, instead of a split — so the op stays pure. `newBlockMetadata` is a *new* policy field, not pre-existing v2
   behavior. `validate()` asserts types whose declared `BlockDef.metadataKeys` is non-empty define
   it (GATE-K — the declaration field exists precisely so this is checkable).
 - **`MoveBlock` is a NEW op (~60 LOC)** — it does not exist in v2 (the vocabulary is

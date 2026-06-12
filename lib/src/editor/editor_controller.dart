@@ -1,5 +1,6 @@
 import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show TextRange;
 import 'package:flutter/widgets.dart' show FocusNode;
 
 import '../model/block.dart';
@@ -8,6 +9,7 @@ import '../model/doc_selection.dart';
 import '../model/document.dart';
 import '../schema/editor_schema.dart';
 import 'edit_operation.dart';
+import 'input_rule.dart';
 import 'undo_manager.dart';
 
 /// The single writer over the document (architecture §Operations).
@@ -17,8 +19,8 @@ import 'undo_manager.dart';
 /// notified only after a batch fully commits, and a rejected batch leaves
 /// document and selection untouched. Synchronous producers (gestures,
 /// hardware keys, app calls) arrive pre-serialized on the UI thread; the
-/// day 5–7 `ImeService` feeds its async delta batches through this same
-/// choke point in arrival order.
+/// `ImeService` feeds its delta batches through this same choke point in
+/// arrival order (the IME surface below).
 class EditorController extends ChangeNotifier {
   EditorController({
     required Document document,
@@ -36,6 +38,13 @@ class EditorController extends ChangeNotifier {
   DocSelection? _selection;
   DocSelection? get selection => _selection;
 
+  /// The active IME composing region (architecture §Selection). Lifecycle:
+  /// set only by IME-originated input (the `ImeService` batch path); cleared
+  /// by `terminateComposition(reason)` via [imeClearComposing], or by IME
+  /// input reporting an empty composing region; never restored by undo/redo.
+  ComposingState? _composing;
+  ComposingState? get composing => _composing;
+
   bool get canUndo => _undoManager.canUndo;
   bool get canRedo => _undoManager.canRedo;
 
@@ -43,7 +52,8 @@ class EditorController extends ChangeNotifier {
   //
   // The internal Focus widget is package-private, so focusing a new note or
   // dismissing the keyboard on save/navigate has no app-side workaround
-  // without this. Day 5–7 routes these through the IME connection lifecycle.
+  // without this. The widget's focus listener drives the IME connection
+  // lifecycle off this node (ImeService attach/detach).
 
   FocusNode? _focusNode;
 
@@ -60,16 +70,232 @@ class EditorController extends ChangeNotifier {
   void requestFocus() => _focusNode?.requestFocus();
   void clearFocus() => _focusNode?.unfocus();
 
+  // --- IME surface (consumed by ImeService — not for app use) ---
+  //
+  // The IME layer produces ops/intents and calls back through this surface
+  // so every delta batch executes through the same choke point as any other
+  // mutation (architecture §single writer). The `ime*` verbs assert they run
+  // inside [imeEdit]; composing-state setters own the composition-scoped
+  // undo group transitions.
+
+  /// Registered by `ImeService`: invoked synchronously after every commit or
+  /// selection change that did NOT originate from the IME path, with the
+  /// `terminateComposition` reason the change implies. This is the no-echo
+  /// invariant's clause (a)/(b) trigger (IME §no-echo) and the G3 latch
+  /// invalidation signal.
+  void Function(String reason)? imeExternalChangeHandler;
+
+  /// An open composition-scoped undo group (architecture §Undo): per-batch
+  /// undo pushes are suppressed until the composition commits or terminates.
+  bool _composingUndoGroup = false;
+
+  /// Whether the open group's pre-composition snapshot has been pushed. A
+  /// group opened by a composing-only update (no text batch) defers its push
+  /// to the first text batch — the document is still the pre-composition
+  /// state at that point.
+  bool _composingGroupPushed = false;
+
+  /// Whether a batch already committed inside the current [imeEdit] group —
+  /// one delta batch is one logical edit, so follow-up batches in the same
+  /// group (multi-delta batches, input-rule outcomes) never push.
+  bool _imeGroupHadBatch = false;
+
+  /// Runs [body] as ONE IME-originated edit group: a single notify, a single
+  /// undo entry (or none, under the composition-scoped suppression), and no
+  /// external-change echo back to the IME.
+  T imeEdit<T>(T Function() body) {
+    return _asIme(() {
+      _imeGroupHadBatch = false;
+      return _edit(body);
+    });
+  }
+
+  /// Applies one delta's ops inside [imeEdit] through the batch loop.
+  EditResult imeApplyOps(
+    List<EditOperation> ops, {
+    DocSelection? Function(Document newDoc)? selectionAfter,
+  }) {
+    assert(_inEdit && _currentEditIsIme, 'imeApplyOps runs inside imeEdit');
+    return _applyBatch(ops, selectionAfter: selectionAfter);
+  }
+
+  /// Selection moved by the IME (delta selections, `NonTextUpdate`) — applied
+  /// without the external-change echo a [setSelection] would produce.
+  void imeSetSelection(DocSelection selection) {
+    assert(_inEdit && _currentEditIsIme, 'imeSetSelection runs inside imeEdit');
+    final normalized = _normalizeSelection(selection, _document);
+    if (normalized != null) _selection = normalized;
+  }
+
+  /// IME text insertion at the current selection — insertion/replacement
+  /// deltas set the mapped selection first, then insert (type-over of a
+  /// selected void replaces it, the ordinary path).
+  void imeInsertText(String text) {
+    assert(_inEdit && _currentEditIsIme, 'imeInsertText runs inside imeEdit');
+    if (text.isEmpty) return;
+    _insertTextAtSelection(text);
+  }
+
+  /// IME Enter: a `\n` insertion delta or `performAction(newline)`. Consults
+  /// the block type's [SplitPolicy] exactly like hardware Enter (G10).
+  void imeInsertNewline() {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeInsertNewline runs inside imeEdit',
+    );
+    _insertNewlineAtSelection();
+  }
+
+  /// IME deletion of the current (non-collapsed) selection.
+  void imeDeleteSelection() {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeDeleteSelection runs inside imeEdit',
+    );
+    final sel = _selection;
+    if (sel == null || sel.isCollapsed) return;
+    _deleteSelectionNow(sel);
+  }
+
+  /// IME backspace — macOS `performSelector('deleteBackward:')`: an editing
+  /// command the platform IME consumed the keystroke for but did not turn
+  /// into text (the dead-key marked-state backspace; the engine forwards it
+  /// because its own text input plugin implements no delete selectors).
+  /// Shares [backspace]'s body, so both input paths are ONE mechanism (G10):
+  /// grapheme delete mid-block, the `backspaceAtStart` policy at offset 0,
+  /// selection delete otherwise.
+  void imeBackspace() {
+    assert(_inEdit && _currentEditIsIme, 'imeBackspace runs inside imeEdit');
+    _backspaceAtSelection();
+  }
+
+  /// IME forward delete — macOS `performSelector('deleteForward:')`
+  /// (Fn+Delete): grapheme delete after the caret within the block; a
+  /// non-collapsed selection deletes. Forward delete at block end (a
+  /// forward merge) needs its own policy consultation and lands with the
+  /// day-10 hardware-key matrix — it no-ops here until then.
+  void imeDeleteForward() {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeDeleteForward runs inside imeEdit',
+    );
+    final sel = _selection;
+    if (sel == null) return;
+    if (!sel.isCollapsed) {
+      _deleteSelectionNow(sel);
+      return;
+    }
+    final caret = sel.extent;
+    final block = _document.blockById(caret.blockId);
+    if (block == null || schema.isVoid(block.blockType)) return;
+    if (caret.offset >= block.length) return;
+    final length = _graphemeLengthAfter(block.plainText, caret.offset);
+    _applyBatch([
+      DeleteText(caret.blockId, caret.offset, length),
+    ], selectionAfter: (_) => DocSelection.collapsed(caret));
+  }
+
+  /// G1: a deletion delta intersecting the sentinel maps to "structural
+  /// backspace at block start" — the block type's declared `backspaceAtStart`
+  /// policy, the same path hardware backspace consults.
+  void imeStructuralBackspace(String blockId) {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeStructuralBackspace runs inside imeEdit',
+    );
+    final block = _document.blockById(blockId);
+    if (block == null || schema.isVoid(block.blockType)) return;
+    _structuralBackspace(block);
+  }
+
+  /// Sets the composing state from an applied delta batch (block-locally
+  /// remapped by the caller). Opens/closes the composition-scoped undo group.
+  /// Usable inside or outside [imeEdit] (the `NonTextUpdate`-only case).
+  void imeSetComposing(ComposingState? value) {
+    void apply() {
+      if (value != null && !_composingUndoGroup) {
+        _composingUndoGroup = true;
+        // If this imeEdit group already committed a batch, that batch's push
+        // IS the pre-composition snapshot.
+        _composingGroupPushed = _imeGroupHadBatch;
+      } else if (value == null) {
+        _composingUndoGroup = false;
+        _composingGroupPushed = false;
+      }
+      _composing = value;
+    }
+
+    if (_inEdit) {
+      assert(_currentEditIsIme, 'imeSetComposing inside a non-IME edit');
+      apply();
+    } else {
+      _asIme(() => _edit(apply));
+    }
+  }
+
+  /// `terminateComposition`'s controller half: clears composing and closes
+  /// the composition-scoped undo group. Never snapshots or restores
+  /// composing (architecture §Undo).
+  void imeClearComposing() {
+    void apply() {
+      _clearComposingState();
+    }
+
+    if (_inEdit) {
+      apply();
+    } else {
+      _asIme(() => _edit(apply));
+    }
+  }
+
+  /// The post-state input-rule run path (G3): runs the schema's
+  /// insert-pattern rules against the current document at [blockId] /
+  /// [editedRange]; the first match's ops apply through the batch loop
+  /// (inside the same [imeEdit] group, so insert + rule transform is one
+  /// undo entry). Returns whether a rule fired.
+  bool imeRunInputRules(String blockId, TextRange editedRange) {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeRunInputRules runs inside imeEdit',
+    );
+    if (_document.blockById(blockId) == null) return false;
+    for (final rule in schema.inputRules) {
+      if (rule is! PatternInputRule) continue;
+      final outcome = rule.tryTransform(
+        _document,
+        blockId,
+        editedRange,
+        schema,
+      );
+      if (outcome == null) continue;
+      final selectionAfter = outcome.selectionAfter;
+      final result = _applyBatch(
+        outcome.operations,
+        selectionAfter: selectionAfter == null ? null : (_) => selectionAfter,
+      );
+      return result is EditApplied;
+    }
+    return false;
+  }
+
   // --- The choke point ---
 
   bool _inEdit = false;
 
+  /// Whether the current edit originates from the IME path. Non-IME edits
+  /// reach [imeExternalChangeHandler] post-commit (the no-echo invariant's
+  /// clause (a)/(b) trigger — IME §no-echo); IME edits never echo.
+  bool _currentEditIsIme = false;
+
   /// Runs one mutation exclusively, notifying listeners afterward iff
-  /// document or selection changed. Reentrant mutation (a listener editing
-  /// synchronously from a change notification) is a programming error — the
-  /// notification fires post-commit, so a listener that wants to edit must
-  /// schedule, not recurse.
-  T _edit<T>(T Function() body) {
+  /// document, selection, or composing changed. Reentrant mutation (a
+  /// listener editing synchronously from a change notification) is a
+  /// programming error — the notification fires post-commit, so a listener
+  /// that wants to edit must schedule, not recurse.
+  ///
+  /// [reason] is the `terminateComposition` reason a non-IME change implies
+  /// ('undo' for undo/redo, 'externalEdit' otherwise — IME §choke point).
+  T _edit<T>(T Function() body, {String reason = 'externalEdit'}) {
     assert(
       !_inEdit,
       'Reentrant EditorController mutation: listeners are notified after a '
@@ -79,24 +305,51 @@ class EditorController extends ChangeNotifier {
     _inEdit = true;
     final docBefore = _document;
     final selBefore = _selection;
+    final composingBefore = _composing;
+    final isIme = _currentEditIsIme;
     try {
       return body();
     } finally {
       _inEdit = false;
-      if (!identical(_document, docBefore) || _selection != selBefore) {
+      final changed =
+          !identical(_document, docBefore) ||
+          _selection != selBefore ||
+          _composing != composingBefore;
+      if (changed) {
         notifyListeners();
+        // After listeners, so the IME bridge reads final state. The handler
+        // may terminate a live composition (which re-enters _edit as an
+        // IME-marked mutation — never recursing back here).
+        if (!isIme) imeExternalChangeHandler?.call(reason);
       }
+    }
+  }
+
+  /// Marks mutations within [body] as IME-originated: the external-change
+  /// handler is skipped and the composition-scoped undo rules apply.
+  T _asIme<T>(T Function() body) {
+    final previous = _currentEditIsIme;
+    _currentEditIsIme = true;
+    try {
+      return body();
+    } finally {
+      _currentEditIsIme = previous;
     }
   }
 
   // --- Document & selection ---
 
   /// Replaces the document wholesale (open-a-different-note). Resets undo
-  /// history. Day 5–7 also routes this through
-  /// `terminateComposition('externalEdit')`.
+  /// history. A live composition terminates through the external-change
+  /// handler (`terminateComposition('externalEdit')`); composing is cleared
+  /// here too — undo-group flags included, or a stale "snapshot pushed"
+  /// flag makes the next composition's first batch skip its pre-composition
+  /// undo push in headless use — because its block id references the
+  /// outgoing document.
   void setDocument(Document document, {DocSelection? selection}) {
     _edit(() {
       _undoManager.clear();
+      _clearComposingState();
       _document = document;
       _selection = selection == null
           ? null
@@ -194,7 +447,21 @@ class EditorController extends ChangeNotifier {
       // boundary MoveBlock): no undo entry, redo stack untouched.
       return const EditApplied();
     }
-    _undoManager.push(_snapshotNow());
+    // Composition-scoped undo (architecture §Undo): the first batch of an
+    // IME group pushes the pre-state once; while a composing undo group is
+    // open (its pre-composition snapshot already pushed), per-batch pushes
+    // are suppressed so converting 日本語 is one undo entry, not one per
+    // kana. Suppressed batches still invalidate redo — they are edits.
+    final suppressPush =
+        _currentEditIsIme &&
+        (_imeGroupHadBatch || (_composingUndoGroup && _composingGroupPushed));
+    if (suppressPush) {
+      _undoManager.clearRedo();
+    } else {
+      _undoManager.push(_snapshotNow());
+      if (_composingUndoGroup) _composingGroupPushed = true;
+    }
+    if (_currentEditIsIme) _imeGroupHadBatch = true;
     _document = doc;
     final desired = selectionAfter?.call(doc);
     _selection = desired == null
@@ -212,7 +479,8 @@ class EditorController extends ChangeNotifier {
   );
 
   void undo() {
-    _edit(() {
+    _edit(reason: 'undo', () {
+      _clearComposingState();
       final entry = _undoManager.undo();
       if (entry == null) return;
       _undoManager.pushRedo(_snapshotNow());
@@ -221,12 +489,23 @@ class EditorController extends ChangeNotifier {
   }
 
   void redo() {
-    _edit(() {
+    _edit(reason: 'undo', () {
+      _clearComposingState();
       final entry = _undoManager.redo();
       if (entry == null) return;
       _undoManager.pushUndoRaw(_snapshotNow());
       _restore(entry);
     });
+  }
+
+  /// Undo/redo never restore composing state (G7): the engine's conversion
+  /// state is gone, and a stale ComposingState would wedge every
+  /// composing-gated mechanism. Unconditional — the IME push routes through
+  /// `terminateComposition('undo')` via the external-change handler.
+  void _clearComposingState() {
+    _composing = null;
+    _composingUndoGroup = false;
+    _composingGroupPushed = false;
   }
 
   void _restore(UndoEntry entry) {
@@ -244,7 +523,15 @@ class EditorController extends ChangeNotifier {
   /// replaced by a default-type block containing the text.
   void insertText(String text) {
     if (text.isEmpty) return;
-    _edit(() {
+    _edit(() => _insertTextAtSelection(text));
+  }
+
+  /// [insertText]'s body — also the IME verb shared by insertion and
+  /// replacement deltas (which set the selection to the delta's mapped
+  /// range first).
+  void _insertTextAtSelection(String text) {
+    assert(_inEdit);
+    {
       final sel = _selection;
       if (sel == null) return;
 
@@ -289,17 +576,26 @@ class EditorController extends ChangeNotifier {
             ),
           );
       }
-    });
+    }
   }
 
   /// Enter at the caret, per the block type's [SplitPolicy]:
   /// - `onEnter: insertLineBreak` inserts `\n` (code blocks);
-  /// - an empty block with `onSplitEmpty: convertToDefault` converts to the
-  ///   default type instead of splitting (empty list item escapes the list);
+  /// - an empty block with `onSplitEmpty: convertToDefault` climbs the
+  ///   outdent-or-convert ladder instead of splitting — outdent one level if
+  ///   nested, convert to the default type at root (the empty list item
+  ///   escapes the list one level per Enter);
   /// - otherwise splits; at offset 0 of a non-empty block an empty block is
   ///   inserted above and the caret stays.
   void insertNewline() {
-    _edit(() {
+    _edit(_insertNewlineAtSelection);
+  }
+
+  /// [insertNewline]'s body — also the IME verb for `\n` insertion deltas
+  /// and `performAction(newline)` (G10).
+  void _insertNewlineAtSelection() {
+    assert(_inEdit);
+    {
       var sel = _selection;
       if (sel == null) return;
       if (!sel.isCollapsed) {
@@ -324,14 +620,13 @@ class EditorController extends ChangeNotifier {
       }
 
       if (block.plainText.isEmpty &&
-          split.onSplitEmpty == OnSplitEmpty.convertToDefault &&
-          block.blockType != schema.defaultBlockType) {
-        _applyBatch(
-          [ChangeBlockType(caret.blockId, schema.defaultBlockType)],
-          selectionAfter: (_) =>
-              DocSelection.collapsed(DocPosition(caret.blockId, 0)),
-        );
-        return;
+          split.onSplitEmpty == OnSplitEmpty.convertToDefault) {
+        // The standard outliner ladder (checkpoint-2/3 feedback): a nested
+        // empty list-like block outdents one level per Enter — keeping its
+        // type — and only converts to the default type at root. Converting
+        // in place at depth 2+ stranded a paragraph mid-list.
+        if (_outdentOrConvertBlock(block)) return;
+        // Root and already the default type: fall through to split.
       }
 
       // Splitting at offset 0 of a non-empty block inserts an empty block
@@ -345,7 +640,7 @@ class EditorController extends ChangeNotifier {
           DocPosition(splitAtStart ? caret.blockId : splitOp.newBlockId, 0),
         ),
       );
-    });
+    }
   }
 
   /// Backspace at the caret. A non-collapsed selection deletes. At offset 0
@@ -354,7 +649,15 @@ class EditorController extends ChangeNotifier {
   /// block — where a previous *void* block consults its `voidBackspace`
   /// policy instead (select it, or delete it immediately).
   void backspace() {
-    _edit(() {
+    _edit(_backspaceAtSelection);
+  }
+
+  /// [backspace]'s body — also the IME verb for macOS `deleteBackward:`
+  /// commands ([imeBackspace]), so hardware and IME backspace stay one
+  /// mechanism (G10).
+  void _backspaceAtSelection() {
+    assert(_inEdit);
+    {
       final sel = _selection;
       if (sel == null) return;
       if (!sel.isCollapsed) {
@@ -379,7 +682,7 @@ class EditorController extends ChangeNotifier {
       }
 
       _structuralBackspace(block);
-    });
+    }
   }
 
   /// Length in code units of the grapheme cluster ending at [offset].
@@ -390,23 +693,41 @@ class EditorController extends ChangeNotifier {
   static int _graphemeLengthAfter(String text, int offset) =>
       text.substring(offset).characters.first.length;
 
+  /// The outdent-or-convert ladder shared by backspace-at-start
+  /// (`BackspaceAtStartPolicy.outdentOrConvert`) and Enter on an empty
+  /// list-like block (`OnSplitEmpty.convertToDefault`): nested → outdent one
+  /// level via [OutdentBlock] (G13 semantics — children ride along and later
+  /// siblings are adopted, exactly like [outdent]); at root → convert to the
+  /// default type. The caret stays on the block at offset 0. Returns false
+  /// when neither applies (root and already the default type) so each caller
+  /// falls through to its own terminal behavior (merge / split).
+  bool _outdentOrConvertBlock(TextBlock block) {
+    final flatIndex = _document.idToFlatIndex[block.id]!;
+    if (_document.depthOf(flatIndex) > 0) {
+      _applyBatch(
+        [OutdentBlock(block.id)],
+        selectionAfter: (_) => DocSelection.collapsed(DocPosition(block.id, 0)),
+      );
+      return true;
+    }
+    if (block.blockType != schema.defaultBlockType) {
+      _applyBatch(
+        [ChangeBlockType(block.id, schema.defaultBlockType)],
+        selectionAfter: (_) => DocSelection.collapsed(DocPosition(block.id, 0)),
+      );
+      return true;
+    }
+    return false;
+  }
+
   void _structuralBackspace(TextBlock block) {
-    var policy = schema.backspaceAtStartOf(block.blockType);
+    final policy = schema.backspaceAtStartOf(block.blockType);
     final flatIndex = _document.idToFlatIndex[block.id]!;
 
     if (policy == BackspaceAtStartPolicy.outdentOrConvert) {
-      if (_document.depthOf(flatIndex) > 0) {
-        _applyBatch(
-          [OutdentBlock(block.id)],
-          selectionAfter: (_) =>
-              DocSelection.collapsed(DocPosition(block.id, 0)),
-        );
-        return;
-      }
-      policy = BackspaceAtStartPolicy.convertToDefault;
-    }
-
-    if (policy == BackspaceAtStartPolicy.convertToDefault &&
+      if (_outdentOrConvertBlock(block)) return;
+      // Root and already the default type: fall through to merge.
+    } else if (policy == BackspaceAtStartPolicy.convertToDefault &&
         block.blockType != schema.defaultBlockType) {
       _applyBatch(
         [ChangeBlockType(block.id, schema.defaultBlockType)],

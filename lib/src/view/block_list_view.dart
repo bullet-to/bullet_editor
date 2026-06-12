@@ -21,6 +21,7 @@ class BlockListView extends StatelessWidget {
     required this.schema,
     required this.baseStyle,
     this.selection,
+    this.composing,
     this.showCaret = false,
     this.onLinkTap,
   });
@@ -31,6 +32,10 @@ class BlockListView extends StatelessWidget {
 
   /// The current selection; components derive their block-local slice.
   final DocSelection? selection;
+
+  /// The active IME composing state; components derive their block-local
+  /// range (part of the selection slice — G3 underline visibility).
+  final ComposingState? composing;
 
   /// Whether the caret should render (the editor has focus).
   final bool showCaret;
@@ -64,6 +69,7 @@ class BlockListView extends StatelessWidget {
               isFirstInDocument: index == 0,
               containsDocumentEnd: index == roots.length - 1,
               selection: selection,
+              composing: composing,
               showCaret: showCaret,
               schema: schema,
               baseStyle: baseStyle,
@@ -114,6 +120,7 @@ class BlockSubtree extends StatelessWidget {
     required this.schema,
     required this.baseStyle,
     this.selection,
+    this.composing,
     this.showCaret = false,
     this.onLinkTap,
   });
@@ -135,6 +142,10 @@ class BlockSubtree extends StatelessWidget {
   /// (caret offset, void atomic selection), so no [Document] is needed.
   final DocSelection? selection;
 
+  /// The doc-global composing state; only the same-block range slice is
+  /// handed to the component.
+  final ComposingState? composing;
+
   /// Whether the caret should render (the editor has focus).
   final bool showCaret;
 
@@ -150,6 +161,10 @@ class BlockSubtree extends StatelessWidget {
     if (!showCaret || sel == null || !sel.isCollapsed) return null;
     return sel.extent.blockId == block.id ? sel.extent.offset : null;
   }
+
+  /// The composing range when the active composition lives in this block.
+  TextRange? get _composingRange =>
+      composing?.blockId == block.id ? composing!.range : null;
 
   /// Whether this block is atomically selected (a void's whole-block
   /// selection: both endpoints in this block, non-collapsed).
@@ -180,6 +195,7 @@ class BlockSubtree extends StatelessWidget {
       gutter: gutter,
       resolvedStyle: resolvedStyle,
       caretOffset: _caretOffset,
+      composing: _composingRange,
       isSelected: _isSelected,
       onLinkTap: onLinkTap,
     );
@@ -256,6 +272,7 @@ class BlockSubtree extends StatelessWidget {
           containsDocumentEnd:
               containsDocumentEnd && i == block.children.length - 1,
           selection: selection,
+          composing: composing,
           showCaret: showCaret,
           schema: schema,
           baseStyle: baseStyle,

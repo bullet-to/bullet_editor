@@ -182,14 +182,17 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
     );
 
     final caretOffset = ctx.caretOffset;
-    if (caretOffset != null) {
+    final composing = ctx.composing;
+    if (caretOffset != null || composing != null) {
       // The painter queries the RenderParagraph at paint time (post-layout)
-      // through the geometry mixin — never during build.
+      // through the geometry mixin — never during build. One layer paints
+      // composing underline then caret (§per-block painting order).
       text = CustomPaint(
         foregroundPainter: _CaretPainter(
           geometry: this,
           offset: caretOffset,
           visible: _caretVisible,
+          composing: composing,
           color:
               DefaultSelectionStyle.of(context).cursorColor ??
               ctx.resolvedStyle.color ??
@@ -222,26 +225,60 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
   }
 }
 
-/// Paints the collapsed caret over the `RichText` child. Queries the caret
-/// rect from [geometry] at paint time, when the paragraph is laid out.
+/// Paints the composing-region underline and the collapsed caret over the
+/// `RichText` child. Queries rects from [geometry] at paint time, when the
+/// paragraph is laid out.
+///
+/// The composing underline is painted by the framework — us — not the
+/// keyboard (G3 visibility: `EditableText` styles `value.composing` itself;
+/// without it CJK marked text looks committed and a deferred input rule is
+/// indistinguishable from a swallowed one).
 class _CaretPainter extends CustomPainter {
   _CaretPainter({
     required this.geometry,
     required this.offset,
     required this.visible,
     required this.color,
+    this.composing,
   });
 
   final BlockGeometry geometry;
-  final int offset;
+
+  /// Caret offset; null when only the composing underline paints.
+  final int? offset;
   final bool visible;
   final Color color;
 
+  /// Block-local composing range; null when no composition lives here.
+  final TextRange? composing;
+
   static const _caretWidth = 2.0;
+  static const _underlineThickness = 2.0;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (!visible) return;
+    final composing = this.composing;
+    if (composing != null && composing.isValid && !composing.isCollapsed) {
+      final paint = Paint()..color = color;
+      for (final rect in geometry.rectsForRange(
+        composing.start,
+        composing.end,
+      )) {
+        // A solid underline rect per line fragment of the composed range.
+        canvas.drawRect(
+          Rect.fromLTWH(
+            rect.left,
+            rect.bottom - _underlineThickness,
+            rect.width,
+            _underlineThickness,
+          ),
+          paint,
+        );
+      }
+    }
+
+    final offset = this.offset;
+    if (offset == null || !visible) return;
     final rect = geometry.rectForOffset(offset);
     if (rect == null) return;
     final left = rect.left.clamp(0.0, size.width - _caretWidth);
@@ -256,5 +293,6 @@ class _CaretPainter extends CustomPainter {
       offset != old.offset ||
       visible != old.visible ||
       color != old.color ||
+      composing != old.composing ||
       !identical(geometry, old.geometry);
 }

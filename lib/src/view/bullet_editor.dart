@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../editor/editor_controller.dart';
+import '../input/ime_service.dart';
 import '../model/doc_selection.dart';
 import '../model/inline_entity.dart';
 import 'block_layout_registry.dart';
@@ -10,12 +11,13 @@ import 'block_list_view.dart';
 import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
 
-/// The v3 editor root widget (day 3–4 surface): lazy render through the
-/// component registry, geometry registry (GATE-L), focus, tap-to-caret,
-/// caret painting, and a deliberately minimal hardware-key editing path
-/// (checkpoint 2: characters, Enter, Backspace, Tab, arrows, undo). Day 5–7
-/// replaces character input with the IME delta path; day 10 brings the full
-/// shortcut matrix with the composing gate.
+/// The v3 editor root widget: lazy render through the component registry,
+/// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
+/// painting, the IME delta path (day 5–7 — character input arrives as
+/// engine deltas through [ImeService], never as key events), and the
+/// hardware-key handlers the IME doesn't own (Enter, Backspace, Tab,
+/// arrows, undo). Day 10 brings the full shortcut matrix with the composing
+/// gate over all handlers.
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -60,8 +62,12 @@ class BulletEditor extends StatefulWidget {
 
 class BulletEditorState extends State<BulletEditor> {
   /// blockId → geometry-or-null (GATE-L). Exposed for the inspector,
-  /// interactors, and (day 5–7) the IME geometry reporter.
+  /// interactors, and the IME geometry reporter.
   final BlockLayoutRegistry registry = BlockLayoutRegistry();
+
+  /// The IME delta frontend — one service per attached controller. Exposed
+  /// for the inspector pane and for tests that drive engine deltas.
+  late ImeService imeService;
 
   ScrollController? _ownedScrollController;
   FocusNode? _ownedFocusNode;
@@ -78,17 +84,37 @@ class BulletEditorState extends State<BulletEditor> {
 
   /// The controller/focus-node pair is attached and detached symmetrically —
   /// one helper pair covers mount, every didUpdateWidget swap combination
-  /// (controller, node, or both), and unmount.
+  /// (controller, node, or both), and unmount. The IME service rides the
+  /// same lifecycle: one per controller, its geometry reporter wired to the
+  /// registry and the editor's render box.
   void _attach(EditorController controller, FocusNode node) {
     controller.addListener(_onControllerChanged);
     controller.attachFocusNode(node);
     node.addListener(_onFocusChanged);
+    imeService = ImeService(controller: controller)
+      ..geometryReporter.editorRenderBox = () {
+        final renderObject = context.findRenderObject();
+        return renderObject is RenderBox ? renderObject : null;
+      }
+      ..geometryReporter.blockGeometryOf = registry.geometryOf;
+    _syncImeAttachment();
   }
 
   void _detach(EditorController controller, FocusNode node) {
     controller.removeListener(_onControllerChanged);
     controller.detachFocusNode(node);
     node.removeListener(_onFocusChanged);
+    imeService.dispose();
+  }
+
+  /// The connection follows focus (architecture §IME: attached whenever the
+  /// editor has focus — including with the selection on a void block).
+  void _syncImeAttachment() {
+    if (_focusNode.hasFocus && !widget.readOnly) {
+      imeService.attach();
+    } else {
+      imeService.detach();
+    }
   }
 
   @override
@@ -102,6 +128,11 @@ class BulletEditorState extends State<BulletEditor> {
   @override
   void didUpdateWidget(BulletEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // The connection tracks readOnly as well as focus: flipping readOnly on
+    // while focused must drop the live connection (deltas would otherwise
+    // keep mutating the document against the widget contract above), and
+    // flipping it off while focused must attach one.
+    if (widget.readOnly != oldWidget.readOnly) _syncImeAttachment();
     final controllerChanged = !identical(
       widget.controller,
       oldWidget.controller,
@@ -128,7 +159,10 @@ class BulletEditorState extends State<BulletEditor> {
 
   void _onControllerChanged() => setState(() {});
 
-  void _onFocusChanged() => setState(() {}); // caret visibility
+  void _onFocusChanged() {
+    _syncImeAttachment();
+    setState(() {}); // caret visibility
+  }
 
   // --- Tap-to-caret (raw Listener: arena-exempt, so it composes with the
   // link-span recognizers — G11 invariant; interactor recognizers that
@@ -156,7 +190,10 @@ class BulletEditorState extends State<BulletEditor> {
     widget.controller.requestFocus();
   }
 
-  // --- Hardware-key skeleton (checkpoint 2) ---
+  // --- Hardware keys (the division of labor: keys the IME doesn't own.
+  // Character input goes through the IME delta path exclusively — a
+  // hardware character-insert here would double-type against the engine
+  // connection. The composing gate over all handlers is day-10 work.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     if (widget.readOnly) return KeyEventResult.ignored;
@@ -174,6 +211,28 @@ class BulletEditorState extends State<BulletEditor> {
         return KeyEventResult.handled;
       }
       return KeyEventResult.ignored;
+    }
+
+    // The minimal composing gate — day-10 work pulled forward (the full
+    // matrix over ALL editing/navigation handlers still lands day 10).
+    // While a composition is live the editing keys belong to the IME: on
+    // macOS the text input plugin is a SECONDARY key responder, so a key
+    // event the framework marks handled never reaches NSTextInputContext —
+    // handling backspace here while marked text exists both starves the IME
+    // of the keystroke it must consume (a dead key's marked-text removal)
+    // and edits the document out from under the live composition
+    // (terminateComposition → quarantine armed → the re-typed accent's
+    // signature). Returning ignored lets the platform IME consume the key
+    // and report the resulting edit as a delta. Undo deliberately stays
+    // above this gate: it is a first-class composition terminator (G7).
+    if (controller.composing != null) {
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.enter ||
+            LogicalKeyboardKey.numpadEnter ||
+            LogicalKeyboardKey.backspace ||
+            LogicalKeyboardKey.tab:
+          return KeyEventResult.ignored;
+      }
     }
 
     switch (event.logicalKey) {
@@ -194,13 +253,6 @@ class BulletEditorState extends State<BulletEditor> {
         return KeyEventResult.handled;
     }
 
-    final character = event.character;
-    if (character != null &&
-        character.isNotEmpty &&
-        character.codeUnits.any((u) => u >= 0x20)) {
-      controller.insertText(character);
-      return KeyEventResult.handled;
-    }
     return KeyEventResult.ignored;
   }
 
@@ -214,6 +266,7 @@ class BulletEditorState extends State<BulletEditor> {
       schema: controller.schema,
       baseStyle: baseStyle,
       selection: controller.selection,
+      composing: controller.composing,
       showCaret: _focusNode.hasFocus && !widget.readOnly,
       onLinkTap: widget.onLinkTap,
     );

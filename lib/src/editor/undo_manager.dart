@@ -91,6 +91,13 @@ class UndoManager {
     _redoStack.add(entry);
   }
 
+  /// An edit committed without pushing a snapshot (the composition-scoped
+  /// suppression, architecture §Undo): redo must still be invalidated — a
+  /// mid-composition keystroke is an edit like any other.
+  void clearRedo() {
+    _redoStack.clear();
+  }
+
   /// Push an entry directly onto the undo stack without clearing redo.
   /// Used by the controller when performing a redo (the current state goes
   /// back to undo).

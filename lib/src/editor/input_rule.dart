@@ -203,19 +203,17 @@ class PrefixBlockRule extends PatternInputRule {
     if (block == null) return null;
     final text = block.plainText;
 
-    // The edit must be exactly the space typed right after the prefix.
-    if (editedRange.start != prefix.length ||
-        editedRange.end != prefix.length + 1) {
-      return null;
-    }
-    if (editedRange.end > text.length ||
-        text.substring(editedRange.start, editedRange.end) != ' ') {
-      return null;
-    }
-
     final fullPrefix = '$prefix ';
     if (!text.startsWith(fullPrefix) ||
         block.blockType != schema.defaultBlockType) {
+      return null;
+    }
+    // The edit must have produced the prefix-completing space: a keystroke
+    // edit is exactly that space, and a composition-commit edit (the G3
+    // latch-fire range — possibly the whole composed "# ") covers it. An
+    // edit elsewhere in the block never converts.
+    if (editedRange.start > prefix.length ||
+        editedRange.end < fullPrefix.length) {
       return null;
     }
 
@@ -262,13 +260,6 @@ class TaskItemRule extends PatternInputRule {
     if (block == null) return null;
     final text = block.plainText;
 
-    // The edit must be exactly a typed space.
-    if (editedRange.end != editedRange.start + 1 ||
-        editedRange.end > text.length ||
-        text.substring(editedRange.start, editedRange.end) != ' ') {
-      return null;
-    }
-
     bool? checked;
     int prefixLen;
 
@@ -304,8 +295,12 @@ class TaskItemRule extends PatternInputRule {
       return null;
     }
 
-    // The typed space must be the one completing the prefix.
-    if (editedRange.end != prefixLen) return null;
+    // The edit must have produced the prefix-completing space (keystroke:
+    // exactly that space; composition commit: a range covering it — the G3
+    // latch-fire contract).
+    if (editedRange.start > prefixLen - 1 || editedRange.end < prefixLen) {
+      return null;
+    }
 
     return InputRuleOutcome(
       operations: [
@@ -338,12 +333,9 @@ class DividerRule extends PatternInputRule {
     if (block == null) return null;
     final text = block.plainText;
 
-    // The edit must be exactly a typed '-' completing '---'.
-    if (editedRange.end != editedRange.start + 1 ||
-        editedRange.end > text.length ||
-        text.substring(editedRange.start, editedRange.end) != '-') {
-      return null;
-    }
+    // Any edit that leaves a default block's text as exactly '---' converts
+    // — the strongest possible predicate, and (unlike a typed-'-' check) it
+    // holds for composition commits (the G3 latch-fire contract).
     if (block.blockType != schema.defaultBlockType || text != '---') {
       return null;
     }

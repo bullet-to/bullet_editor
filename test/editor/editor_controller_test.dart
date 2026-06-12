@@ -1,4 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:flutter/services.dart' show TextRange;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Day 3–4 controller skeleton suite (architecture plan row 3–4): batch loop
@@ -192,6 +193,45 @@ void main() {
       expect(c.canUndo, isFalse);
       expect(c.canRedo, isFalse);
       expect(c.selection, caret('n', 3));
+    });
+
+    test('clears the composition undo-group flags: the next composition\'s '
+        'first batch pushes its pre-composition snapshot (headless — no IME '
+        'service terminates for us)', () {
+      final c = controller([para('a', '')]);
+      c.setSelection(caret('a', 0));
+      // A composition left open across setDocument: with no registered
+      // external-change handler, only setDocument itself can clear the
+      // composition-scoped undo state.
+      c.imeEdit(() {
+        c.imeInsertText('k');
+        c.imeSetComposing(
+          const ComposingState(
+            blockId: 'a',
+            range: TextRange(start: 0, end: 1),
+          ),
+        );
+      });
+
+      c.setDocument(Document([para('n', 'fresh')]), selection: caret('n', 5));
+      expect(c.composing, isNull);
+
+      // The next composition's FIRST batch must push the pre-composition
+      // snapshot; a stale "snapshot pushed" flag would suppress it and
+      // undo would overshoot (here: have nothing to restore at all).
+      c.imeEdit(() {
+        c.imeInsertText('x');
+        c.imeSetComposing(
+          const ComposingState(
+            blockId: 'n',
+            range: TextRange(start: 5, end: 6),
+          ),
+        );
+      });
+      expect(c.document.blockById('n')!.plainText, 'freshx');
+
+      c.undo();
+      expect(c.document.blockById('n')!.plainText, 'fresh');
     });
   });
 
@@ -397,6 +437,157 @@ void main() {
         expect(c.selection, caret('l', 0));
       },
     );
+
+    test('the empty-item ladder: each Enter outdents one level, the last '
+        'converts at root (checkpoint-2/3)', () {
+      final c = controller([
+        typed(
+          'a',
+          ListItemKeys.type,
+          'one',
+          children: [
+            typed(
+              'b',
+              ListItemKeys.type,
+              'two',
+              children: [typed('c', ListItemKeys.type, '')],
+            ),
+          ],
+        ),
+      ]);
+      c.setSelection(caret('c', 0));
+
+      c.insertNewline(); // Depth 2 → sibling after b.
+      expect(shape(c.document), [('a', 0), ('b', 1), ('c', 1)]);
+      expect(c.document.blockById('c')!.blockType, ListItemKeys.type);
+      expect(c.selection, caret('c', 0));
+
+      c.insertNewline(); // Depth 1 → sibling after a.
+      expect(shape(c.document), [('a', 0), ('b', 1), ('c', 0)]);
+      expect(c.document.blockById('c')!.blockType, ListItemKeys.type);
+      expect(c.selection, caret('c', 0));
+
+      c.insertNewline(); // Root → exits the list.
+      expect(shape(c.document), [('a', 0), ('b', 1), ('c', 0)]);
+      expect(c.document.blockById('c')!.blockType, ParagraphKeys.type);
+      expect(c.selection, caret('c', 0));
+    });
+
+    test('the ladder preserves the block type while climbing (task item)', () {
+      final c = controller([
+        typed(
+          't',
+          TaskItemKeys.type,
+          'parent',
+          metadata: {TaskItemKeys.checked: false},
+          children: [
+            typed(
+              'u',
+              TaskItemKeys.type,
+              '',
+              metadata: {TaskItemKeys.checked: false},
+            ),
+          ],
+        ),
+      ]);
+      c.setSelection(caret('u', 0));
+
+      c.insertNewline();
+      expect(shape(c.document), [('t', 0), ('u', 0)]);
+      expect(c.document.blockById('u')!.blockType, TaskItemKeys.type);
+      expect(c.selection, caret('u', 0));
+
+      c.insertNewline();
+      expect(c.document.blockById('u')!.blockType, ParagraphKeys.type);
+    });
+
+    test('an EMPTY nested block quote climbs the ladder; the root quote '
+        'converts (the listLike escape)', () {
+      final c = controller([
+        typed(
+          'q',
+          BlockQuoteKeys.type,
+          'outer',
+          children: [typed('r', BlockQuoteKeys.type, '')],
+        ),
+      ]);
+      c.setSelection(caret('r', 0));
+
+      c.insertNewline();
+      expect(shape(c.document), [('q', 0), ('r', 0)]);
+      expect(c.document.blockById('r')!.blockType, BlockQuoteKeys.type);
+
+      c.insertNewline();
+      expect(c.document.blockById('r')!.blockType, ParagraphKeys.type);
+    });
+
+    test('the ladder carries children and adopts later siblings — '
+        'outdent()/G13 semantics, not a new reparenting rule', () {
+      final c = controller([
+        typed(
+          'a',
+          ListItemKeys.type,
+          'one',
+          children: [
+            typed(
+              'b',
+              ListItemKeys.type,
+              '',
+              children: [typed('d', ListItemKeys.type, 'child')],
+            ),
+            typed('e', ListItemKeys.type, 'after'),
+          ],
+        ),
+      ]);
+      c.setSelection(caret('b', 0));
+
+      c.insertNewline();
+
+      expect(shape(c.document), [('a', 0), ('b', 0), ('d', 1), ('e', 1)]);
+      expect(c.document.blockById('b')!.blockType, ListItemKeys.type);
+      expect(c.selection, caret('b', 0));
+    });
+
+    test('a NON-empty nested list item still splits normally', () {
+      final c = controller([
+        typed(
+          'a',
+          ListItemKeys.type,
+          'one',
+          children: [typed('b', ListItemKeys.type, 'two')],
+        ),
+      ]);
+      c.setSelection(caret('b', 3));
+
+      c.insertNewline();
+
+      final blocks = c.document.allBlocks;
+      expect(blocks.length, 3);
+      expect(blocks[2].blockType, ListItemKeys.type);
+      expect(c.document.depthOf(2), 1, reason: 'the split stays nested');
+      expect(c.selection, caret(blocks[2].id, 0));
+    });
+
+    test('undo after a ladder step restores the previous nesting', () {
+      final c = controller([
+        typed(
+          'a',
+          ListItemKeys.type,
+          'one',
+          children: [typed('b', ListItemKeys.type, '')],
+        ),
+      ]);
+      c.setSelection(caret('b', 0));
+      final before = shape(c.document);
+
+      c.insertNewline();
+      expect(shape(c.document), [('a', 0), ('b', 0)]);
+
+      c.undo();
+      expect(shape(c.document), before);
+      expect(c.document.blockById('b')!.blockType, ListItemKeys.type);
+      expect(c.selection, caret('b', 0));
+    });
 
     test('at offset 0 of a non-empty block inserts an empty block above', () {
       final c = controller([para('a', 'text')]);
