@@ -7,11 +7,11 @@ import '../codec/inline_codec.dart';
 import '../editor/input_rule.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
-import '../model/document.dart';
 import '../model/inline_entity.dart';
 import '../view/components/default_text_component.dart';
 import '../view/components/divider_block.dart';
 import '../view/components/image_block.dart';
+import '../view/standard_prefixes.dart';
 import 'block_def.dart';
 import 'editor_schema.dart';
 import 'inline_entity_def.dart';
@@ -227,8 +227,12 @@ abstract final class Blocks {
       backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
       metadataKeys: const {TaskItemKeys.checked},
       newBlockMetadata: (splitBlock) => {TaskItemKeys.checked: false},
-      prefixBuilder: (block, gutter, style) =>
-          _taskPrefix(block, style, prefixWidthFactor, accentColor),
+      prefixBuilder: (block, gutter, style) => taskPrefix(
+        block,
+        style,
+        prefixWidthFactor: prefixWidthFactor,
+        accentColor: accentColor,
+      ),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {
@@ -273,8 +277,11 @@ abstract final class Blocks {
       ),
       split: SplitPolicy.listLike,
       backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
-      prefixBuilder: (block, gutter, style) =>
-          _bulletPrefix(block, style, prefixWidthFactor, bulletChar),
+      prefixBuilder: (block, gutter, style) => bulletPrefix(
+        style,
+        prefixWidthFactor: prefixWidthFactor,
+        bulletChar: bulletChar,
+      ),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}- ${ctx.content}',
@@ -304,7 +311,7 @@ abstract final class Blocks {
       split: SplitPolicy.listLike,
       backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
       prefixBuilder: (block, gutter, style) =>
-          _numberedPrefix(gutter, style, prefixWidthFactor),
+          numberedPrefix(gutter, style, prefixWidthFactor: prefixWidthFactor),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}${ctx.ordinal}. ${ctx.content}',
@@ -352,8 +359,12 @@ abstract final class Blocks {
             final content = block.plainText;
             return '${ctx.indent}```$lang\n$content\n```';
           },
-          // Decode handled specially in MarkdownCodec._decodeBlock
-          // for multi-line fenced content.
+          decodeFenced: (info, content) => DecodeMatch(
+            content,
+            metadata: info.isNotEmpty
+                ? {CodeBlockKeys.language: info}
+                : const {},
+          ),
         ),
       },
     );
@@ -379,24 +390,8 @@ abstract final class Blocks {
       },
       spacingBefore: 0.4,
       spacingAfter: 0.4,
-      prefixBuilder: (block, gutter, style) {
-        final fontSize = style.fontSize ?? kFallbackFontSize;
-        final barHeight = fontSize * 1.4;
-        return SizedBox(
-          width: 16,
-          height: barHeight,
-          child: Center(
-            child: Container(
-              width: 3,
-              height: barHeight,
-              decoration: BoxDecoration(
-                color: barColor ?? const Color(0xFFBDBDBD),
-                borderRadius: BorderRadius.circular(1.5),
-              ),
-            ),
-          ),
-        );
-      },
+      prefixBuilder: (block, gutter, style) =>
+          quoteBarPrefix(style, barColor: barColor),
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) => '${ctx.indent}> ${ctx.content}',
@@ -735,7 +730,7 @@ EditorSchema buildStandardSchema({
 }
 
 // ---------------------------------------------------------------------------
-// Prefix builders
+// Shared style constants
 // ---------------------------------------------------------------------------
 
 /// Fallback font size when no style is provided.
@@ -751,129 +746,3 @@ const List<String> _monoFontFallbacks = [
   'Roboto Mono',
   'monospace',
 ];
-
-/// Compute prefix width from a resolved font size and factor.
-double prefixWidth(double fontSize, [double factor = 1.5]) => fontSize * factor;
-
-/// Compute indent per depth level from a base font size and factor.
-double indentPerDepth(double fontSize, [double factor = 1.5]) =>
-    fontSize * factor;
-
-Widget? _bulletPrefix(
-  TextBlock block,
-  TextStyle resolvedStyle,
-  double pwf,
-  String bullet,
-) {
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Text(
-        bullet,
-        style: TextStyle(fontSize: fontSize * 1.2, height: 1),
-      ),
-    ),
-  );
-}
-
-Widget? _numberedPrefix(
-  GutterContext gutter,
-  TextStyle resolvedStyle,
-  double pwf,
-) {
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Text(
-        '${gutter.ordinal}.',
-        style: TextStyle(fontSize: fontSize, height: 1),
-      ),
-    ),
-  );
-}
-
-Widget? _taskPrefix(
-  TextBlock block,
-  TextStyle resolvedStyle,
-  double pwf,
-  Color? overrideAccent,
-) {
-  final checked = block.metadata[TaskItemKeys.checked] == true;
-  final fontSize = resolvedStyle.fontSize ?? kFallbackFontSize;
-  final size = fontSize * 0.85;
-  final borderRadius = size * 0.2;
-  final textColor = resolvedStyle.color ?? const Color(0xFF333333);
-  final Color accentColor;
-  if (overrideAccent != null) {
-    accentColor = overrideAccent;
-  } else {
-    final isDark = textColor.computeLuminance() > 0.5;
-    accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF2196F3);
-  }
-
-  return SizedBox(
-    width: prefixWidth(fontSize, pwf),
-    child: Center(
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(borderRadius),
-          border: Border.all(
-            color: checked ? accentColor : textColor.withValues(alpha: 0.4),
-            width: 1.5,
-          ),
-          color: checked ? accentColor : null,
-        ),
-        child: checked
-            ? CustomPaint(
-                painter: _CheckPainter(color: const Color(0xFFFFFFFF)),
-              )
-            : null,
-      ),
-    ),
-  );
-}
-
-class _CheckPainter extends CustomPainter {
-  _CheckPainter({required this.color});
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = size.width * 0.15
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
-    final path = Path()
-      ..moveTo(size.width * 0.2, size.height * 0.5)
-      ..lineTo(size.width * 0.42, size.height * 0.72)
-      ..lineTo(size.width * 0.8, size.height * 0.28);
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(_CheckPainter old) => color != old.color;
-}
-
-/// Compute the 1-based ordinal of a block among the contiguous run of
-/// same-type, same-depth blocks preceding it. Used by the view to build
-/// [GutterContext] and exported for custom numbered-list block defs.
-int computeOrdinal(Document doc, int flatIndex) {
-  var ordinal = 1;
-  final flat = doc.allBlocks;
-  final block = flat[flatIndex];
-  final depth = doc.depthOf(flatIndex);
-
-  for (var j = flatIndex - 1; j >= 0; j--) {
-    if (doc.depthOf(j) != depth) break;
-    if (flat[j].blockType != block.blockType) break;
-    ordinal++;
-  }
-  return ordinal;
-}

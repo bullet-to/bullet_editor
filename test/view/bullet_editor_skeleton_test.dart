@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:bullet_editor/bullet_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -179,6 +181,45 @@ void main() {
           tester.getTopLeft(_richTextContaining('Title')).dy -
           tester.getBottomLeft(_richTextContaining('above')).dy;
       expect(gap, moreOrLessEquals(1.2 * 16));
+    });
+
+    testWidgets('gap after a nested subtree collapses against its deepest last '
+        'descendant, not the root', (tester) async {
+      // blockquote (spacingAfter 0.4) with a listItem child (spacingAfter
+      // 0), then a root listItem (spacingBefore 0). The flat predecessor
+      // of the root listItem is the CHILD, so the gap is max(0, 0) = 0 —
+      // using the quote root's 0.4 would open a phantom 6.4px gap.
+      final doc = Document([
+        TextBlock(
+          id: 'q',
+          blockType: BlockQuoteKeys.type,
+          segments: [const StyledSegment('quote root')],
+          children: [
+            TextBlock(
+              id: 'qc',
+              blockType: ListItemKeys.type,
+              segments: [const StyledSegment('nested item')],
+            ),
+          ],
+        ),
+        TextBlock(
+          id: 'l',
+          blockType: ListItemKeys.type,
+          segments: [const StyledSegment('next root')],
+        ),
+      ]);
+      await tester.pumpWidget(_editor(doc));
+
+      // The child row's bottom is the taller of its bullet glyph
+      // (fontSize * 1.2) and its text line box.
+      final bullets = find.text('•');
+      expect(bullets, findsNWidgets(2));
+      final childRowBottom = math.max(
+        tester.getBottomLeft(bullets.first).dy,
+        tester.getBottomLeft(_richTextContaining('nested item')).dy,
+      );
+      final nextTop = tester.getTopLeft(_richTextContaining('next root')).dy;
+      expect(nextTop - childRowBottom, moreOrLessEquals(0));
     });
 
     testWidgets('divider gets policy spacing on both sides', (tester) async {

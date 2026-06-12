@@ -65,6 +65,15 @@ class BulletEditorState extends State<BulletEditor> {
   }
 
   @override
+  void didUpdateWidget(BulletEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // GATE-K also covers a schema swapped in after first build.
+    if (!identical(widget.schema, oldWidget.schema)) {
+      assert(widget.schema.validate());
+    }
+  }
+
+  @override
   void dispose() {
     _ownedScrollController?.dispose();
     super.dispose();

@@ -74,8 +74,10 @@ class EditorSchema {
 
   /// Aggregate policies map from all registered block defs.
   /// Used by edit operations that need to check structural rules.
-  Map<String, BlockPolicies> get policies =>
-      blocks.map((k, v) => MapEntry(k, v.policies));
+  /// Cached — the schema is immutable after construction.
+  late final Map<String, BlockPolicies> policies = Map.unmodifiable(
+    blocks.map((k, v) => MapEntry(k, v.policies)),
+  );
 
   /// Whether the block type identified by [key] is a void block (no text).
   bool isVoid(Object key) => blocks[key]?.isVoid ?? false;
@@ -89,8 +91,11 @@ class EditorSchema {
       blocks[key]?.backspaceAtStart ?? BackspaceAtStartPolicy.merge;
 
   /// The [EditContext] this schema supplies to `EditOperation.apply` —
-  /// constructed by the controller per batch, and directly by tests.
-  EditContext editContext() => EditContext(
+  /// used by the controller per batch, and directly by tests. Cached: the
+  /// schema is immutable, so one context serves every batch.
+  EditContext editContext() => _editContext;
+
+  late final EditContext _editContext = EditContext(
     defaultBlockType: defaultBlockType,
     splitPolicyOf: splitPolicyOf,
     backspaceAtStartOf: backspaceAtStartOf,

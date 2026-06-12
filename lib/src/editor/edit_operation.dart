@@ -126,7 +126,7 @@ class InsertText extends EditOperation {
       'Text ops must not address void blocks ($blockId is ${block.blockType})',
     );
     if (offset < 0 || offset > block.length) return null;
-    final newSegments = _spliceInsert(
+    final newSegments = spliceInsert(
       block.segments,
       offset,
       text,
@@ -159,7 +159,7 @@ class DeleteText extends EditOperation {
       'Text ops must not address void blocks ($blockId is ${block.blockType})',
     );
     if (offset < 0 || length < 0 || offset + length > block.length) return null;
-    final newSegments = _spliceDelete(block.segments, offset, length);
+    final newSegments = spliceDelete(block.segments, offset, length);
     final newBlock = block.copyWith(segments: mergeSegments(newSegments));
     return doc.replaceBlock(index, newBlock);
   }
@@ -200,51 +200,33 @@ class ToggleStyle extends EditOperation {
       'Text ops must not address void blocks ($blockId is ${block.blockType})',
     );
     if (start < 0 || end < start || end > block.length) return null;
-    final segments = block.segments;
 
-    // Expand segments into per-character style sets and attribute maps.
-    final charStyles = <Set<Object>>[];
-    final charAttrs = <Map<String, dynamic>>[];
-    for (final seg in segments) {
-      for (var i = 0; i < seg.text.length; i++) {
-        charStyles.add(Set.of(seg.styles));
-        charAttrs.add(Map.of(seg.attributes));
-      }
-    }
+    // Isolate the range, then toggle on the middle segments wholesale —
+    // characters within a segment share styles by definition.
+    final (before, rest) = splitSegmentsAt(block.segments, start);
+    final (middle, after) = splitSegmentsAt(rest, end - start);
 
-    // Check if the entire range already has the style.
-    final allHaveStyle = charStyles
-        .skip(start)
-        .take(end - start)
-        .every((s) => s.contains(style));
+    // Remove if the entire range already has the style, apply otherwise.
+    final allHaveStyle = middle.every((s) => s.styles.contains(style));
 
-    // Toggle: remove if all have it, add if any don't.
-    for (var i = start; i < end; i++) {
+    final toggled = middle.map((seg) {
+      final styles = Set.of(seg.styles);
+      final attrs = Map.of(seg.attributes);
       if (allHaveStyle) {
-        charStyles[i].remove(style);
+        styles.remove(style);
         // Clear attributes from data-carrying styles when removing.
-        if (attributes != null) {
-          for (final key in attributes!.keys) {
-            charAttrs[i].remove(key);
-          }
-        }
+        attributes?.keys.forEach(attrs.remove);
       } else {
-        charStyles[i].add(style);
+        styles.add(style);
         // Set attributes when adding a data-carrying style.
-        if (attributes != null) {
-          charAttrs[i].addAll(attributes!);
-        }
+        if (attributes != null) attrs.addAll(attributes!);
       }
-    }
+      return StyledSegment(seg.text, styles, attrs);
+    });
 
-    // Rebuild segments from per-character styles + attributes.
-    final plainText = block.plainText;
-    final newSegments = <StyledSegment>[];
-    for (var i = 0; i < plainText.length; i++) {
-      newSegments.add(StyledSegment(plainText[i], charStyles[i], charAttrs[i]));
-    }
-
-    final newBlock = block.copyWith(segments: mergeSegments(newSegments));
+    final newBlock = block.copyWith(
+      segments: mergeSegments([...before, ...toggled, ...after]),
+    );
     return doc.replaceBlock(index, newBlock);
   }
 
@@ -497,9 +479,10 @@ class DeleteRange extends EditOperation {
     //    shift the positions of the blocks still to be removed.
     var result = doc.replaceBlock(startIndex, mergedBlock);
     for (var i = endIndex; i > startIndex; i--) {
-      if (i < result.allBlocks.length) {
-        result = result.removeBlockPromoteChildren(i);
-      }
+      // Each removal shrinks the flat list by exactly one (children are
+      // promoted, not dropped), so descending indices stay valid.
+      assert(i < result.allBlocks.length);
+      result = result.removeBlockPromoteChildren(i);
     }
 
     return result;
@@ -683,7 +666,7 @@ class SetMetadata extends EditOperation {
 
   final String blockId;
   final String key;
-  final dynamic value;
+  final Object? value;
 
   @override
   Document? apply(Document doc, EditContext ctx) {
@@ -857,145 +840,6 @@ Document? _chainInsertAfter(
   return result;
 }
 
-/// Insert [text] at [offset] in [segments].
-///
-/// If [styles] is provided, the new text gets those styles explicitly.
-/// If null, inherits from the segment at the insertion point.
-/// [attributes] is passed through for data-carrying styles.
-List<StyledSegment> _spliceInsert(
-  List<StyledSegment> segments,
-  int offset,
-  String text, {
-  Set<Object>? styles,
-  Map<String, dynamic>? attributes,
-}) {
-  if (segments.isEmpty) {
-    return [StyledSegment(text, styles ?? const {}, attributes ?? const {})];
-  }
-
-  final result = <StyledSegment>[];
-  var pos = 0;
-  var inserted = false;
-
-  for (final seg in segments) {
-    final segStart = pos;
-    final segEnd = pos + seg.text.length;
-
-    if (!inserted && offset <= segEnd) {
-      final localOffset = offset - segStart;
-      final before = seg.text.substring(0, localOffset);
-      final after = seg.text.substring(localOffset);
-      final insertStyles = styles ?? seg.styles;
-      final insertAttrs =
-          attributes ??
-          (styles != null ? const <String, dynamic>{} : seg.attributes);
-      if (before.isNotEmpty) {
-        result.add(StyledSegment(before, seg.styles, seg.attributes));
-      }
-      result.add(StyledSegment(text, insertStyles, insertAttrs));
-      if (after.isNotEmpty) {
-        result.add(StyledSegment(after, seg.styles, seg.attributes));
-      }
-      inserted = true;
-    } else {
-      result.add(seg);
-    }
-
-    pos = segEnd;
-  }
-
-  if (!inserted) {
-    result.add(
-      StyledSegment(
-        text,
-        styles ?? segments.last.styles,
-        attributes ?? const {},
-      ),
-    );
-  }
-
-  return result;
-}
-
-/// Delete [length] characters starting at [offset] from segments,
-/// preserving styles on remaining text.
-List<StyledSegment> _spliceDelete(
-  List<StyledSegment> segments,
-  int offset,
-  int length,
-) {
-  final result = <StyledSegment>[];
-  var pos = 0;
-  final deleteStart = offset;
-  final deleteEnd = offset + length;
-
-  for (final seg in segments) {
-    final segStart = pos;
-    final segEnd = pos + seg.text.length;
-
-    if (segEnd <= deleteStart || segStart >= deleteEnd) {
-      // Entirely outside the delete range — keep as-is.
-      result.add(seg);
-    } else {
-      // Partially or fully inside the delete range.
-      final keepBefore = seg.text.substring(
-        0,
-        (deleteStart - segStart).clamp(0, seg.text.length),
-      );
-      final keepAfter = seg.text.substring(
-        (deleteEnd - segStart).clamp(0, seg.text.length),
-      );
-      if (keepBefore.isNotEmpty) {
-        result.add(StyledSegment(keepBefore, seg.styles, seg.attributes));
-      }
-      if (keepAfter.isNotEmpty) {
-        result.add(StyledSegment(keepAfter, seg.styles, seg.attributes));
-      }
-    }
-
-    pos = segEnd;
-  }
-
-  return result;
-}
-
-/// Split segment list at [offset], returning both halves.
-///
-/// Returns a record `(before, after)` where `before` contains segments
-/// up to [offset] and `after` contains segments from [offset] onward.
-(List<StyledSegment>, List<StyledSegment>) splitSegmentsAt(
-  List<StyledSegment> segments,
-  int offset,
-) {
-  var pos = 0;
-  final before = <StyledSegment>[];
-  final after = <StyledSegment>[];
-
-  for (final seg in segments) {
-    final segStart = pos;
-    final segEnd = pos + seg.text.length;
-
-    if (segEnd <= offset) {
-      before.add(seg);
-    } else if (segStart >= offset) {
-      after.add(seg);
-    } else {
-      // Split point is inside this segment.
-      final splitAt = offset - segStart;
-      before.add(
-        StyledSegment(
-          seg.text.substring(0, splitAt),
-          seg.styles,
-          seg.attributes,
-        ),
-      );
-      after.add(
-        StyledSegment(seg.text.substring(splitAt), seg.styles, seg.attributes),
-      );
-    }
-
-    pos = segEnd;
-  }
-
-  return (before, after);
-}
+// Segment algebra (spliceInsert, spliceDelete, splitSegmentsAt) lives in
+// model/block.dart next to mergeSegments — one canonical home for
+// StyledSegment manipulation.

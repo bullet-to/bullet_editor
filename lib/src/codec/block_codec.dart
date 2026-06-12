@@ -32,7 +32,7 @@ class EncodeContext {
 ///
 /// Register on [BlockDef.codecs] keyed by [Format].
 class BlockCodec {
-  const BlockCodec({required this.encode, this.decode});
+  const BlockCodec({required this.encode, this.decode, this.decodeFenced});
 
   /// Encode a block to a format string. The [ctx] provides depth, ordinal,
   /// and pre-encoded inline content.
@@ -42,6 +42,17 @@ class BlockCodec {
   /// Return a [DecodeMatch] if the line matches, null otherwise.
   /// The orchestrator tries decoders in schema registration order.
   final DecodeMatch? Function(String line)? decode;
+
+  /// Decode a fenced region (``` / ~~~) into this block type. Declaring this
+  /// makes the type the schema's fence target. [info] is the fence info
+  /// string (e.g. the language), [content] the literal text between fences —
+  /// it bypasses inline decoding.
+  ///
+  /// Recorded limitation: the fence *grammar* (delimiters, region splitting)
+  /// stays in [MarkdownCodec]; custom multi-line block shapes beyond fences
+  /// (front-matter, math environments) need a region-decode contract that is
+  /// deliberately post-launch.
+  final DecodeMatch? Function(String info, String content)? decodeFenced;
 }
 
 /// Result of a successful block decode match.

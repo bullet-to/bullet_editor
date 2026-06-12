@@ -46,7 +46,13 @@ class BlockListView extends StatelessWidget {
               block: block,
               depth: 0,
               ordinal: _rootOrdinal(roots, index),
-              document: document,
+              // Flat order is pre-order, so the block preceding a root is
+              // the previous root subtree's deepest last descendant.
+              previousBlockType: index == 0
+                  ? null
+                  : _lastDescendant(roots[index - 1]).blockType,
+              isFirstInDocument: index == 0,
+              containsDocumentEnd: index == roots.length - 1,
               schema: schema,
               baseStyle: baseStyle,
               onLinkTap: onLinkTap,
@@ -71,15 +77,26 @@ class BlockListView extends StatelessWidget {
   }
 }
 
+/// The flat-order last block within [block]'s subtree.
+TextBlock _lastDescendant(TextBlock block) =>
+    block.children.isEmpty ? block : _lastDescendant(block.children.last);
+
 /// Renders one block — gutter slot (prefixBuilder) + component — plus its
 /// children Column, recursing through the componentBuilder registry.
+///
+/// Consumes only plain values (the [BlockComponentContext] seam plus what the
+/// parent walk already knows) — never the [Document]. This keeps every input
+/// value-comparable for the day-10 rebuild-skip predicate: a keystroke
+/// elsewhere must not change this widget's inputs.
 class BlockSubtree extends StatelessWidget {
   const BlockSubtree({
     super.key,
     required this.block,
     required this.depth,
     required this.ordinal,
-    required this.document,
+    required this.previousBlockType,
+    required this.isFirstInDocument,
+    required this.containsDocumentEnd,
     required this.schema,
     required this.baseStyle,
     this.onLinkTap,
@@ -88,7 +105,16 @@ class BlockSubtree extends StatelessWidget {
   final TextBlock block;
   final int depth;
   final int ordinal;
-  final Document document;
+
+  /// Block type of the flat-order predecessor (spacing collapse partner);
+  /// null for the document's first block.
+  final String? previousBlockType;
+
+  final bool isFirstInDocument;
+
+  /// Whether this subtree's last descendant is the document's last block.
+  final bool containsDocumentEnd;
+
   final EditorSchema schema;
   final TextStyle baseStyle;
   final void Function(String blockId, int offset, InlineEntitySnapshot entity)?
@@ -100,12 +126,11 @@ class BlockSubtree extends StatelessWidget {
     final resolvedStyle = def.baseStyle?.call(baseStyle) ?? baseStyle;
     final baseFontSize = baseStyle.fontSize ?? kFallbackFontSize;
 
-    final allBlocks = document.allBlocks;
     final gutter = GutterContext(
       ordinal: ordinal,
       depth: depth,
-      isFirstInDocument: allBlocks.isNotEmpty && block.id == allBlocks.first.id,
-      isLastInDocument: allBlocks.isNotEmpty && block.id == allBlocks.last.id,
+      isFirstInDocument: isFirstInDocument,
+      isLastInDocument: containsDocumentEnd && block.children.isEmpty,
     );
 
     final componentContext = BlockComponentContext(
@@ -136,10 +161,8 @@ class BlockSubtree extends StatelessWidget {
     // spacingAfter, this block's spacingBefore) — applied as top padding
     // only (checkpoint-1 finding: additive before+after double-spaced
     // pairs, and a trailing spacingAfter has no v2 equivalent).
-    final flatIndex = document.idToFlatIndex[block.id];
-    if (flatIndex != null && flatIndex > 0) {
-      final prevBlock = document.allBlocks[flatIndex - 1];
-      final prevAfter = schema.blockDef(prevBlock.blockType).spacingAfter;
+    if (previousBlockType != null) {
+      final prevAfter = schema.blockDef(previousBlockType!).spacingAfter;
       final gapEm = def.spacingBefore > prevAfter
           ? def.spacingBefore
           : prevAfter;
@@ -157,7 +180,8 @@ class BlockSubtree extends StatelessWidget {
     final children = <Widget>[];
     var runOrdinal = 0;
     String? runType;
-    for (final child in block.children) {
+    for (var i = 0; i < block.children.length; i++) {
+      final child = block.children[i];
       if (child.blockType == runType) {
         runOrdinal++;
       } else {
@@ -170,7 +194,14 @@ class BlockSubtree extends StatelessWidget {
           block: child,
           depth: depth + 1,
           ordinal: runOrdinal,
-          document: document,
+          // Pre-order: a first child follows its parent; later children
+          // follow the previous sibling subtree's deepest last descendant.
+          previousBlockType: i == 0
+              ? block.blockType
+              : _lastDescendant(block.children[i - 1]).blockType,
+          isFirstInDocument: false,
+          containsDocumentEnd:
+              containsDocumentEnd && i == block.children.length - 1,
           schema: schema,
           baseStyle: baseStyle,
           onLinkTap: onLinkTap,
