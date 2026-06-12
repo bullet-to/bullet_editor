@@ -402,9 +402,21 @@ class BulletEditorState extends State<BulletEditor> {
           // links, basic over voids) is interactor-side, day 14.
           child: MouseRegion(
             cursor: SystemMouseCursors.text,
-            child: CustomScrollView(
-              controller: _scrollController,
-              slivers: [sliver],
+            // The IME's editable box is anchored to the caret/composing
+            // region (ImeGeometryReporter), which scrolls with the content
+            // — every scroll tick re-reports geometry (post-frame,
+            // coalesced) so the engine's hidden input, and on web the IME
+            // candidate window anchored to it, tracks the composition (the
+            // day-15 re-send note; G15's metrics analogue).
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (_) {
+                imeService.scheduleGeometryReport();
+                return false;
+              },
+              child: CustomScrollView(
+                controller: _scrollController,
+                slivers: [sliver],
+              ),
             ),
           ),
         ),

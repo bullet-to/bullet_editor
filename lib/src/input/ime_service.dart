@@ -2151,6 +2151,14 @@ class ImeService extends ChangeNotifier
 
   bool _geometryReportScheduled = false;
 
+  /// Re-sends geometry on the next frame end. The widget calls this from
+  /// its scroll notifications (the day-15 re-send note, G15's metrics
+  /// analogue for scrolling viewports): the caret/composing anchor moves
+  /// with every scroll tick, and the engine's hidden-input placement — on
+  /// web the ONLY signal positioning the IME candidate window — does not
+  /// follow by itself. Coalesced per frame; a no-op while detached.
+  void scheduleGeometryReport() => _scheduleGeometryReport();
+
   /// Sends caret/composing rects and the editable transform after every
   /// applied delta batch that can change them — post-frame, when the caret
   /// block has laid out. Null geometry (offscreen) is tolerated per GATE-L.
@@ -2174,8 +2182,31 @@ class ImeService extends ChangeNotifier
 /// of the connection — separating "report geometry" from "report text" is
 /// what makes G15 (`setEditingState` never called for pure geometry changes)
 /// structural rather than disciplined.
+///
+/// **The editable box is anchored to the composing region (or the caret),
+/// not the whole editor.** The web engine consumes ONLY
+/// `setEditableSizeAndTransform` — `setMarkedTextRect`/`setCaretRect` are
+/// explicit no-op commands there (engine `text_editing.dart`:
+/// `TextInputSetMarkedTextRect`/`TextInputSetCaretRect`) — and positions its
+/// hidden input element verbatim from the reported width/height/transform
+/// (`EditableTextGeometry.applyToDomElement`). The browser then anchors the
+/// IME candidate window to that element. Reporting the whole editor box put
+/// the hidden input over the entire viewport with its DOM caret rendering at
+/// the element's first line, so the candidate window opened at the editor's
+/// top-left regardless of caret position or scroll (the manual Chrome AND
+/// Safari finding). Anchoring the editable at the composing/caret rect —
+/// transform = editor's global transform × the rect's editor-space offset —
+/// makes the hidden input (and the candidate window) track the composition;
+/// the engine explicitly supports mid-composition geometry updates
+/// (`updateElementPlacement` skips `placeElement` while `composingText` is
+/// held, flutter#98817). Caret/composing rects are re-expressed relative to
+/// the anchored box, so the platforms that DO consume them (iOS candidate
+/// bar anchoring) keep resolving to the same global position. With no
+/// caret/composing geometry (no selection, offscreen block) the editor box
+/// is reported as before — never silence, the engine needs *some* editable.
 class ImeGeometryReporter {
-  /// The editor's root render box — the editable the engine anchors to.
+  /// The editor's root render box — the coordinate space the per-block
+  /// rects are lifted into before anchoring.
   RenderBox? Function()? editorRenderBox;
 
   /// Per-block geometry lookup (the layout registry; null ⇒ not laid out).
@@ -2190,22 +2221,18 @@ class ImeGeometryReporter {
   }) {
     final editorBox = editorRenderBox?.call();
     if (editorBox == null || !editorBox.attached || !editorBox.hasSize) return;
-    channel.setEditableSizeAndTransform(
-      editorBox.size,
-      editorBox.getTransformTo(null),
-    );
 
+    Rect? caretRect; // editor space
     if (selection != null && selection.isCollapsed) {
       final caret = selection.extent;
       final geometry = blockGeometryOf?.call(caret.blockId);
       final rect = geometry?.rectForOffset(caret.offset);
       if (rect != null) {
-        channel.setCaretRect(
-          _toEditorSpace(rect, geometry!.renderBox, editorBox),
-        );
+        caretRect = _toEditorSpace(rect, geometry!.renderBox, editorBox);
       }
     }
 
+    Rect? composingRect; // editor space
     if (composing != null && composing.range.isValid) {
       final geometry = blockGeometryOf?.call(composing.blockId);
       if (geometry != null) {
@@ -2218,11 +2245,33 @@ class ImeGeometryReporter {
           for (final r in rects.skip(1)) {
             bounds = bounds.expandToInclude(r);
           }
-          channel.setComposingRect(
-            _toEditorSpace(bounds, geometry.renderBox, editorBox),
-          );
+          composingRect = _toEditorSpace(bounds, geometry.renderBox, editorBox);
         }
       }
+    }
+
+    // The anchor: the composing region while a composition is live (the
+    // candidate window belongs to the marked text), else the caret, else
+    // the editor box itself (GATE-L: offscreen geometry is null — estimate,
+    // never force layout).
+    final anchor = composingRect ?? caretRect;
+    if (anchor == null) {
+      channel.setEditableSizeAndTransform(
+        editorBox.size,
+        editorBox.getTransformTo(null),
+      );
+      return;
+    }
+    channel.setEditableSizeAndTransform(
+      anchor.size,
+      editorBox.getTransformTo(null)
+        ..translateByDouble(anchor.left, anchor.top, 0, 1),
+    );
+    if (caretRect != null) {
+      channel.setCaretRect(caretRect.shift(-anchor.topLeft));
+    }
+    if (composingRect != null) {
+      channel.setComposingRect(composingRect.shift(-anchor.topLeft));
     }
   }
 

@@ -609,6 +609,128 @@ void main() {
     });
   });
 
+  group('candidate-window geometry (the web engine consumes ONLY '
+      'setEditableSizeAndTransform — the hidden input must sit at the '
+      'caret/composing region, or the candidate window opens at the '
+      "editor's top-left)", () {
+    Map<String, dynamic> lastSizeAndTransform(WidgetTester tester) {
+      final call = tester.testTextInput.log.lastWhere(
+        (c) => c.method == 'TextInput.setEditableSizeAndTransform',
+      );
+      return (call.arguments as Map).cast<String, dynamic>();
+    }
+
+    Future<ScrollController> pumpScrolledEditor(WidgetTester tester) async {
+      controller = EditorController(
+        document: Document([
+          for (var i = 0; i < 30; i++) para('b$i', 'block $i'),
+        ]),
+        schema: EditorSchema.standard(),
+        undoGrouping: (previous, current) => false,
+      );
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BulletEditor(
+              controller: controller,
+              scrollController: scrollController,
+              autofocus: true,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF000000),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return scrollController;
+    }
+
+    testWidgets('composing on a block far from the origin reports the '
+        "editable transform at the composing region's on-screen position", (
+      tester,
+    ) async {
+      final scrollController = await pumpScrolledEditor(tester);
+      scrollController.jumpTo(120);
+      await tester.pump();
+      controller.setSelection(
+        DocSelection.collapsed(const DocPosition('b15', 8)),
+      );
+      await tester.pump();
+      tester.testTextInput.log.clear();
+
+      // Compose か at the end of 'block 15' (buffer offset 10, sentinel +8).
+      sendInsertion(
+        tester,
+        'か',
+        composing: const TextRange(start: 10, end: 11),
+      );
+      await tester.pump(); // the post-frame geometry report
+
+      final blockRect = tester.getRect(richTextContaining('block 15'));
+      expect(
+        blockRect.top,
+        greaterThan(100),
+        reason: 'the fixture block must sit far from the editor origin',
+      );
+      final args = lastSizeAndTransform(tester);
+      final transform = (args['transform'] as List).cast<double>();
+      // The composing か spans one 16px glyph after the 8 of 'block 15'.
+      expect(
+        transform[12],
+        closeTo(blockRect.left + 8 * 16, 1.0),
+        reason: 'x: the hidden input must sit at the composing region',
+      );
+      expect(
+        transform[13],
+        closeTo(blockRect.top, 1.0),
+        reason: 'y: the block position, not the editor top-left',
+      );
+      expect(
+        args['height'] as double,
+        lessThan(100),
+        reason: 'the editable is the composing region, not the viewport',
+      );
+    });
+
+    testWidgets('scrolling re-reports: the anchor follows the content '
+        '(ScrollNotification-driven re-send, the day-15 re-send note)', (
+      tester,
+    ) async {
+      final scrollController = await pumpScrolledEditor(tester);
+      scrollController.jumpTo(120);
+      await tester.pump();
+      controller.setSelection(
+        DocSelection.collapsed(const DocPosition('b15', 8)),
+      );
+      await tester.pump();
+      sendInsertion(
+        tester,
+        'か',
+        composing: const TextRange(start: 10, end: 11),
+      );
+      await tester.pump();
+      final before = lastSizeAndTransform(tester);
+      final beforeY = ((before['transform'] as List).cast<double>())[13];
+      tester.testTextInput.log.clear();
+
+      scrollController.jumpTo(170); // scroll 50 further
+      await tester.pump(); // notification → scheduled post-frame report
+      await tester.pump();
+
+      final after = lastSizeAndTransform(tester);
+      final afterY = ((after['transform'] as List).cast<double>())[13];
+      expect(
+        afterY,
+        closeTo(beforeY - 50, 1.0),
+        reason: 'the reported anchor must track the scrolled content',
+      );
+    });
+  });
+
   group('web diff fallback wiring (day 8)', () {
     testWidgets('imeFrontend: nonDeltaDiff attaches WITHOUT the delta model '
         'and full-value updates from the platform drive the document', (
