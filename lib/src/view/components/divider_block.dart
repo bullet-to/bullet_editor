@@ -40,6 +40,7 @@ class _DividerBlockComponentState extends State<DividerBlockComponent>
     // finding: a 1px tint was imperceptible).
     return VoidSelectionTint(
       isSelected: isSelected,
+      showBorder: false,
       child: SizedBox(
         width: double.infinity,
         height: 9,

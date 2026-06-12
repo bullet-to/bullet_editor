@@ -55,17 +55,24 @@ mixin VoidBlockGeometry<T extends StatefulWidget>
   RenderBox get renderBox => context.findRenderObject()! as RenderBox;
 }
 
-/// The atomic-selection affordance for void blocks: a tint + border overlay
-/// when the block's `[0,1)` is the selection (D3 — Notion behavior). The
-/// full range-highlight pass (voids swept inside drags) is day-10 work.
+/// The atomic-selection affordance for void blocks: a tint (and, for
+/// content-shaped blocks like images, a border) overlaid when the block's
+/// `[0,1)` is the selection (D3 — Notion behavior). The full range-highlight
+/// pass (voids swept inside drags) is day-10 work.
 class VoidSelectionTint extends StatelessWidget {
   const VoidSelectionTint({
     super.key,
     required this.isSelected,
+    this.showBorder = true,
     required this.child,
   });
 
   final bool isSelected;
+
+  /// Whether the overlay includes the accent border. Blocks without a
+  /// content edge to trace (the divider's highlight band) use tint only.
+  final bool showBorder;
+
   final Widget child;
 
   @override
@@ -74,7 +81,9 @@ class VoidSelectionTint extends StatelessWidget {
     return Container(
       foregroundDecoration: BoxDecoration(
         color: const Color(0x332196F3),
-        border: Border.all(color: const Color(0xFF2196F3), width: 1.5),
+        border: showBorder
+            ? Border.all(color: const Color(0xFF2196F3), width: 1.5)
+            : null,
         borderRadius: BorderRadius.circular(4),
       ),
       child: child,
