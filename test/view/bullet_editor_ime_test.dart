@@ -28,6 +28,7 @@ void main() {
     bool readOnly = false,
     bool autofocus = true,
     ImeFrontend? imeFrontend,
+    bool nativeComposingUnderline = false,
   }) async {
     controller = EditorController(
       document: Document(blocks),
@@ -42,6 +43,7 @@ void main() {
             readOnly: readOnly,
             autofocus: autofocus,
             imeFrontend: imeFrontend,
+            nativeComposingUnderline: nativeComposingUnderline,
             textStyle: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
           ),
         ),
@@ -727,6 +729,165 @@ void main() {
         afterY,
         closeTo(beforeY - 50, 1.0),
         reason: 'the reported anchor must track the scrolled content',
+      );
+    });
+  });
+
+  group("hidden-input metrics (TextInput.setStyle — the engine's editing "
+      'element must use OUR font metrics, or the native marked-text '
+      'decoration Safari paints lands mid-glyph)', () {
+    Map<String, dynamic> lastSetStyle(WidgetTester tester) {
+      final call = tester.testTextInput.log.lastWhere(
+        (c) => c.method == 'TextInput.setStyle',
+      );
+      return (call.arguments as Map).cast<String, dynamic>();
+    }
+
+    testWidgets('attach sends setStyle with the focused block\'s resolved '
+        'style', (tester) async {
+      await pumpEditor(tester, [para('a', 'hi')], autofocus: false);
+      tester.testTextInput.log.clear();
+
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      controller.requestFocus();
+      await tester.pump(); // attach
+      await tester.pump(); // the post-frame report carries the style
+
+      final style = lastSetStyle(tester);
+      expect(style['fontSize'], 16.0);
+      expect(style['textAlignIndex'], TextAlign.start.index);
+      expect(style['textDirectionIndex'], TextDirection.ltr.index);
+    });
+
+    testWidgets('moving the caret into a block with a different resolved '
+        'style re-sends setStyle (the heading\'s metrics, not the '
+        'paragraph\'s)', (tester) async {
+      await pumpEditor(tester, [
+        TextBlock(
+          id: 'h',
+          blockType: HeadingKeys.h1,
+          segments: [StyledSegment('Title')],
+        ),
+        para('a', 'hi'),
+      ], autofocus: false);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      controller.requestFocus();
+      await tester.pump();
+      await tester.pump();
+      expect(lastSetStyle(tester)['fontSize'], 16.0);
+      tester.testTextInput.log.clear();
+
+      controller.setSelection(DocSelection.collapsed(DocPosition('h', 5)));
+      await tester.pump(); // selection push schedules a report
+      await tester.pump(); // the post-frame report
+
+      final style = lastSetStyle(tester);
+      expect(style['fontSize'], 16.0 * 1.75, reason: 'h1 scales the base');
+      expect(
+        style['fontWeightIndex'],
+        FontWeight.values.indexOf(FontWeight.bold),
+      );
+    });
+
+    testWidgets('an unchanged style is not re-sent on every geometry '
+        'report — setStyle is cached per connection', (tester) async {
+      await pumpEditor(tester, [para('a', 'hi')], autofocus: false);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      controller.requestFocus();
+      await tester.pump();
+      await tester.pump();
+      tester.testTextInput.log.clear();
+
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      await tester.pump();
+
+      final methods = tester.testTextInput.log.map((c) => c.method).toList();
+      expect(
+        methods,
+        contains('TextInput.setEditableSizeAndTransform'),
+        reason: 'the caret move re-reports geometry',
+      );
+      expect(
+        methods,
+        isNot(contains('TextInput.setStyle')),
+        reason: 'same block, same resolved style — nothing to re-send',
+      );
+    });
+  });
+
+  group('native composing underline (the Safari double-underline fix: '
+      'WebKit decorates marked text in the hidden input with the '
+      'IME-supplied underline, which CSS cannot hide — when the host opts '
+      'in, OUR painted underline yields to it while the browser owns the '
+      'composition)', () {
+    final overlayLayer = find.byWidgetPredicate(
+      (w) =>
+          w is CustomPaint &&
+          w.foregroundPainter != null &&
+          w.child is RichText,
+    );
+
+    testWidgets('diff frontend + nativeComposingUnderline: the painted '
+        'underline is suppressed while the composition is live (caret rect '
+        'only)', (tester) async {
+      await pumpEditor(
+        tester,
+        [para('a', '')],
+        imeFrontend: ImeFrontend.nonDeltaDiff,
+        nativeComposingUnderline: true,
+      );
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '. かな',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange(start: 2, end: 4),
+        ),
+      );
+      await tester.pump();
+
+      // The composition itself stays first-class (gates, geometry, shadow);
+      // only the painted decoration yields to the browser's.
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 2)),
+      );
+      expect(
+        tester.renderObject(overlayLayer),
+        isNot(
+          paints
+            ..rect()
+            ..rect(),
+        ),
+        reason: 'no underline rect — the browser owns the decoration',
+      );
+      expect(
+        tester.renderObject(overlayLayer),
+        paints..rect(),
+        reason: 'the caret still paints',
+      );
+    });
+
+    testWidgets('the delta frontend keeps the painted underline even with '
+        'nativeComposingUnderline set — no hidden input is visible off the '
+        'web fallback', (tester) async {
+      await pumpEditor(tester, [para('a', '')], nativeComposingUnderline: true);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      sendInsertion(tester, 'かな', composing: const TextRange(start: 2, end: 4));
+      await tester.pump();
+
+      expect(controller.composing, isNotNull);
+      // Two filled rects: the composing underline, then the caret.
+      expect(
+        tester.renderObject(overlayLayer),
+        paints
+          ..rect()
+          ..rect(),
       );
     });
   });

@@ -9,6 +9,8 @@ import 'package:bullet_editor/src/dev/gauntlet_document.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
+import 'native_composing_underline.dart';
+
 /// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
 /// left, tabbed debug panes on the right.
 ///
@@ -81,6 +83,10 @@ class _InspectorScreenState extends State<InspectorScreen> {
                 key: _editorKey,
                 controller: _controller,
                 autofocus: true,
+                // WebKit hosts: let Safari's own marked-text underline own
+                // the live composition (the package never sniffs browsers;
+                // the app does — see native_composing_underline.dart).
+                nativeComposingUnderline: nativeComposingUnderline,
                 textStyle: Theme.of(context).textTheme.bodyLarge,
                 padding: const EdgeInsets.all(16),
                 onLinkTap: (blockId, offset, entity) {

@@ -232,7 +232,12 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
 /// The composing underline is painted by the framework — us — not the
 /// keyboard (G3 visibility: `EditableText` styles `value.composing` itself;
 /// without it CJK marked text looks committed and a deferred input rule is
-/// indistinguishable from a swallowed one).
+/// indistinguishable from a swallowed one). One exception: on web hosts
+/// whose browser visibly decorates marked text in the engine's hidden input
+/// (WebKit — see `BulletEditor.nativeComposingUnderline`), the editor
+/// withholds the composing slice from the component context while the
+/// browser owns the composition, so [composing] arrives null and only the
+/// caret paints here.
 class _CaretPainter extends CustomPainter {
   _CaretPainter({
     required this.geometry,

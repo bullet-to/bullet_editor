@@ -1487,6 +1487,10 @@ void main() {
 class FakeImeConnection implements ImeConnection {
   final List<TextEditingValue> pushed = [];
   final List<String> geometryCalls = [];
+
+  /// Recorded `setStyle` payloads (the hidden-input metrics channel — the
+  /// Safari double-underline fix).
+  final List<Map<String, Object?>> styles = [];
   bool shown = false;
   bool isClosed = false;
   bool closedReceived = false;
@@ -1512,6 +1516,21 @@ class FakeImeConnection implements ImeConnection {
 
   @override
   void setCaretRect(Rect rect) => geometryCalls.add('setCaretRect');
+
+  @override
+  void setStyle({
+    required String? fontFamily,
+    required double? fontSize,
+    required FontWeight? fontWeight,
+    required TextDirection textDirection,
+    required TextAlign textAlign,
+  }) => styles.add({
+    'fontFamily': fontFamily,
+    'fontSize': fontSize,
+    'fontWeight': fontWeight,
+    'textDirection': textDirection,
+    'textAlign': textAlign,
+  });
 
   @override
   void close() => isClosed = true;

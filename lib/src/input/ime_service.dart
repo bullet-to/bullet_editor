@@ -3,7 +3,15 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart' show Matrix4, MatrixUtils, RenderBox;
+import 'package:flutter/widgets.dart'
+    show
+        FontWeight,
+        Matrix4,
+        MatrixUtils,
+        RenderBox,
+        TextAlign,
+        TextDirection,
+        TextStyle;
 
 import '../editor/editor_controller.dart';
 import '../editor/text_diff.dart';
@@ -24,6 +32,23 @@ abstract interface class ImeGeometryChannel {
   void setEditableSizeAndTransform(Size editableBoxSize, Matrix4 transform);
   void setComposingRect(Rect rect);
   void setCaretRect(Rect rect);
+
+  /// `TextInput.setStyle` — the editable's font metrics, part of the
+  /// presentation channel (never text state, so it belongs on the geometry
+  /// view). On web this is the ONLY styling that reaches the engine's
+  /// hidden editing element after creation: the engine applies it as CSS
+  /// `font` + `text-align` (engine `text_editing.dart`:
+  /// `EditableTextStyle.applyToDomElement`), and without it the element
+  /// keeps the browser's default input font — whose line box does not match
+  /// our rendered text, which is what made Safari's native marked-text
+  /// underline land mid-glyph (see [ImeGeometryReporter]).
+  void setStyle({
+    required String? fontFamily,
+    required double? fontSize,
+    required FontWeight? fontWeight,
+    required TextDirection textDirection,
+    required TextAlign textAlign,
+  });
 }
 
 /// One live engine connection (see [ImeGeometryChannel] for the split).
@@ -73,6 +98,21 @@ class _RealImeConnection implements ImeConnection {
 
   @override
   void setCaretRect(Rect rect) => _connection.setCaretRect(rect);
+
+  @override
+  void setStyle({
+    required String? fontFamily,
+    required double? fontSize,
+    required FontWeight? fontWeight,
+    required TextDirection textDirection,
+    required TextAlign textAlign,
+  }) => _connection.setStyle(
+    fontFamily: fontFamily,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    textDirection: textDirection,
+    textAlign: textAlign,
+  );
 
   @override
   void connectionClosedReceived() => _connection.connectionClosedReceived();
@@ -2204,6 +2244,35 @@ class ImeService extends ChangeNotifier
 /// bar anchoring) keep resolving to the same global position. With no
 /// caret/composing geometry (no selection, offscreen block) the editor box
 /// is reported as before — never silence, the engine needs *some* editable.
+///
+/// **The reporter also sends `TextInput.setStyle` with the caret block's
+/// resolved font metrics** (the Safari double-underline fix, day 8). The
+/// web engine's hidden editing element renders our buffer text invisibly:
+/// `color`/`caret-color`/`background` are forced `transparent` once at
+/// element creation (engine `text_editing.dart`:
+/// `_setStaticStyleAttributes`). Chromium derives its IME composition
+/// underline from the element's computed text color, so it inherits the
+/// transparency and disappears; WebKit paints the underlines the platform
+/// IME attaches to the marked text (per-clause thick/thin, blue for the
+/// active clause on macOS) with their OWN colors, untouched by CSS `color`
+/// — so on Safari the native decoration is visible over our canvas. It
+/// cannot be hidden from the framework side: the entire style surface the
+/// engine accepts after element creation is `TextInput.setStyle` =
+/// {fontFamily, fontSize, fontWeight, textAlign, textDirection}, applied as
+/// CSS `font` + `text-align` (`EditableTextStyle.fromFrameworkMessage` /
+/// `applyToDomElement`) — no color, no decoration control. What we CAN do
+/// is make the native line land where an underline belongs: the editable is
+/// already anchored at the composing rect (above), and `setStyle` with the
+/// block's real font family/size/weight makes the `<textarea>` the engine
+/// creates for `TextInputType.multiline` (`input_type.dart`:
+/// `MultilineInputType.createDomElement`; `white-space: pre-wrap`,
+/// `padding: 0`, `overflow: hidden`) lay its marked text out with our
+/// metrics, so its baseline — and WebKit's underline under it — coincides
+/// with the rendered glyphs instead of bisecting them (the default input
+/// font's line box is what put the artifact mid-glyph). The painted-
+/// underline half of the fix is the widget's `nativeComposingUnderline`
+/// knob. The style is cached per channel and re-sent only when the
+/// connection or the resolved metrics change.
 class ImeGeometryReporter {
   /// The editor's root render box — the coordinate space the per-block
   /// rects are lifted into before anchoring.
@@ -2212,13 +2281,33 @@ class ImeGeometryReporter {
   /// Per-block geometry lookup (the layout registry; null ⇒ not laid out).
   BlockGeometry? Function(String blockId)? blockGeometryOf;
 
+  /// The caret block's resolved text style — the widget wires the SAME
+  /// resolution the components render with (block def's `baseStyle` over
+  /// the editor base style, text scaling applied), so the hidden input's
+  /// DOM font matches the pixels on the canvas. Null ⇒ unknown block.
+  TextStyle? Function(String blockId)? resolvedStyleOf;
+
+  /// Ambient text direction for [ImeGeometryChannel.setStyle].
+  TextDirection Function()? textDirection;
+
   bool get isWired => editorRenderBox != null && blockGeometryOf != null;
+
+  // The last style actually sent, keyed to the channel it was sent over —
+  // a fresh connection (attach, Android terminate re-attach) gets a fresh
+  // engine element and must be re-styled.
+  ImeGeometryChannel? _styledChannel;
+  String? _sentFontFamily;
+  double? _sentFontSize;
+  FontWeight? _sentFontWeight;
+  TextDirection? _sentTextDirection;
 
   void report(
     ImeGeometryChannel channel, {
     required DocSelection? selection,
     required ComposingState? composing,
   }) {
+    _sendStyleIfChanged(channel, selection: selection, composing: composing);
+
     final editorBox = editorRenderBox?.call();
     if (editorBox == null || !editorBox.attached || !editorBox.hasSize) return;
 
@@ -2273,6 +2362,48 @@ class ImeGeometryReporter {
     if (composingRect != null) {
       channel.setComposingRect(composingRect.shift(-anchor.topLeft));
     }
+  }
+
+  /// Sends `setStyle` with the caret/composing block's resolved metrics when
+  /// they differ from what this channel last received (see the class doc for
+  /// why the metrics must match — the engine styles the hidden element with
+  /// exactly these fields and nothing else: `EditableTextStyle
+  /// .applyToDomElement` sets CSS `font` + `text-align`).
+  void _sendStyleIfChanged(
+    ImeGeometryChannel channel, {
+    required DocSelection? selection,
+    required ComposingState? composing,
+  }) {
+    final lookup = resolvedStyleOf;
+    if (lookup == null) return;
+    // The composing block wins (the marked text lives there); otherwise the
+    // caret block. No selection ⇒ nothing to style against.
+    final blockId = composing?.blockId ?? selection?.extent.blockId;
+    if (blockId == null) return;
+    final style = lookup(blockId);
+    if (style == null) return;
+    final direction = textDirection?.call() ?? TextDirection.ltr;
+    if (identical(channel, _styledChannel) &&
+        style.fontFamily == _sentFontFamily &&
+        style.fontSize == _sentFontSize &&
+        style.fontWeight == _sentFontWeight &&
+        direction == _sentTextDirection) {
+      return;
+    }
+    _styledChannel = channel;
+    _sentFontFamily = style.fontFamily;
+    _sentFontSize = style.fontSize;
+    _sentFontWeight = style.fontWeight;
+    _sentTextDirection = direction;
+    channel.setStyle(
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      textDirection: direction,
+      // Blocks render start-aligned (RichText's default); alignment only
+      // places the DOM text within the anchored box.
+      textAlign: TextAlign.start,
+    );
   }
 
   static Rect _toEditorSpace(Rect rect, RenderBox from, RenderBox to) =>
