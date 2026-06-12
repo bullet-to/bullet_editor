@@ -543,8 +543,10 @@ class EditorController extends ChangeNotifier {
 
   /// Enter at the caret, per the block type's [SplitPolicy]:
   /// - `onEnter: insertLineBreak` inserts `\n` (code blocks);
-  /// - an empty block with `onSplitEmpty: convertToDefault` converts to the
-  ///   default type instead of splitting (empty list item escapes the list);
+  /// - an empty block with `onSplitEmpty: convertToDefault` climbs the
+  ///   outdent-or-convert ladder instead of splitting — outdent one level if
+  ///   nested, convert to the default type at root (the empty list item
+  ///   escapes the list one level per Enter);
   /// - otherwise splits; at offset 0 of a non-empty block an empty block is
   ///   inserted above and the caret stays.
   void insertNewline() {
@@ -580,14 +582,13 @@ class EditorController extends ChangeNotifier {
       }
 
       if (block.plainText.isEmpty &&
-          split.onSplitEmpty == OnSplitEmpty.convertToDefault &&
-          block.blockType != schema.defaultBlockType) {
-        _applyBatch(
-          [ChangeBlockType(caret.blockId, schema.defaultBlockType)],
-          selectionAfter: (_) =>
-              DocSelection.collapsed(DocPosition(caret.blockId, 0)),
-        );
-        return;
+          split.onSplitEmpty == OnSplitEmpty.convertToDefault) {
+        // The standard outliner ladder (checkpoint-2/3 feedback): a nested
+        // empty list-like block outdents one level per Enter — keeping its
+        // type — and only converts to the default type at root. Converting
+        // in place at depth 2+ stranded a paragraph mid-list.
+        if (_outdentOrConvertBlock(block)) return;
+        // Root and already the default type: fall through to split.
       }
 
       // Splitting at offset 0 of a non-empty block inserts an empty block
@@ -646,23 +647,41 @@ class EditorController extends ChangeNotifier {
   static int _graphemeLengthAfter(String text, int offset) =>
       text.substring(offset).characters.first.length;
 
+  /// The outdent-or-convert ladder shared by backspace-at-start
+  /// (`BackspaceAtStartPolicy.outdentOrConvert`) and Enter on an empty
+  /// list-like block (`OnSplitEmpty.convertToDefault`): nested → outdent one
+  /// level via [OutdentBlock] (G13 semantics — children ride along and later
+  /// siblings are adopted, exactly like [outdent]); at root → convert to the
+  /// default type. The caret stays on the block at offset 0. Returns false
+  /// when neither applies (root and already the default type) so each caller
+  /// falls through to its own terminal behavior (merge / split).
+  bool _outdentOrConvertBlock(TextBlock block) {
+    final flatIndex = _document.idToFlatIndex[block.id]!;
+    if (_document.depthOf(flatIndex) > 0) {
+      _applyBatch(
+        [OutdentBlock(block.id)],
+        selectionAfter: (_) => DocSelection.collapsed(DocPosition(block.id, 0)),
+      );
+      return true;
+    }
+    if (block.blockType != schema.defaultBlockType) {
+      _applyBatch(
+        [ChangeBlockType(block.id, schema.defaultBlockType)],
+        selectionAfter: (_) => DocSelection.collapsed(DocPosition(block.id, 0)),
+      );
+      return true;
+    }
+    return false;
+  }
+
   void _structuralBackspace(TextBlock block) {
-    var policy = schema.backspaceAtStartOf(block.blockType);
+    final policy = schema.backspaceAtStartOf(block.blockType);
     final flatIndex = _document.idToFlatIndex[block.id]!;
 
     if (policy == BackspaceAtStartPolicy.outdentOrConvert) {
-      if (_document.depthOf(flatIndex) > 0) {
-        _applyBatch(
-          [OutdentBlock(block.id)],
-          selectionAfter: (_) =>
-              DocSelection.collapsed(DocPosition(block.id, 0)),
-        );
-        return;
-      }
-      policy = BackspaceAtStartPolicy.convertToDefault;
-    }
-
-    if (policy == BackspaceAtStartPolicy.convertToDefault &&
+      if (_outdentOrConvertBlock(block)) return;
+      // Root and already the default type: fall through to merge.
+    } else if (policy == BackspaceAtStartPolicy.convertToDefault &&
         block.blockType != schema.defaultBlockType) {
       _applyBatch(
         [ChangeBlockType(block.id, schema.defaultBlockType)],
