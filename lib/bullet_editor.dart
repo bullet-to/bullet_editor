@@ -31,4 +31,5 @@ export 'src/view/bullet_editor.dart';
 export 'src/view/components/default_text_component.dart';
 export 'src/view/components/divider_block.dart';
 export 'src/view/components/image_block.dart';
+export 'src/view/components/void_block_geometry.dart';
 export 'src/view/standard_prefixes.dart';

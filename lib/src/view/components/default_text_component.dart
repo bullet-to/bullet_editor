@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
@@ -7,19 +9,12 @@ import '../block_component_context.dart';
 import '../block_layout_registry.dart';
 import '../editor_view_scope.dart';
 
-/// Implements the [BlockGeometry] contract over the `RenderParagraph` of a
-/// component's `RichText` child, and handles registry lifecycle.
-///
-/// This is the piece a custom text-like component must never re-derive:
-/// provide [geometryBlockId] and attach [richTextKey] to your `RichText`,
-/// and the mixin registers/answers geometry for you. (Both reference editors
-/// export exactly this seam: appflowy's `SelectableMixin`, super_editor's
-/// `TextComponent`.)
-mixin BlockGeometryMixin<T extends StatefulWidget> on State<T>
+/// Registry lifecycle for any component implementing [BlockGeometry]:
+/// registers on mount, re-registers when the rendered block id changes,
+/// deregisters on dispose. Geometry queries are left to a sibling mixin —
+/// [BlockGeometryMixin] for text components, `VoidBlockGeometry` for voids.
+mixin BlockGeometryRegistration<T extends StatefulWidget> on State<T>
     implements BlockGeometry {
-  /// Attach to the component's `RichText` child.
-  final GlobalKey richTextKey = GlobalKey();
-
   /// The id of the block this component renders.
   String get geometryBlockId;
 
@@ -48,6 +43,20 @@ mixin BlockGeometryMixin<T extends StatefulWidget> on State<T>
     _registry = null;
     super.dispose();
   }
+}
+
+/// Implements the [BlockGeometry] contract over the `RenderParagraph` of a
+/// component's `RichText` child.
+///
+/// This is the piece a custom text-like component must never re-derive:
+/// apply `with BlockGeometryRegistration, BlockGeometryMixin`, provide
+/// [BlockGeometryRegistration.geometryBlockId], and attach [richTextKey] to
+/// your `RichText`. (Both reference editors export exactly this seam:
+/// appflowy's `SelectableMixin`, super_editor's `TextComponent`.)
+mixin BlockGeometryMixin<T extends StatefulWidget>
+    on BlockGeometryRegistration<T> {
+  /// Attach to the component's `RichText` child.
+  final GlobalKey richTextKey = GlobalKey();
 
   RenderParagraph? get _paragraph {
     final renderObject = richTextKey.currentContext?.findRenderObject();
@@ -125,15 +134,24 @@ class DefaultTextComponent extends StatefulWidget {
 }
 
 class _DefaultTextComponentState extends State<DefaultTextComponent>
-    with BlockGeometryMixin {
+    with BlockGeometryRegistration, BlockGeometryMixin {
   /// Link recognizers cached across per-keystroke rebuilds, keyed by
   /// segment start offset + entity key; disposed on unmount (the standard
   /// `TextSpan.recognizer` obligation).
   final Map<String, TapGestureRecognizer> _linkRecognizers = {};
   final Set<String> _recognizersUsedThisBuild = {};
 
+  Timer? _blinkTimer;
+  bool _caretVisible = true;
+
   @override
   String get geometryBlockId => widget.componentContext.block.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncBlink();
+  }
 
   @override
   void didUpdateWidget(DefaultTextComponent oldWidget) {
@@ -142,10 +160,31 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
         widget.componentContext.block.id) {
       geometryBlockIdChanged(oldWidget.componentContext.block.id);
     }
+    if (oldWidget.componentContext.caretOffset !=
+        widget.componentContext.caretOffset) {
+      // The caret is solid on arrival and on every move (standard rhythm).
+      _caretVisible = true;
+      _blinkTimer?.cancel();
+      _blinkTimer = null;
+      _syncBlink();
+    }
+  }
+
+  void _syncBlink() {
+    final hasCaret = widget.componentContext.caretOffset != null;
+    if (hasCaret) {
+      _blinkTimer ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+        setState(() => _caretVisible = !_caretVisible);
+      });
+    } else {
+      _blinkTimer?.cancel();
+      _blinkTimer = null;
+    }
   }
 
   @override
   void dispose() {
+    _blinkTimer?.cancel();
     for (final recognizer in _linkRecognizers.values) {
       recognizer.dispose();
     }
@@ -243,6 +282,24 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
       textScaler: MediaQuery.textScalerOf(context),
     );
 
+    final caretOffset = ctx.caretOffset;
+    if (caretOffset != null) {
+      // The painter queries the RenderParagraph at paint time (post-layout)
+      // through the geometry mixin — never during build.
+      text = CustomPaint(
+        foregroundPainter: _CaretPainter(
+          geometry: this,
+          offset: caretOffset,
+          visible: _caretVisible,
+          color:
+              DefaultSelectionStyle.of(context).cursorColor ??
+              ctx.resolvedStyle.color ??
+              const Color(0xFF000000),
+        ),
+        child: text,
+      );
+    }
+
     if (widget.padding != null || widget.background != null) {
       text = Container(
         width: double.infinity,
@@ -264,4 +321,41 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
 
     return text;
   }
+}
+
+/// Paints the collapsed caret over the `RichText` child. Queries the caret
+/// rect from [geometry] at paint time, when the paragraph is laid out.
+class _CaretPainter extends CustomPainter {
+  _CaretPainter({
+    required this.geometry,
+    required this.offset,
+    required this.visible,
+    required this.color,
+  });
+
+  final BlockGeometry geometry;
+  final int offset;
+  final bool visible;
+  final Color color;
+
+  static const _caretWidth = 2.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!visible) return;
+    final rect = geometry.rectForOffset(offset);
+    if (rect == null) return;
+    final left = rect.left.clamp(0.0, size.width - _caretWidth);
+    canvas.drawRect(
+      Rect.fromLTWH(left, rect.top, _caretWidth, rect.height),
+      Paint()..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CaretPainter old) =>
+      offset != old.offset ||
+      visible != old.visible ||
+      color != old.color ||
+      !identical(geometry, old.geometry);
 }

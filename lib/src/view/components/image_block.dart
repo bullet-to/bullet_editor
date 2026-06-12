@@ -2,20 +2,41 @@ import 'package:flutter/widgets.dart';
 
 import '../../model/block.dart';
 import '../block_component_context.dart';
+import 'default_text_component.dart' show BlockGeometryRegistration;
+import 'void_block_geometry.dart';
 
 /// Component for the void image block: full-width image, atomic selection,
 /// delete-as-unit (D3).
 ///
 /// The image URL lives in `metadata[ImageKeys.url]`; alt text is the block's
-/// plain text (the v2 markdown-codec shape: `![alt](url)`).
-class ImageBlockComponent extends StatelessWidget {
-  const ImageBlockComponent(this.context_, {super.key});
+/// plain text (the v2 markdown-codec shape: `![alt](url)`). Registers
+/// [VoidBlockGeometry] (midpoint hit rule) and tints itself when selected.
+class ImageBlockComponent extends StatefulWidget {
+  const ImageBlockComponent(this.componentContext, {super.key});
 
-  final BlockComponentContext context_;
+  final BlockComponentContext componentContext;
+
+  @override
+  State<ImageBlockComponent> createState() => _ImageBlockComponentState();
+}
+
+class _ImageBlockComponentState extends State<ImageBlockComponent>
+    with BlockGeometryRegistration, VoidBlockGeometry {
+  @override
+  String get geometryBlockId => widget.componentContext.block.id;
+
+  @override
+  void didUpdateWidget(ImageBlockComponent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.componentContext.block.id !=
+        widget.componentContext.block.id) {
+      geometryBlockIdChanged(oldWidget.componentContext.block.id);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final block = context_.block;
+    final block = widget.componentContext.block;
     final url = block.metadata[ImageKeys.url] as String? ?? '';
     final alt = block.plainText;
 
@@ -46,7 +67,10 @@ class ImageBlockComponent extends StatelessWidget {
       child: ExcludeSemantics(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
-          child: child,
+          child: VoidSelectionTint(
+            isSelected: widget.componentContext.isSelected,
+            child: child,
+          ),
         ),
       ),
     );
@@ -56,7 +80,7 @@ class ImageBlockComponent extends StatelessWidget {
   /// image-block real estate instead of collapsing to a text line
   /// (checkpoint-1 finding).
   Widget _placeholder(String label) {
-    final style = context_.resolvedStyle;
+    final style = widget.componentContext.resolvedStyle;
     final fontSize = style.fontSize ?? 16.0;
     return AspectRatio(
       aspectRatio: 16 / 9,
