@@ -11,6 +11,15 @@ Finder _richTextContaining(String text) => find.byWidgetPredicate(
   (w) => w is RichText && w.text.toPlainText().contains(text),
 );
 
+/// A viewport tall enough to lay out the whole gauntlet head (the 16:9
+/// image placeholders alone are ~450px each) — for tests that assert on
+/// blocks deep in the fixture rather than on laziness.
+void tallViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(1200, 4000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
 Widget _editor(Document document, {EditorSchema? schema}) {
   return MaterialApp(
     home: Scaffold(
@@ -26,6 +35,7 @@ Widget _editor(Document document, {EditorSchema? schema}) {
 void main() {
   group('walking skeleton — gauntlet fixture render', () {
     testWidgets('renders every visible launch block kind', (tester) async {
+      tallViewport(tester);
       await tester.pumpWidget(_editor(buildGauntletDocument(tailLength: 5)));
 
       // Headings, paragraphs, lists, quote render their text (block text
@@ -49,6 +59,7 @@ void main() {
     testWidgets('numbered list ordinals come from the gutter context', (
       tester,
     ) async {
+      tallViewport(tester);
       await tester.pumpWidget(_editor(buildGauntletDocument(tailLength: 0)));
       expect(find.text('1.'), findsOneWidget);
       expect(find.text('2.'), findsOneWidget);
@@ -117,6 +128,130 @@ void main() {
       );
       expect(tester.takeException(), isA<StateError>());
     });
+  });
+
+  group('checkpoint-1 findings (regression)', () {
+    // Feel-gate findings become tests before fixes (build strategy §edge-
+    // case discovery): no inter-block spacing, code block not a real
+    // container, image collapsing to line height.
+
+    Document twoBlocks(TextBlock a, TextBlock b) => Document([a, b]);
+    TextBlock para(String id, String text) => TextBlock(
+      id: id,
+      blockType: ParagraphKeys.type,
+      segments: [StyledSegment(text)],
+    );
+
+    testWidgets(
+      'inter-block gap is the v2 max-collapse of after/before, top-side only',
+      (tester) async {
+        // blockquote (spacingAfter 0.1) → paragraph (spacingBefore 0.3):
+        // the gap is max(0.1, 0.3) = 0.3em = 4.8px, NOT the 6.4px sum.
+        final doc = twoBlocks(
+          TextBlock(
+            id: 'q',
+            blockType: BlockQuoteKeys.type,
+            segments: [const StyledSegment('quote')],
+          ),
+          para('p', 'para'),
+        );
+        await tester.pumpWidget(_editor(doc));
+
+        final quoteBottom = tester
+            .getBottomLeft(_richTextContaining('quote'))
+            .dy;
+        final paraTop = tester.getTopLeft(_richTextContaining('para')).dy;
+        expect(paraTop - quoteBottom, moreOrLessEquals(0.3 * 16));
+      },
+    );
+
+    testWidgets('h1 gets its 1em gap below a paragraph', (tester) async {
+      final doc = twoBlocks(
+        para('p', 'above'),
+        TextBlock(
+          id: 'h',
+          blockType: HeadingKeys.h1,
+          segments: [const StyledSegment('Title')],
+        ),
+      );
+      await tester.pumpWidget(_editor(doc));
+      final gap =
+          tester.getTopLeft(_richTextContaining('Title')).dy -
+          tester.getBottomLeft(_richTextContaining('above')).dy;
+      expect(gap, moreOrLessEquals(16));
+    });
+
+    testWidgets('divider gets policy spacing on both sides', (tester) async {
+      final doc = Document([
+        para('p1', 'above divider'),
+        TextBlock(id: 'd', blockType: DividerKeys.type),
+        para('p2', 'below divider'),
+      ]);
+      await tester.pumpWidget(_editor(doc));
+
+      final line = find.byType(DividerBlockComponent);
+      final above = tester.getBottomLeft(_richTextContaining('above')).dy;
+      final below = tester.getTopLeft(_richTextContaining('below')).dy;
+      // 0.5em = 8px each side around the 1px rule.
+      expect(tester.getTopLeft(line).dy - above, moreOrLessEquals(8));
+      expect(below - tester.getBottomRight(line).dy, moreOrLessEquals(8));
+    });
+
+    testWidgets('code block is a real container: full-width fill', (
+      tester,
+    ) async {
+      final doc = twoBlocks(
+        TextBlock(
+          id: 'code',
+          blockType: CodeBlockKeys.type,
+          segments: [const StyledSegment('short\nlines')],
+        ),
+        para('p', 'after'),
+      );
+      await tester.pumpWidget(_editor(doc));
+
+      // The decorated box spans the editor width regardless of glyph runs
+      // (the v2 per-glyph backgroundColor trick stopped at line ends).
+      final decorated = find.ancestor(
+        of: _richTextContaining('short'),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.decoration is BoxDecoration &&
+              (w.decoration! as BoxDecoration).color != null,
+        ),
+      );
+      expect(decorated, findsOneWidget);
+      expect(
+        tester.getSize(decorated).width,
+        tester.getSize(find.byType(BulletEditor)).width,
+      );
+      // And no per-glyph background remains in the style.
+      final richText = tester.widget<RichText>(_richTextContaining('short'));
+      expect(richText.text.style?.backgroundColor, isNull);
+    });
+
+    testWidgets(
+      'image without a loadable source renders an image-shaped slot',
+      (tester) async {
+        // In tests all network images fail → errorBuilder. The slot must be
+        // image-sized (16:9), not text-line-sized.
+        final doc = twoBlocks(
+          TextBlock(
+            id: 'img',
+            blockType: ImageKeys.type,
+            segments: [const StyledSegment('alt text')],
+            metadata: const {ImageKeys.url: 'https://example.com/x.png'},
+          ),
+          para('p', 'after image'),
+        );
+        await tester.pumpWidget(_editor(doc));
+
+        final size = tester.getSize(find.byType(ImageBlockComponent));
+        expect(size.height, greaterThan(100));
+        expect(size.width / size.height, closeTo(16 / 9, 0.2));
+      },
+    );
   });
 
   group('walking skeleton — semantics (D4/D3)', () {

@@ -18,11 +18,8 @@ class DividerBlockComponent extends StatelessWidget {
         (context_.resolvedStyle.color ?? const Color(0xFF000000)).withValues(
           alpha: 0.2,
         );
-    return Container(
-      width: double.infinity,
-      height: 1,
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      color: resolved,
-    );
+    // Vertical breathing room comes from the def's spacingBefore/After
+    // policy, not the component.
+    return Container(width: double.infinity, height: 1, color: resolved);
   }
 }

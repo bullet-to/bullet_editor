@@ -130,19 +130,25 @@ class BlockSubtree extends StatelessWidget {
       ],
     );
 
-    // Per-block spacing as real outer padding (the point of tier 3) — em
-    // units of the editor base font size; suppressed at document edges.
-    final spacingTop = gutter.isFirstInDocument
-        ? 0.0
-        : def.spacingBefore * baseFontSize;
-    final spacingBottom = gutter.isLastInDocument
-        ? 0.0
-        : def.spacingAfter * baseFontSize;
-    if (spacingTop > 0 || spacingBottom > 0) {
-      row = Padding(
-        padding: EdgeInsets.only(top: spacingTop, bottom: spacingBottom),
-        child: row,
-      );
+    // Per-block spacing as real outer padding (the point of tier 3), in em
+    // units of the editor base font size. v2 semantics, ported exactly: ONE
+    // collapsed gap per flat-adjacent block pair — max(previous block's
+    // spacingAfter, this block's spacingBefore) — applied as top padding
+    // only (checkpoint-1 finding: additive before+after double-spaced
+    // pairs, and a trailing spacingAfter has no v2 equivalent).
+    final flatIndex = document.idToFlatIndex[block.id];
+    if (flatIndex != null && flatIndex > 0) {
+      final prevBlock = document.allBlocks[flatIndex - 1];
+      final prevAfter = schema.blockDef(prevBlock.blockType).spacingAfter;
+      final gapEm = def.spacingBefore > prevAfter
+          ? def.spacingBefore
+          : prevAfter;
+      if (gapEm > 0) {
+        row = Padding(
+          padding: EdgeInsets.only(top: gapEm * baseFontSize),
+          child: row,
+        );
+      }
     }
 
     if (block.children.isEmpty) return row;

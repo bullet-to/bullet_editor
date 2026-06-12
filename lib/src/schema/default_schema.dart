@@ -9,6 +9,7 @@ import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/document.dart';
 import '../model/inline_entity.dart';
+import '../view/components/default_text_component.dart';
 import '../view/components/divider_block.dart';
 import '../view/components/image_block.dart';
 import 'block_def.dart';
@@ -320,17 +321,28 @@ abstract final class Blocks {
 
   /// Fenced code block. Content is literal text (no inline styles).
   /// Language stored in metadata `{CodeBlockKeys.language: 'dart'}`.
+  ///
+  /// Rendered as a real container block — full-width fill + padding through
+  /// the parameterizable default text component (checkpoint-1 finding: the
+  /// v2 per-glyph backgroundColor trick highlighted only to each line's
+  /// glyph end, not the block).
   static BlockDef codeBlock() {
     return BlockDef(
       label: 'Code Block',
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      spacingBefore: 0.3,
+      spacingAfter: 0.3,
       metadataKeys: const {CodeBlockKeys.language},
       newBlockMetadata: (splitBlock) => const {},
       baseStyle: (base) => (base ?? const TextStyle()).copyWith(
         fontFamily: _monoFontFamily,
         fontFamilyFallback: _monoFontFallbacks,
         fontSize: ((base?.fontSize ?? kFallbackFontSize) * 0.9),
-        backgroundColor: const Color(0x30808080),
+      ),
+      componentBuilder: (ctx) => DefaultTextComponent(
+        ctx,
+        background: const Color(0x1A808080),
+        padding: const EdgeInsets.all(12),
       ),
       codecs: {
         Format.markdown: BlockCodec(
@@ -405,6 +417,10 @@ abstract final class Blocks {
       isVoid: true,
       voidBackspace: VoidBackspacePolicy.immediateDelete,
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      // v2 hardcoded 8px margins inside the prefix widget; v3 expresses the
+      // same gap as block spacing policy (0.5em = 8px at the default size).
+      spacingBefore: 0.5,
+      spacingAfter: 0.5,
       componentBuilder: (ctx) => DividerBlockComponent(ctx, color: color),
       codecs: {
         Format.markdown: BlockCodec(
