@@ -420,6 +420,22 @@ class EditorController extends ChangeNotifier {
     final prev = _document.allBlocks[flatIndex - 1];
 
     if (schema.isVoid(prev.blockType)) {
+      // An EMPTY block collapses like any backspaced empty line — it is
+      // removed and the void becomes selected, so the next backspace
+      // deletes the void (checkpoint-2 finding: acting on the void while
+      // the empty line survived felt backwards). The per-type voidBackspace
+      // policies govern the non-empty case, where the line must survive.
+      if (block.plainText.isEmpty) {
+        _applyBatch(
+          [RemoveBlock(block.id)],
+          selectionAfter: (_) => DocSelection(
+            base: DocPosition(prev.id, 0),
+            extent: DocPosition(prev.id, 1),
+          ),
+        );
+        return;
+      }
+
       final voidPolicy = schema.blockDef(prev.blockType).voidBackspace;
       if (voidPolicy == VoidBackspacePolicy.immediateDelete) {
         _applyBatch(

@@ -507,6 +507,40 @@ void main() {
       expect(notifications, 0);
     });
 
+    test('on an EMPTY line below a void, the empty line collapses and the '
+        'void is selected — for dividers AND images', () {
+      // Checkpoint-2 finding: acting on the void while the empty line
+      // survived felt backwards. The next backspace deletes the void (G9).
+      for (final voidType in [DividerKeys.type, ImageKeys.type]) {
+        final c = controller([
+          para('a', 'above'),
+          typed('v', voidType, ''),
+          para('empty', ''),
+        ]);
+        c.setSelection(caret('empty', 0));
+
+        c.backspace();
+        expect(
+          c.document.blockById('empty'),
+          isNull,
+          reason: 'the empty line collapses ($voidType)',
+        );
+        expect(c.document.blockById('v'), isNotNull);
+        expect(
+          c.selection,
+          DocSelection(base: DocPosition('v', 0), extent: DocPosition('v', 1)),
+        );
+
+        c.backspace();
+        expect(
+          c.document.blockById('v'),
+          isNull,
+          reason: 'the second backspace deletes the void ($voidType)',
+        );
+        expect(c.selection, caret('a', 5));
+      }
+    });
+
     test('after a divider deletes it immediately (voidBackspace policy)', () {
       final c = controller([
         para('a', 'above'),
