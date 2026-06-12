@@ -109,6 +109,53 @@ void main() {
       expect(connection().pushed, hasLength(1), reason: 'nothing happened');
     });
 
+    test('the diff frontend ignores a delta batch (the mirror of the delta '
+        "frontend's updateEditingValue no-op)", () {
+      build([para('a', 'hi')], selection: caret('a', 2));
+
+      service.updateEditingValueWithDeltas([
+        const TextEditingDeltaInsertion(
+          oldText: '. hi',
+          textInserted: 'x',
+          insertionOffset: 4,
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange.empty,
+        ),
+      ]);
+
+      expect(controller.document.blockById('a')!.plainText, 'hi');
+      expect(connection().pushed, hasLength(1), reason: 'nothing happened');
+    });
+
+    test('a configuration whose delta declaration disagrees with the '
+        'frontend asserts (the attach shape must match the callback the '
+        'frontend listens on)', () {
+      controller = EditorController(
+        document: Document([para('a', 'hi')]),
+        schema: EditorSchema.standard(),
+      );
+      expect(
+        () => ImeService(
+          controller: controller,
+          frontend: ImeFrontend.nonDeltaDiff,
+          // enableDeltaModel: true — the delta frontend's declaration.
+          configuration: ImeService.defaultConfiguration,
+          connectionFactory: (client, configuration) => FakeImeConnection(),
+        ),
+        throwsAssertionError,
+      );
+      expect(
+        () => ImeService(
+          controller: controller,
+          frontend: ImeFrontend.delta,
+          // enableDeltaModel: false — the diff frontend's declaration.
+          configuration: ImeService.nonDeltaConfiguration,
+          connectionFactory: (client, configuration) => FakeImeConnection(),
+        ),
+        throwsAssertionError,
+      );
+    });
+
     test('an explicit configuration wins over the frontend default', () {
       controller = EditorController(
         document: Document([para('a', 'hi')]),
@@ -311,6 +358,119 @@ void main() {
       );
       expect(service.debugLastDropReason, 'echoQuarantine');
       expect(service.debugQuarantineArmed, isFalse, reason: 'one batch');
+    });
+
+    test('selection-only snapshots do not consume the echo quarantine: the '
+        'held-syllable recommit after two selectionchange batches is still '
+        'dropped', () {
+      build([para('a', 'ab')], selection: caret('a', 2));
+      sendValue(
+        '. abか',
+        cursor: 5,
+        composing: const TextRange(start: 4, end: 5),
+      );
+      expect(controller.composing, isNotNull);
+
+      controller.undo(); // terminate('undo'); quarantine = ('か', 4)
+      expect(service.debugQuarantine, (text: 'か', offset: 4));
+
+      // Two DOM selectionchange snapshots (one batch each on web): pushless
+      // NonTextUpdate analogues, not the user retyping — they must not burn
+      // the one-batch quarantine budget before the echo arrives.
+      sendValue('. ab', cursor: 3);
+      sendValue('. ab', cursor: 4);
+      expect(service.debugQuarantineArmed, isTrue);
+
+      // The browser editable still holds the composed text and re-asserts
+      // it commit-shaped against the freshly pushed window.
+      sendValue('. abか', cursor: 5);
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'ab',
+        reason: 'the recommit is quarantined; undone text never resurrects',
+      );
+      expect(service.debugLastDropReason, 'echoQuarantine');
+      expect(service.debugQuarantineArmed, isFalse, reason: 'consumed');
+    });
+
+    test('pre-push race (the stale-guard analogue): a snapshot computed '
+        'against the window a host-app edit just replaced is dropped and '
+        'the authoritative window re-pushed, never applied as an edit', () {
+      build([para('a', 'hello')], selection: caret('a', 5));
+      expect(shadow().text, '. hello');
+
+      // Host-app edit: clause (a) pushes the new window W2.
+      controller.insertText('!');
+      expect(shadow().text, '. hello!');
+      final pushesAfterEdit = connection().pushed.length;
+
+      // The browser's W1-shaped snapshot (computed before our push reached
+      // the DOM) arrives. Diffed against W2 it would read as the user
+      // deleting the host edit's '!'.
+      sendValue('. hello', cursor: 7);
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'hello!',
+        reason: 'the stale snapshot must not be applied as a deletion',
+      );
+      expect(service.debugLastDropReason, 'staleSnapshot');
+      expect(
+        connection().pushed.length,
+        pushesAfterEdit + 1,
+        reason: 'the authoritative window re-pushes (the guard recovery)',
+      );
+      expect(connection().pushed.last.text, '. hello!');
+
+      // Legitimate input against the re-pushed window still lands.
+      sendValue('. hello!x', cursor: 9);
+      expect(controller.document.blockById('a')!.plainText, 'hello!x');
+    });
+
+    test('an out-of-range engine composing region is sanitized to empty — '
+        'never a RangeError out of the shadow (the synthesis boundary is '
+        'the trust boundary)', () {
+      build([para('a', 'ab')], selection: caret('a', 2));
+
+      // A malformed snapshot: the composing region runs past the text end.
+      sendValue(
+        '. abか',
+        cursor: 5,
+        composing: const TextRange(start: 4, end: 99),
+      );
+
+      expect(controller.document.blockById('a')!.plainText, 'abか');
+      expect(
+        controller.composing,
+        isNull,
+        reason:
+            'a region the engine mis-reports is treated as no '
+            'composition, not clamped into one',
+      );
+      expect(shadow().composing, TextRange.empty);
+
+      // The next terminate-shaped path reads composing.textInside(shadow
+      // .text) — the line a poisoned shadow would blow up.
+      controller.insertText('!');
+      expect(controller.document.blockById('a')!.plainText, 'abか!');
+    });
+
+    test('an emoji-variant swap snapshot (shared high surrogate) diffs as '
+        'the whole pair — the document ends with 😁 intact, no mid-pair '
+        'offsets', () {
+      build([para('a', '😀')], selection: caret('a', 2));
+      expect(shadow().text, '. 😀');
+
+      // Same-length replacement sharing the high surrogate U+D83D:
+      // 😀 (U+D83D,U+DE00) → 😁 (U+D83D,U+DE01).
+      sendValue('. 😁', cursor: 4);
+
+      expect(controller.document.blockById('a')!.plainText, '😁');
+      final diff = service.debugLastDiff!;
+      expect(diff.start, 2, reason: 'widened to the surrogate boundary');
+      expect(diff.deletedLength, 2);
+      expect(diff.insertedText, '😁');
     });
 
     test('a non-IME edit while a snapshot-mapped composition is live '

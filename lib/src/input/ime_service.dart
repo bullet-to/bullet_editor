@@ -377,7 +377,18 @@ class ImeService extends ChangeNotifier
     ImeFrontend? frontend,
     ImeConnectionFactory? connectionFactory,
     TextInputConfiguration? configuration,
-  }) : frontend = frontend ?? ImeFrontend.platformDefault,
+  }) : assert(
+         configuration == null ||
+             configuration.enableDeltaModel ==
+                 ((frontend ?? ImeFrontend.platformDefault) ==
+                     ImeFrontend.delta),
+         'configuration.enableDeltaModel must agree with the frontend: the '
+         'delta frontend attaches with the delta model, the diff frontend '
+         'without it (architecture §IME: one strategy, two frontends) — a '
+         'mismatched declaration leaves the engine feeding the wrong client '
+         'callback.',
+       ),
+       frontend = frontend ?? ImeFrontend.platformDefault,
        _connectionFactory = connectionFactory ?? _attachRealConnection,
        _configuration =
            configuration ??
@@ -442,16 +453,27 @@ class ImeService extends ChangeNotifier
   /// The window mapping matching [_shadow] while convergent.
   ImeWindow? _window;
 
+  /// The shadow text the most recent NON-terminate push replaced (null when
+  /// none). The diff frontend's pre-push race mitigation keys on it: a
+  /// snapshot whose text equals this was computed by the browser against
+  /// the window we just replaced (host-app edit → clause (a)/(b) push → the
+  /// in-flight snapshot lands) and must not be diffed against the fresh
+  /// shadow — see [updateEditingValue]. A terminate push clears it: the
+  /// post-terminate flavor of the race is the echo quarantine's territory.
+  String? _previousShadowText;
+
   /// The one-batch echo quarantine (G7/G10): the terminated composing text
   /// and the pushed-window caret it would echo back at. Armed by
-  /// [terminateComposition], consumed (disarmed) by the next delta batch —
-  /// and cleared by any intervening non-terminate push (spec §echo
-  /// quarantine: it covers the first batch after the *terminate* push; once
-  /// a newer window has been pushed, a matching insertion is genuine input
-  /// against that window, not an echo). Matches only COMMIT-shaped
-  /// insertions (empty composing): a matching insertion carrying a live
-  /// composing region is fresh marked text (macOS dead-key recomposition),
-  /// never the held-syllable re-commit the quarantine exists for.
+  /// [terminateComposition], consumed (disarmed) by the next TEXT-bearing
+  /// delta batch (a `NonTextUpdate`-only batch is pushless selection noise,
+  /// not the user retyping) — and cleared by any intervening non-terminate
+  /// push (spec §echo quarantine: it covers the first batch after the
+  /// *terminate* push; once a newer window has been pushed, a matching
+  /// insertion is genuine input against that window, not an echo). Matches
+  /// only COMMIT-shaped insertions (empty composing): a matching insertion
+  /// carrying a live composing region is fresh marked text (macOS dead-key
+  /// recomposition), never the held-syllable re-commit the quarantine
+  /// exists for.
   ({String text, int offset})? _quarantine;
 
   /// The G3 rules latch: insert-pattern rules are deferred, not dropped —
@@ -503,6 +525,7 @@ class ImeService extends ChangeNotifier
     _connection = null;
     _shadow = null;
     _window = null;
+    _previousShadowText = null;
     _quarantine = null;
     _rulesLatch = null;
     controller.imeClearComposing();
@@ -547,6 +570,16 @@ class ImeService extends ChangeNotifier
     // engine now holds a newer window, so a delta matching the quarantine
     // signature would be genuine input, not the post-terminate echo.
     if (!viaTerminate) _quarantine = null;
+    // The diff frontend's pre-push race drop keys on the text this push
+    // replaces. A terminate push hands the race to the quarantine instead;
+    // a push with UNCHANGED text (a clause-(b) selection-only push, or the
+    // drop's own recovery re-push) retains the older text — the in-flight
+    // snapshot it guards against can still arrive after such a push.
+    if (viaTerminate) {
+      _previousShadowText = null;
+    } else if (_shadow?.text != value.text) {
+      _previousShadowText = _shadow?.text;
+    }
     _shadow = value;
     _window = window;
     _connection?.setEditingState(value);
@@ -597,6 +630,7 @@ class ImeService extends ChangeNotifier
       // the lazy re-attach starts fresh.
       _shadow = null;
       _window = null;
+      _previousShadowText = null;
       _quarantine = null;
       notifyListeners();
       return;
@@ -667,6 +701,11 @@ class ImeService extends ChangeNotifier
 
   @override
   void updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
+    // Mirror of [updateEditingValue]'s frontend guard: the diff frontend
+    // attaches WITHOUT the delta model, so a delta batch arriving here is
+    // engine confusion (or a misuse of the test surface), never input — it
+    // must not reach the batch path against the wrong declaration.
+    if (frontend != ImeFrontend.delta) return;
     debugLastDeltas = textEditingDeltas;
     if (_connection == null || _shadow == null) return;
     controller.imeEdit(() => _processBatch(textEditingDeltas));
@@ -679,10 +718,25 @@ class ImeService extends ChangeNotifier
   /// sends full [TextEditingValue] snapshots here. Each snapshot is diffed
   /// against the shadow (`text_diff.dart`, appflowy's `NonDeltaInputService`
   /// precedent) and the equivalent delta is synthesized and routed through
-  /// the SAME batch path the delta client uses ([_processBatch]) — stale
-  /// guard, echo quarantine, sentinel decomposition (G1), the divergence
-  /// rule, and the composing mapping (−2 shift, block-local, via
-  /// [_finishBatch]) all apply identically; the pipeline is never forked.
+  /// the SAME batch path the delta client uses ([_processBatch]) — echo
+  /// quarantine, sentinel decomposition (G1), the divergence rule, and the
+  /// composing mapping (−2 shift, block-local, via [_finishBatch]) all
+  /// apply identically; the pipeline is never forked.
+  ///
+  /// The stale-delta guard is the one mechanism this frontend satisfies BY
+  /// CONSTRUCTION rather than exercises: [_synthesizeDelta] sets `oldText`
+  /// to the very shadow text it diffed against, so the guard's mismatch can
+  /// never fire on a synthesized delta. The pre-push race the guard covers
+  /// on the delta path (host-app edit → clause (a)/(b) push → an in-flight
+  /// engine payload computed against the replaced window) is instead caught
+  /// by the previous-shadow drop below: a snapshot whose text equals the
+  /// window the latest push REPLACED was computed by the browser against
+  /// that older window, and diffing it against the fresh shadow would
+  /// mis-read the host edit's whole window change as typed input — it is
+  /// dropped and the authoritative window re-pushed (the guard's accepted
+  /// loss, never corruption). The residual post-terminate flavor of the
+  /// race stays the echo quarantine's territory, exactly as on the delta
+  /// path.
   ///
   /// A value with unchanged text is the `TextEditingDeltaNonTextUpdate`
   /// analogue (§NonTextUpdate analogue): acknowledged into the shadow so
@@ -698,6 +752,17 @@ class ImeService extends ChangeNotifier
   void updateEditingValue(TextEditingValue value) {
     if (frontend != ImeFrontend.nonDeltaDiff) return;
     if (_connection == null || _shadow == null) return;
+    // The previous-shadow drop (the doc comment's pre-push race): a snapshot
+    // shaped like the window the latest push replaced is stale by
+    // construction, not input. Legitimate input is untouched — a snapshot
+    // derived from the CURRENT window either matches the shadow text (the
+    // NonTextUpdate analogue) or differs from both windows.
+    if (value.text != _shadow!.text && value.text == _previousShadowText) {
+      _recoverAuthoritative('staleSnapshot');
+      _scheduleGeometryReport();
+      notifyListeners();
+      return;
+    }
     final delta = _synthesizeDelta(_shadow!, value);
     if (delta == null) return; // pure echo of our own push
     debugLastDeltas = [delta];
@@ -717,6 +782,7 @@ class ImeService extends ChangeNotifier
     TextEditingValue shadow,
     TextEditingValue value,
   ) {
+    final composing = _sanitizeComposing(value.composing, value.text);
     final diff = diffTexts(
       shadow.text,
       value.text,
@@ -727,13 +793,13 @@ class ImeService extends ChangeNotifier
     debugLastDiff = diff;
     if (diff == null) {
       if (_selectionsEquivalent(value.selection, shadow.selection) &&
-          value.composing == shadow.composing) {
+          composing == shadow.composing) {
         return null;
       }
       return TextEditingDeltaNonTextUpdate(
         oldText: shadow.text,
         selection: value.selection,
-        composing: value.composing,
+        composing: composing,
       );
     }
     if (diff.isInsert) {
@@ -742,7 +808,7 @@ class ImeService extends ChangeNotifier
         textInserted: diff.insertedText,
         insertionOffset: diff.start,
         selection: value.selection,
-        composing: value.composing,
+        composing: composing,
       );
     }
     if (diff.isDelete) {
@@ -753,7 +819,7 @@ class ImeService extends ChangeNotifier
           end: diff.start + diff.deletedLength,
         ),
         selection: value.selection,
-        composing: value.composing,
+        composing: composing,
       );
     }
     return TextEditingDeltaReplacement(
@@ -764,8 +830,23 @@ class ImeService extends ChangeNotifier
       ),
       replacementText: diff.insertedText,
       selection: value.selection,
-      composing: value.composing,
+      composing: composing,
     );
+  }
+
+  /// Engine-supplied composing ranges are sanitized before they enter the
+  /// shadow: an invalid, inverted, or out-of-range region becomes
+  /// [TextRange.empty] — treated as "no composition" rather than clamped,
+  /// because a region the engine itself mis-reports is not state worth
+  /// preserving, and one reaching the shadow unchecked blows up
+  /// `composing.textInside(shadow.text)` in [terminateComposition].
+  /// Sanitizing at the synthesis boundary keeps the rule in one place: the
+  /// synthesized delta — and through `delta.apply`, the shadow — never
+  /// carries a range its own text cannot satisfy.
+  static TextRange _sanitizeComposing(TextRange composing, String text) {
+    if (!composing.isValid || !composing.isNormalized) return TextRange.empty;
+    if (composing.end > text.length) return TextRange.empty;
+    return composing;
   }
 
   @override
@@ -903,11 +984,19 @@ class ImeService extends ChangeNotifier
   // --- Delta application (queue, shadow buffer, stale-delta guard) ---
 
   void _processBatch(List<TextEditingDelta> deltas) {
-    // The quarantine covers exactly the FIRST batch after a terminate push,
-    // then disarms — a user genuinely retyping the syllable types it in a
-    // later batch.
+    // The quarantine covers exactly the FIRST text-bearing batch after a
+    // terminate push, then disarms — a user genuinely retyping the syllable
+    // types it in a later batch. A NonTextUpdate-only batch does NOT count
+    // against that scope: it is pushless and carries no text, so it cannot
+    // be the retype the one-batch budget exists for — and on web one DOM
+    // selectionchange is one whole batch, so selection noise between the
+    // terminate push and the held-syllable recommit would otherwise burn
+    // the quarantine before the echo arrives. The other disarm trigger —
+    // any non-terminate push — is [_push]'s territory.
     final quarantine = _quarantine;
-    _quarantine = null;
+    if (deltas.any((delta) => delta is! TextEditingDeltaNonTextUpdate)) {
+      _quarantine = null;
+    }
 
     var diverged = false;
     String? editedBlockId;

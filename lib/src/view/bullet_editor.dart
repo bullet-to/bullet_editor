@@ -63,6 +63,11 @@ class BulletEditor extends StatefulWidget {
   /// the delta model everywhere except web, which gets the non-delta diff
   /// fallback. Override per-platform only as the R1 escape hatch (an OEM
   /// keyboard with broken delta support).
+  ///
+  /// A genuine runtime flip rebuilds the IME service (a connection's
+  /// delta-model declaration cannot change in place), which abandons any
+  /// live composition outright — the teardown goes through the service
+  /// rebuild, not `terminateComposition`.
   final ImeFrontend? imeFrontend;
 
   @override
@@ -150,8 +155,14 @@ class BulletEditorState extends State<BulletEditor> {
     final nodeChanged = !identical(widget.focusNode, oldWidget.focusNode);
     // The frontend is fixed per ImeService (a connection's delta-model
     // declaration cannot change in place); flipping it rebuilds the
-    // service, which re-attaches with the matching configuration.
-    final frontendChanged = widget.imeFrontend != oldWidget.imeFrontend;
+    // service, which re-attaches with the matching configuration. Compared
+    // as EFFECTIVE frontends — the requested value resolved against the
+    // live service's — because a raw nullable comparison would treat
+    // null → the explicit platform default as a flip and tear down a live
+    // connection (and any composition with it) for a no-op.
+    final frontendChanged =
+        (widget.imeFrontend ?? ImeFrontend.platformDefault) !=
+        imeService.frontend;
     if (!controllerChanged && !nodeChanged && !frontendChanged) return;
 
     // The node the old pair was attached with (the owned node when the old

@@ -584,6 +584,42 @@ void main() {
       expect(diffService.frontend, ImeFrontend.nonDeltaDiff);
       expect(diffService.isAttached, isTrue);
     });
+
+    testWidgets('a no-op imeFrontend change (null → the explicit platform '
+        'default) keeps the live service and connection — effective '
+        'frontends are compared, not raw nullables', (tester) async {
+      await pumpEditor(tester, [para('a', 'hi')]);
+      final before = imeOf(tester);
+      expect(before.frontend, ImeFrontend.platformDefault);
+      expect(before.isAttached, isTrue);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BulletEditor(
+              controller: controller,
+              autofocus: true,
+              imeFrontend: ImeFrontend.platformDefault,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF000000),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        identical(imeOf(tester), before),
+        isTrue,
+        reason:
+            'resolving null to the platform default is not a flip — a '
+            'rebuild here would tear down a live connection (and any '
+            'composition) for a no-op',
+      );
+      expect(imeOf(tester).isAttached, isTrue);
+    });
   });
 
   group('controller swap', () {

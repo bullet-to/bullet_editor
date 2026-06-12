@@ -830,18 +830,50 @@ void main() {
         expect(service.debugQuarantineArmed, isFalse, reason: 'one batch');
       });
 
-      test('the quarantine covers exactly ONE batch — a genuine retype in a '
-          'later batch lands', () {
+      test('the quarantine covers exactly ONE text-bearing batch — a genuine '
+          'retype in a later batch lands', () {
         build([para('a', '')], selection: caret('a', 0));
         sendInsertion('녕', composing: const TextRange(start: 2, end: 3));
         controller.undo();
 
-        // First batch after the push: an unrelated update disarms.
-        sendNonTextUpdate();
-        // Second batch: the same text at the same position is a real retype.
-        sendInsertion('녕', at: 2);
+        // First TEXT-bearing batch after the push: an unrelated edit
+        // disarms (a NonTextUpdate-only batch would not — see below).
+        sendInsertion('x', at: 2);
+        // Second batch: the same text at the quarantined position is a
+        // real retype.
+        sendInsertion('녕', at: 3);
 
-        expect(controller.document.blockById('a')!.plainText, '녕');
+        expect(controller.document.blockById('a')!.plainText, 'x녕');
+      });
+
+      test('a NonTextUpdate-only batch is pushless selection noise, not the '
+          'user retyping: it does NOT consume the quarantine, and the '
+          'held-syllable recommit arriving after it is still dropped', () {
+        build([para('a', 'ab')], selection: caret('a', 2));
+        sendInsertion('녕', composing: const TextRange(start: 4, end: 5));
+
+        controller.undo(); // terminate('undo'); quarantine = ('녕', 4)
+        expect(service.debugQuarantine, (text: '녕', offset: 4));
+
+        // Two selection-only batches (one DOM selectionchange = one batch
+        // on web) land between the terminate push and the echo.
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 3));
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 4));
+        expect(
+          service.debugQuarantineArmed,
+          isTrue,
+          reason: 'the one-batch budget is for text-bearing batches only',
+        );
+
+        sendInsertion('녕', at: 4);
+
+        expect(
+          controller.document.blockById('a')!.plainText,
+          'ab',
+          reason: 'the recommit is the echo the quarantine exists for',
+        );
+        expect(service.debugLastDropReason, 'echoQuarantine');
+        expect(service.debugQuarantineArmed, isFalse, reason: 'consumed');
       });
 
       test('an intervening non-IME push disarms the quarantine: a matching '
