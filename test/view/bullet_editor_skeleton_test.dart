@@ -145,8 +145,8 @@ void main() {
     testWidgets(
       'inter-block gap is the v2 max-collapse of after/before, top-side only',
       (tester) async {
-        // blockquote (spacingAfter 0.1) → paragraph (spacingBefore 0.3):
-        // the gap is max(0.1, 0.3) = 0.3em = 4.8px, NOT the 6.4px sum.
+        // blockquote (spacingAfter 0.4) → paragraph (spacingBefore 0.5):
+        // the gap is max(0.4, 0.5) = 0.5em = 8px, NOT the 14.4px sum.
         final doc = twoBlocks(
           TextBlock(
             id: 'q',
@@ -161,11 +161,11 @@ void main() {
             .getBottomLeft(_richTextContaining('quote'))
             .dy;
         final paraTop = tester.getTopLeft(_richTextContaining('para')).dy;
-        expect(paraTop - quoteBottom, moreOrLessEquals(0.3 * 16));
+        expect(paraTop - quoteBottom, moreOrLessEquals(0.5 * 16));
       },
     );
 
-    testWidgets('h1 gets its 1em gap below a paragraph', (tester) async {
+    testWidgets('h1 gets its 1.2em gap below a paragraph', (tester) async {
       final doc = twoBlocks(
         para('p', 'above'),
         TextBlock(
@@ -178,7 +178,7 @@ void main() {
       final gap =
           tester.getTopLeft(_richTextContaining('Title')).dy -
           tester.getBottomLeft(_richTextContaining('above')).dy;
-      expect(gap, moreOrLessEquals(16));
+      expect(gap, moreOrLessEquals(1.2 * 16));
     });
 
     testWidgets('divider gets policy spacing on both sides', (tester) async {
@@ -303,7 +303,7 @@ void main() {
       await tester.pumpWidget(_editor(buildGauntletDocument(tailLength: 0)));
 
       expect(
-        find.bySemanticsLabel('A first-in-document image'),
+        find.bySemanticsLabel('A first-in-document banner image'),
         findsOneWidget,
       );
       handle.dispose();

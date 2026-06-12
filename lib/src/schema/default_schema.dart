@@ -151,7 +151,7 @@ abstract final class Blocks {
     key: HeadingKeys.h1,
     defaultScale: 1.75,
     defaultLineHeight: 1.4,
-    defaultSpacingBefore: 1.0,
+    defaultSpacingBefore: 1.2,
     defaultWeight: FontWeight.bold,
     style: style,
   );
@@ -162,7 +162,7 @@ abstract final class Blocks {
     key: HeadingKeys.h2,
     defaultScale: 1.375,
     defaultLineHeight: 1.4,
-    defaultSpacingBefore: 0.8,
+    defaultSpacingBefore: 1.0,
     defaultWeight: FontWeight.bold,
     style: style,
   );
@@ -173,7 +173,7 @@ abstract final class Blocks {
     key: HeadingKeys.h3,
     defaultScale: 1.125,
     defaultLineHeight: 1.3,
-    defaultSpacingBefore: 0.6,
+    defaultSpacingBefore: 0.8,
     defaultWeight: FontWeight.w600,
     style: style,
   );
@@ -184,7 +184,7 @@ abstract final class Blocks {
     key: HeadingKeys.h4,
     defaultScale: 1.0,
     defaultLineHeight: 1.3,
-    defaultSpacingBefore: 0.5,
+    defaultSpacingBefore: 0.6,
     defaultWeight: FontWeight.w600,
     style: style,
   );
@@ -195,7 +195,7 @@ abstract final class Blocks {
     key: HeadingKeys.h5,
     defaultScale: 0.875,
     defaultLineHeight: 1.3,
-    defaultSpacingBefore: 0.4,
+    defaultSpacingBefore: 0.6,
     defaultWeight: FontWeight.w600,
     style: style,
   );
@@ -206,7 +206,7 @@ abstract final class Blocks {
     key: HeadingKeys.h6,
     defaultScale: 0.85,
     defaultLineHeight: 1.3,
-    defaultSpacingBefore: 0.4,
+    defaultSpacingBefore: 0.6,
     defaultWeight: FontWeight.w600,
     style: style,
   );
@@ -330,8 +330,8 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Code Block',
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
-      spacingBefore: 0.3,
-      spacingAfter: 0.3,
+      spacingBefore: 0.5,
+      spacingAfter: 0.5,
       metadataKeys: const {CodeBlockKeys.language},
       newBlockMetadata: (splitBlock) => const {},
       baseStyle: (base) => (base ?? const TextStyle()).copyWith(
@@ -377,8 +377,8 @@ abstract final class Blocks {
           height: 1.5,
         );
       },
-      spacingBefore: 0.1,
-      spacingAfter: 0.1,
+      spacingBefore: 0.4,
+      spacingAfter: 0.4,
       prefixBuilder: (block, gutter, style) {
         final fontSize = style.fontSize ?? kFallbackFontSize;
         final barHeight = fontSize * 1.4;
@@ -471,7 +471,7 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Paragraph',
       policies: const BlockPolicies(canBeChild: true, canHaveChildren: false),
-      spacingBefore: 0.3,
+      spacingBefore: 0.5,
       codecs: {
         Format.markdown: BlockCodec(
           encode: (block, ctx) {

@@ -29,13 +29,14 @@ Document buildGauntletDocument({int tailLength = 200}) {
 
   return Document([
     // Image FIRST in document — the v2 scar scenario (exotics in the
-    // skeleton from day one).
+    // skeleton from day one). Banner-thin aspect (6:1), so the skeleton
+    // proves images render at intrinsic aspect, not a forced box.
     TextBlock(
       id: 'g-image-first',
       blockType: ImageKeys.type,
-      segments: [const StyledSegment('A first-in-document image')],
+      segments: [const StyledSegment('A first-in-document banner image')],
       metadata: const {
-        ImageKeys.url: 'https://picsum.photos/seed/first/800/300',
+        ImageKeys.url: 'https://picsum.photos/seed/banner/1200/200',
       },
     ),
     TextBlock(
@@ -119,12 +120,12 @@ Document buildGauntletDocument({int tailLength = 200}) {
       segments: [const StyledSegment('A block quote with its bar gutter.')],
     ),
     p('g-para-before-image', 'A paragraph directly above an image block.'),
-    // Second image, between paragraphs.
+    // Second image, between paragraphs — normal photo aspect (16:10).
     TextBlock(
       id: 'g-image-mid',
       blockType: ImageKeys.type,
       segments: [const StyledSegment('An image between paragraphs')],
-      metadata: const {ImageKeys.url: 'https://picsum.photos/seed/mid/800/400'},
+      metadata: const {ImageKeys.url: 'https://picsum.photos/seed/mid/800/500'},
     ),
     TextBlock(
       id: 'g-para-styles',
