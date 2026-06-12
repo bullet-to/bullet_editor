@@ -10,8 +10,8 @@ import 'package:flutter/material.dart';
 /// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
 /// left, tabbed debug panes on the right.
 ///
-/// Panes 1–2 (document tree, selection) are live; panes 3–6 (IME window,
-/// change stream, perf, record) land with the subsystems they inspect.
+/// Panes 1–3 (document tree, selection, IME window) are live; panes 4–6
+/// (change stream, perf, record) land with the subsystems they inspect.
 class InspectorScreen extends StatefulWidget {
   const InspectorScreen({super.key});
 
@@ -49,7 +49,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('bullet_editor inspector — v3 day 3-4'),
+        title: const Text('bullet_editor inspector — v3 day 5-7'),
         actions: [
           IconButton(
             tooltip: 'Undo',
@@ -122,13 +122,14 @@ class _InspectorPanes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Column(
         children: [
           const TabBar(
             tabs: [
               Tab(text: 'Document tree'),
               Tab(text: 'Selection'),
+              Tab(text: 'IME'),
             ],
           ),
           Expanded(
@@ -143,6 +144,7 @@ class _InspectorPanes extends StatelessWidget {
                   lastLinkTap: lastLinkTap,
                   lastLinkTapBlockId: lastLinkTapBlockId,
                 ),
+                _ImePane(editorKey: editorKey),
               ],
             ),
           ),
@@ -227,8 +229,8 @@ class _DocumentTreePane extends StatelessWidget {
   }
 }
 
-/// Pane 2 — live DocSelection endpoints, undo state, and the link-tap log.
-/// ComposingState and active styles arrive with their subsystems (days 5–7).
+/// Pane 2 — live DocSelection endpoints, ComposingState, undo state, and
+/// the link-tap log. Active styles arrive with the typing-style work.
 class _SelectionPane extends StatelessWidget {
   const _SelectionPane({
     required this.controller,
@@ -266,7 +268,7 @@ class _SelectionPane extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text('ComposingState', style: Theme.of(context).textTheme.titleSmall),
-        Text('— (IME lands days 5–7)', style: mono),
+        Text('${controller.composing ?? '—'}', style: mono),
         const SizedBox(height: 12),
         Text('Last link tap', style: Theme.of(context).textTheme.titleSmall),
         Text(
@@ -274,6 +276,88 @@ class _SelectionPane extends StatelessWidget {
           style: mono,
         ),
       ],
+    );
+  }
+}
+
+/// Pane 3 — the IME window (v3-build-strategy §dev harness): the shadow
+/// buffer as the engine sees it (sentinel visible), the last received delta
+/// batch, the last terminateComposition reason, and the quarantine state.
+/// This pane is why IME bugs get diagnosed in minutes instead of days.
+class _ImePane extends StatelessWidget {
+  const _ImePane({required this.editorKey});
+
+  final GlobalKey<BulletEditorState> editorKey;
+
+  /// Sentinel/joints made visible: '·' for the sentinel space, '⏎' for
+  /// block joints.
+  static String visible(String text) =>
+      "'${text.replaceAll(' ', '·').replaceAll('\n', '⏎')}'";
+
+  @override
+  Widget build(BuildContext context) {
+    final ime = editorKey.currentState?.imeService;
+    if (ime == null) return const Center(child: Text('—'));
+
+    final mono = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(fontFamily: 'Menlo');
+
+    return ListenableBuilder(
+      listenable: ime,
+      builder: (context, _) {
+        final shadow = ime.debugShadow;
+        final deltas = ime.debugLastDeltas;
+        return ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            Text('Connection', style: Theme.of(context).textTheme.titleSmall),
+            Text(ime.isAttached ? 'attached' : 'detached', style: mono),
+            const SizedBox(height: 12),
+            Text(
+              'Shadow buffer (as the engine sees it)',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            Text(
+              shadow == null
+                  ? '—'
+                  : 'text:      ${visible(shadow.text)}\n'
+                        'selection: ${shadow.selection.start}..'
+                        '${shadow.selection.end}\n'
+                        'composing: ${shadow.composing}',
+              style: mono,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Last delta batch',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            Text(
+              deltas == null || deltas.isEmpty
+                  ? '—'
+                  : deltas
+                        .map(
+                          (d) => '${d.runtimeType}: ${visible(d.toString())}',
+                        )
+                        .join('\n'),
+              style: mono,
+              maxLines: 12,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'terminateComposition',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            Text(
+              'last reason: ${ime.debugLastTerminateReason ?? '—'}\n'
+              'last drop:   ${ime.debugLastDropReason ?? '—'}\n'
+              'quarantine:  ${ime.debugQuarantineArmed ? ime.debugQuarantine : 'disarmed'}',
+              style: mono,
+            ),
+          ],
+        );
+      },
     );
   }
 }
