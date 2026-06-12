@@ -505,6 +505,41 @@ void main() {
         expect(service.debugQuarantine, (text: 'word', offset: 6));
       });
 
+      test('composite replacement [0,7) → ". world" over ". hello": the '
+          'echoed sentinel is stripped — "world" lands, no merge, no '
+          'sentinel text in the model (G1 decomposition for replacements)', () {
+        build([
+          para('a', 'prev'),
+          para('b', 'hello'),
+        ], selection: caret('b', 5));
+        expect(shadow().text, '. hello');
+
+        // setComposingRegion(0,7) + commitText: one replacement spanning
+        // the sentinel, with the engine echoing the sentinel prefix back.
+        sendReplacement(const TextRange(start: 0, end: 7), '. world');
+
+        final blocks = controller.document.allBlocks;
+        expect(blocks, hasLength(2), reason: 'echoed sentinel ⇒ no merge');
+        expect(blocks[1].plainText, 'world');
+        expect(shadow().text, '. world');
+      });
+
+      test('composite replacement [0,7) → "world" over ". hello": the '
+          'consumed sentinel maps to structural backspace AND the '
+          'replacement text lands (the deletion half warrants the merge)', () {
+        build([
+          para('a', 'prev'),
+          para('b', 'hello'),
+        ], selection: caret('b', 5));
+
+        sendReplacement(const TextRange(start: 0, end: 7), 'world');
+
+        final blocks = controller.document.allBlocks;
+        expect(blocks, hasLength(1), reason: 'sentinel consumed ⇒ merge');
+        expect(blocks.single.plainText, 'prevworld');
+        expect(connection().pushed.last.text, '. prevworld');
+      });
+
       test('G9: backspace deltas on a selected image arrive as ordinary '
           'deletions of the ~ buffer', () {
         build([
@@ -748,6 +783,13 @@ void main() {
         service.connectionClosed();
 
         expect(service.isAttached, isFalse);
+        expect(
+          connection().closedReceived,
+          isTrue,
+          reason:
+              'the framework is told (connectionClosedReceived) so '
+              "TextInput's current-connection bookkeeping clears",
+        );
         expect(controller.composing, isNull);
         expect(service.debugLastTerminateReason, 'connectionClosed');
         expect(
@@ -800,6 +842,27 @@ void main() {
         sendInsertion('녕', at: 2);
 
         expect(controller.document.blockById('a')!.plainText, '녕');
+      });
+
+      test('an intervening non-IME push disarms the quarantine: a matching '
+          'insertion against the NEWER window is genuine input, not an '
+          'echo, and is APPLIED', () {
+        build([para('a', 'ab')], selection: caret('a', 2));
+        sendInsertion('녕', composing: const TextRange(start: 4, end: 5));
+
+        controller.undo(); // terminate('undo'); quarantine = ('녕', 4)
+        expect(service.debugQuarantine, (text: '녕', offset: 4));
+
+        // A tap elsewhere re-pushes the window (clause (b)): the engine now
+        // holds newer state than the terminate push, so the quarantine
+        // signature no longer identifies an echo.
+        controller.setSelection(caret('a', 0));
+        expect(service.debugQuarantineArmed, isFalse);
+
+        sendInsertion('녕', at: 4);
+
+        expect(controller.document.blockById('a')!.plainText, 'ab녕');
+        expect(service.debugLastDropReason, isNot('echoQuarantine'));
       });
 
       test('an insertion of different text at the quarantined position is '
@@ -994,6 +1057,30 @@ void main() {
         expect(controller.document.blockById('a')!.blockType, HeadingKeys.h1);
       });
 
+      test('a composing region set over pre-existing text (setComposingRegion, '
+          'no edit) never arms the latch: ending the composition with zero '
+          'text change does not convert', () {
+        build([para('a', '---')], selection: caret('a', 3));
+        expect(shadow().text, '. ---');
+
+        // The IME marks the existing dashes for composition — a
+        // NonTextUpdate-only batch, nothing inserted.
+        sendNonTextUpdate(composing: const TextRange(start: 2, end: 5));
+        expect(controller.composing, isNotNull);
+
+        // The composition ends with no edit. Rules fire on typed
+        // characters; with zero text change there is nothing to fire on.
+        sendNonTextUpdate();
+
+        expect(controller.composing, isNull);
+        expect(
+          controller.document.blockById('a')!.blockType,
+          ParagraphKeys.type,
+          reason: 'no spontaneous divider conversion',
+        );
+        expect(controller.document.blockById('a')!.plainText, '---');
+      });
+
       test('latch invalidation: a non-IME edit before the composition ends '
           'clears the latch — it can never fire against unmatched text', () {
         build([para('a', '')], selection: caret('a', 0));
@@ -1114,12 +1201,16 @@ class FakeImeConnection implements ImeConnection {
   final List<String> geometryCalls = [];
   bool shown = false;
   bool isClosed = false;
+  bool closedReceived = false;
 
   @override
   bool get attached => !isClosed;
 
   @override
   void show() => shown = true;
+
+  @override
+  void connectionClosedReceived() => closedReceived = true;
 
   @override
   void setEditingState(TextEditingValue value) => pushed.add(value);

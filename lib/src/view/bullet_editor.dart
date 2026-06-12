@@ -128,6 +128,11 @@ class BulletEditorState extends State<BulletEditor> {
   @override
   void didUpdateWidget(BulletEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // The connection tracks readOnly as well as focus: flipping readOnly on
+    // while focused must drop the live connection (deltas would otherwise
+    // keep mutating the document against the widget contract above), and
+    // flipping it off while focused must attach one.
+    if (widget.readOnly != oldWidget.readOnly) _syncImeAttachment();
     final controllerChanged = !identical(
       widget.controller,
       oldWidget.controller,

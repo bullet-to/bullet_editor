@@ -29,6 +29,12 @@ abstract interface class ImeConnection implements ImeGeometryChannel {
   bool get attached;
   void show();
   void setEditingState(TextEditingValue value);
+
+  /// Acknowledges a platform-initiated close ([TextInputClient]'s
+  /// `connectionClosed`): the framework's `TextInput` still records this
+  /// connection as current until told otherwise, and a stale current
+  /// connection wedges the next attach's bookkeeping.
+  void connectionClosedReceived();
   void close();
 }
 
@@ -67,6 +73,9 @@ class _RealImeConnection implements ImeConnection {
   void setCaretRect(Rect rect) => _connection.setCaretRect(rect);
 
   @override
+  void connectionClosedReceived() => _connection.connectionClosedReceived();
+
+  @override
   void close() => _connection.close();
 }
 
@@ -83,7 +92,6 @@ class ImeWindowSpan {
     required this.blockId,
     required this.bufferStart,
     required this.bufferEnd,
-    this.localStart = 0,
     this.isVoid = false,
     this.isElision = false,
   });
@@ -91,13 +99,11 @@ class ImeWindowSpan {
   final String blockId;
 
   /// Buffer range this span occupies (`bufferEnd` exclusive). Spans are
-  /// separated by one `\n` joint each.
+  /// separated by one `\n` joint each. [bufferStart] is block-local offset 0
+  /// — every window starts each block at its head (a G1 merge re-serializes
+  /// a fresh window rather than remapping this one).
   final int bufferStart;
   final int bufferEnd;
-
-  /// Block-local offset at [bufferStart] — 0 except after a G1 merge
-  /// remap, where the window text starts mid-block.
-  final int localStart;
 
   /// A `~` void placeholder (offset 0 at its start, 1 at its end).
   final bool isVoid;
@@ -158,25 +164,19 @@ class ImeWindow {
         final target = previous ?? span;
         if (target.isElision) return null;
         final local = identical(target, span)
-            ? target.localStart
-            : target.localStart + (target.bufferEnd - target.bufferStart);
+            ? 0
+            : target.bufferEnd - target.bufferStart;
         return DocPosition(target.blockId, local);
       }
       if (offset <= span.bufferEnd) {
         if (span.isElision) return null;
-        return DocPosition(
-          span.blockId,
-          span.localStart + (offset - span.bufferStart),
-        );
+        return DocPosition(span.blockId, offset - span.bufferStart);
       }
       previous = span;
     }
     final last = spans.last;
     if (last.isElision) return null;
-    return DocPosition(
-      last.blockId,
-      last.localStart + (last.bufferEnd - last.bufferStart),
-    );
+    return DocPosition(last.blockId, last.bufferEnd - last.bufferStart);
   }
 
   /// Whether the buffer range `[start, end)` touches the elided interior.
@@ -307,8 +307,10 @@ ImeWindow serializeImeWindow(
   int bufferOffsetFor(DocPosition position) {
     for (final span in window.spans) {
       if (span.isElision || span.blockId != position.blockId) continue;
-      final local = position.offset - span.localStart;
-      final clamped = local.clamp(0, span.bufferEnd - span.bufferStart);
+      final clamped = position.offset.clamp(
+        0,
+        span.bufferEnd - span.bufferStart,
+      );
       return span.bufferStart + clamped;
     }
     return sentinelLength;
@@ -354,7 +356,10 @@ class ImeService extends ChangeNotifier
   }
 
   /// Autocorrect IS the delta path (D8): declared here, corrected through
-  /// the same delta application as typing.
+  /// the same delta application as typing. Cap-sentences is declared so the
+  /// sentinel's autocapitalization rationale ([ImeWindow.sentinel]; the
+  /// day-9 "no spurious capitalization" gate trace) actually engages —
+  /// Android never enables sentence capitalization without it.
   static const TextInputConfiguration defaultConfiguration =
       TextInputConfiguration(
         inputType: TextInputType.multiline,
@@ -362,6 +367,7 @@ class ImeService extends ChangeNotifier
         enableDeltaModel: true,
         autocorrect: true,
         enableSuggestions: true,
+        textCapitalization: TextCapitalization.sentences,
       );
 
   final EditorController controller;
@@ -387,7 +393,11 @@ class ImeService extends ChangeNotifier
 
   /// The one-batch echo quarantine (G7/G10): the terminated composing text
   /// and the pushed-window caret it would echo back at. Armed by
-  /// [terminateComposition], consumed (disarmed) by the next delta batch.
+  /// [terminateComposition], consumed (disarmed) by the next delta batch —
+  /// and cleared by any intervening non-terminate push (spec §echo
+  /// quarantine: it covers the first batch after the *terminate* push; once
+  /// a newer window has been pushed, a matching insertion is genuine input
+  /// against that window, not an echo).
   ({String text, int offset})? _quarantine;
 
   /// The G3 rules latch: insert-pattern rules are deferred, not dropped —
@@ -472,6 +482,10 @@ class ImeService extends ChangeNotifier
       'reports an active composition is only legal through '
       'terminateComposition (architecture §IME choke point)',
     );
+    // Any push that is NOT the terminate push obsoletes the quarantine: the
+    // engine now holds a newer window, so a delta matching the quarantine
+    // signature would be genuine input, not the post-terminate echo.
+    if (!viaTerminate) _quarantine = null;
     _shadow = value;
     _window = window;
     _connection?.setEditingState(value);
@@ -641,6 +655,10 @@ class ImeService extends ChangeNotifier
   /// skipped), lazily re-attach + re-serialize on the next focus or edit.
   @override
   void connectionClosed() {
+    // Acknowledge before discarding: TextInput's current-connection
+    // bookkeeping clears only through connectionClosedReceived(), and a
+    // stale current connection corrupts the next attach.
+    _connection?.connectionClosedReceived();
     _connection = null;
     terminateComposition('connectionClosed');
   }
@@ -759,8 +777,15 @@ class ImeService extends ChangeNotifier
       // Convergent (incl. merge-via-replacement): the composition survives
       // intact precisely because nothing is pushed.
       controller.imeSetComposing(mapped);
-      // G3: rules are deferred, not dropped — latch the composed range.
-      _rulesLatch = (blockId: mapped.blockId, range: mapped.range);
+      // G3: rules are deferred, not dropped — latch the composed range, but
+      // ONLY from a batch that actually changed text. A NonTextUpdate-only
+      // batch (e.g. setComposingRegion over pre-existing text) inserted
+      // nothing, and a latch armed from it would fire a rule on commit with
+      // zero text change — a block already reading `---` would convert
+      // spontaneously. An earlier edit-armed latch stays valid as recorded.
+      if (editedBlockId != null) {
+        _rulesLatch = (blockId: mapped.blockId, range: mapped.range);
+      }
       return;
     }
 
@@ -788,10 +813,12 @@ class ImeService extends ChangeNotifier
 
   /// Drops the remainder of the batch and re-pushes the authoritative
   /// window — through the choke point when the shadow reported composition.
-  void _recoverAuthoritative(String debugReason) {
-    debugLastDropReason = debugReason;
+  /// [reason] is both the drop class the inspector reports and the
+  /// termination reason when composing was live.
+  void _recoverAuthoritative(String reason) {
+    debugLastDropReason = reason;
     if (_shadowComposing) {
-      terminateComposition('staleDelta');
+      terminateComposition(reason);
     } else {
       controller.imeSetComposing(null);
       _pushAuthoritativeWindow();
@@ -914,9 +941,17 @@ class ImeService extends ChangeNotifier
       return _editedFromCaret(text);
     }
 
-    final start = window.positionForBufferOffset(
-      math.max(range.start, ImeWindow.sentinel.length),
-    );
+    if (range.start < ImeWindow.sentinel.length) {
+      // G1 applied to replacements — reachable by documented API shape
+      // (Android's setComposingRegion(0,n) + commitText emits one
+      // replacement over [0, 2+k)). Decomposed like a composite deletion,
+      // never handled wholesale: clamping only the range start while
+      // inserting the full replacementText would land literal sentinel text
+      // in the model ('. world' instead of 'world').
+      return _applySentinelReplacement(window, range, text);
+    }
+
+    final start = window.positionForBufferOffset(range.start);
     final end = window.positionForBufferOffset(range.end);
     if (start == null || end == null) return null;
     controller.imeSetSelection(DocSelection(base: start, extent: end));
@@ -930,6 +965,61 @@ class ImeService extends ChangeNotifier
     }
     controller.imeInsertText(text);
     return _editedFromCaret(text);
+  }
+
+  /// Decomposes a replacement intersecting the sentinel (G1's discipline
+  /// applied to replacements): (1) the replaced range clipped to `[2, end)`
+  /// deletes through the normal path; (2) the sentinel-overlap prefix is
+  /// stripped from [text] when the engine echoed it back; (3) the
+  /// structural-backspace consultation runs only when the deletion half
+  /// warrants it — i.e. the sentinel text was genuinely consumed rather
+  /// than echoed, the replacement analogue of a `[0,2)`-intersecting
+  /// deletion.
+  ({String blockId, TextRange range})? _applySentinelReplacement(
+    ImeWindow window,
+    TextRange range,
+    String text,
+  ) {
+    const sentinelLength = ImeWindow.sentinel.length;
+    final overlap = ImeWindow.sentinel.substring(
+      range.start,
+      math.min(range.end, sentinelLength),
+    );
+    final echoed = text.startsWith(overlap);
+    final replacement = echoed ? text.substring(overlap.length) : text;
+
+    // The text half: delete the clipped [2, end) range (a no-op when the
+    // replacement never reaches past the sentinel), leaving the caret where
+    // the stripped replacement text lands.
+    final start = window.positionForBufferOffset(sentinelLength);
+    final end = window.positionForBufferOffset(
+      math.max(range.end, sentinelLength),
+    );
+    if (start == null || end == null) return null;
+    if (start != end) {
+      controller.imeSetSelection(DocSelection(base: start, extent: end));
+      controller.imeDeleteSelection();
+    } else {
+      controller.imeSetSelection(DocSelection.collapsed(start));
+    }
+
+    // The structural half: only a genuinely deleted sentinel maps to
+    // "backspace at block start" (same consultation as the composite
+    // deletion path); an echoed prefix leaves the sentinel intact net of
+    // the replacement, so no backspaceAtStart policy applies.
+    if (!echoed) {
+      final firstSpan = window.spans.isEmpty
+          ? null
+          : window.spans.firstWhere((s) => !s.isElision);
+      if (firstSpan != null && !firstSpan.isVoid) {
+        controller.imeStructuralBackspace(firstSpan.blockId);
+      }
+    }
+
+    if (replacement.isEmpty) return null;
+    if (replacement.contains('\n')) return _insertParts(replacement);
+    controller.imeInsertText(replacement);
+    return _editedFromCaret(replacement);
   }
 
   /// Inserts [text], honoring embedded `\n`s through the controller's Enter
@@ -989,8 +1079,8 @@ class ImeService extends ChangeNotifier
     return ComposingState(
       blockId: span.blockId,
       range: TextRange(
-        start: span.localStart + (start - span.bufferStart),
-        end: span.localStart + (end - span.bufferStart),
+        start: start - span.bufferStart,
+        end: end - span.bufferStart,
       ),
     );
   }

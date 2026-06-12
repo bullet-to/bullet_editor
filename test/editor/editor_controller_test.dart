@@ -1,4 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:flutter/services.dart' show TextRange;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Day 3–4 controller skeleton suite (architecture plan row 3–4): batch loop
@@ -192,6 +193,45 @@ void main() {
       expect(c.canUndo, isFalse);
       expect(c.canRedo, isFalse);
       expect(c.selection, caret('n', 3));
+    });
+
+    test('clears the composition undo-group flags: the next composition\'s '
+        'first batch pushes its pre-composition snapshot (headless — no IME '
+        'service terminates for us)', () {
+      final c = controller([para('a', '')]);
+      c.setSelection(caret('a', 0));
+      // A composition left open across setDocument: with no registered
+      // external-change handler, only setDocument itself can clear the
+      // composition-scoped undo state.
+      c.imeEdit(() {
+        c.imeInsertText('k');
+        c.imeSetComposing(
+          const ComposingState(
+            blockId: 'a',
+            range: TextRange(start: 0, end: 1),
+          ),
+        );
+      });
+
+      c.setDocument(Document([para('n', 'fresh')]), selection: caret('n', 5));
+      expect(c.composing, isNull);
+
+      // The next composition's FIRST batch must push the pre-composition
+      // snapshot; a stale "snapshot pushed" flag would suppress it and
+      // undo would overshoot (here: have nothing to restore at all).
+      c.imeEdit(() {
+        c.imeInsertText('x');
+        c.imeSetComposing(
+          const ComposingState(
+            blockId: 'n',
+            range: TextRange(start: 5, end: 6),
+          ),
+        );
+      });
+      expect(c.document.blockById('n')!.plainText, 'freshx');
+
+      c.undo();
+      expect(c.document.blockById('n')!.plainText, 'fresh');
     });
   });
 

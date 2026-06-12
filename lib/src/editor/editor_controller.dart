@@ -304,11 +304,14 @@ class EditorController extends ChangeNotifier {
   /// Replaces the document wholesale (open-a-different-note). Resets undo
   /// history. A live composition terminates through the external-change
   /// handler (`terminateComposition('externalEdit')`); composing is cleared
-  /// here too because its block id references the outgoing document.
+  /// here too — undo-group flags included, or a stale "snapshot pushed"
+  /// flag makes the next composition's first batch skip its pre-composition
+  /// undo push in headless use — because its block id references the
+  /// outgoing document.
   void setDocument(Document document, {DocSelection? selection}) {
     _edit(() {
       _undoManager.clear();
-      _composing = null;
+      _clearComposingState();
       _document = document;
       _selection = selection == null
           ? null

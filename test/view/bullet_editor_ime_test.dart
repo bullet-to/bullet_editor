@@ -110,6 +110,38 @@ void main() {
       expect(imeOf(tester).isAttached, isFalse);
     });
 
+    testWidgets('toggling readOnly while focused syncs the connection both '
+        'directions', (tester) async {
+      Widget editor({required bool readOnly}) => MaterialApp(
+        home: Scaffold(
+          body: BulletEditor(
+            controller: controller,
+            readOnly: readOnly,
+            autofocus: true,
+            textStyle: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
+          ),
+        ),
+      );
+      await pumpEditor(tester, [para('a', 'hi')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await tester.pump();
+      expect(imeOf(tester).isAttached, isTrue);
+
+      // readOnly → true with focus held: the live connection must drop —
+      // deltas would otherwise keep mutating the document against the
+      // widget's readOnly contract.
+      await tester.pumpWidget(editor(readOnly: true));
+      await tester.pump();
+      expect(imeOf(tester).isAttached, isFalse);
+
+      // readOnly → false with focus still held: the connection re-attaches
+      // and the current window is pushed.
+      await tester.pumpWidget(editor(readOnly: false));
+      await tester.pump();
+      expect(imeOf(tester).isAttached, isTrue);
+      expect(imeOf(tester).currentTextEditingValue!.text, '. hi');
+    });
+
     testWidgets('a tap with the selection on a void block keeps an attached '
         'connection (buffer = sentinel + ~)', (tester) async {
       await pumpEditor(tester, [
