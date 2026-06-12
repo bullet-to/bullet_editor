@@ -537,6 +537,23 @@ class ImeService extends ChangeNotifier
   /// any non-IME change.
   ({String blockId, TextRange range})? _rulesLatch;
 
+  /// The diff frontend's deferred-reconciliation flag (passive-while-
+  /// composing, §web fallback): a mid-composition snapshot could not be
+  /// absorbed — its structural shape moved the window away from the
+  /// engine's buffer, or the composing region stopped mapping into one
+  /// block — and the one legal response under the passivity invariant is to
+  /// DEFER: the window mapping no longer matches the engine buffer, so
+  /// applying later snapshots through it would corrupt, and pushing (even
+  /// via terminate) would destroy the browser's marked region while the
+  /// IME's internal buffer continues (the captured `nににhにほ…`
+  /// accumulation — the web engine cannot re-mark text). While armed,
+  /// snapshots acknowledge one-way into the shadow; the snapshot that ends
+  /// the composition (composing live→empty) runs the one authoritative
+  /// reconciliation push ([_absorbWhileDiverged]). Deliberate terminations
+  /// (undo, external edits, detach) resolve it early — their authoritative
+  /// push IS the reconciliation. Never armed on the delta frontend.
+  bool _passiveDivergence = false;
+
   /// The one-shot commit-key suppression's arming timestamp
   /// ([_monotonicNowMs] domain; null = disarmed) — the WebKit
   /// keydown-after-compositionend compensation. Safari fires compositionend
@@ -644,6 +661,7 @@ class ImeService extends ChangeNotifier
     _staleComposingLatch = null;
     _quarantine = null;
     _rulesLatch = null;
+    _passiveDivergence = false;
     _commitKeySuppressionArmedAtMs = null;
     _commitKeyDeferredAtMs = null;
     controller.imeClearComposing();
@@ -737,6 +755,10 @@ class ImeService extends ChangeNotifier
   void terminateComposition(String reason) {
     debugLastTerminateReason = reason;
     _rulesLatch = null; // a stale latch can never fire (G3 invalidation)
+    // A deliberate termination resolves any deferred passive divergence:
+    // the authoritative push below IS the reconciliation (§web fallback
+    // passive-while-composing — deliberate terminations survive and push).
+    _passiveDivergence = false;
     // The engine did not end this composition — we did. The commit-key
     // suppression must never arm (or stay armed) off our own terminate: the
     // engine-side fallout of a terminate push is the echo quarantine's
@@ -1037,6 +1059,15 @@ class ImeService extends ChangeNotifier
       );
     }
     final composingLive = composing.isValid && !composing.isCollapsed;
+    // Deferred reconciliation (passive-while-composing, §web fallback): a
+    // prior mid-composition snapshot diverged the window unmappably, so
+    // the frontend is a pure observer until the composition ends — see
+    // [_passiveDivergence] for why neither applying nor pushing is legal
+    // here.
+    if (_passiveDivergence) {
+      _absorbWhileDiverged(value, composing, composingLive: composingLive);
+      return;
+    }
     // The previous-shadow drop (the doc comment's pre-push race): a snapshot
     // shaped like the window the latest push replaced is stale by
     // construction — but only commit-shaped and only while the race window
@@ -1113,6 +1144,57 @@ class ImeService extends ChangeNotifier
       // re-enter the rewrite (see [_staleComposingLatch]'s lifecycle).
       _staleComposingLatch = composing;
     }
+    _scheduleGeometryReport();
+    notifyListeners();
+  }
+
+  /// The deferred-reconciliation window's snapshot handling
+  /// ([_passiveDivergence] armed — diff frontend only). While the engine
+  /// still reports a live composition the snapshot is acknowledged one-way
+  /// into the shadow (the model stays put: the window mapping is
+  /// unreliable, and a push of any kind would corrupt the browser's marked
+  /// region). The snapshot that ends the composition (composing live→empty
+  /// — compositionend reflected) triggers the ONE authoritative
+  /// reconciliation push: the model is the authority, the composition is
+  /// over, and pushing is safe again. [composing] is the caller's filtered
+  /// region (sanitized + stale-latch-refused), so the liveness test and
+  /// the shadow agree with the normal path's bookkeeping.
+  void _absorbWhileDiverged(
+    TextEditingValue value,
+    TextRange composing, {
+    required bool composingLive,
+  }) {
+    // Any accepted snapshot closes the pre-push race window, exactly as on
+    // the normal path.
+    _previousShadowText = null;
+    if (composingLive) {
+      _shadow = TextEditingValue(
+        text: value.text,
+        selection: value.selection,
+        composing: composing,
+      );
+      journal.record(
+        'passiveAcknowledge',
+        () => ImeJournal.describeValue(value),
+      );
+      notifyListeners();
+      return;
+    }
+    // live→empty: the engine ended the composition. Arm the commit-key
+    // suppression first (WebKit's commit keydown may still be in flight
+    // behind this snapshot — the same ordering as the normal path), then
+    // reconcile: shadow acknowledged composing-free so the authoritative
+    // push is legal as a PLAIN push, never a terminate.
+    _passiveDivergence = false;
+    if (_shadowComposing) _armCommitKeySuppression();
+    journal.record('passiveReconcile', () => const {});
+    controller.imeSetComposing(null);
+    _shadow = TextEditingValue(
+      text: value.text,
+      selection: value.selection,
+      composing: TextRange.empty,
+    );
+    _pushAuthoritativeWindow();
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1558,11 +1640,16 @@ class ImeService extends ChangeNotifier
   ///   lies WITHIN the composing region — WebKit's transient
   ///   marked-text-selected report: adopt the engine's selection into the
   ///   model ([_adoptComposingSelection]) and keep the composition live.
-  /// - Divergent with live composing — the G10 split: route through
-  ///   `terminateComposition('structuralDelta')`.
+  /// - Divergent with live composing — the G10 split: on the DELTA frontend
+  ///   route through `terminateComposition('structuralDelta')`; on the diff
+  ///   frontend ABSORB instead ([_absorbComposingDivergence] — the web
+  ///   engine cannot re-mark text, so a mid-composition push of any kind is
+  ///   the #1641 corruption; §web fallback passive-while-composing).
   /// - Composing empty: run the input rules (immediately with this batch's
   ///   edited range, or latch-fire on a composition commit), then push iff
-  ///   anything diverged.
+  ///   anything diverged — for the diff frontend this composing-empty push
+  ///   IS the reconcile-at-composition-end point: divergence accumulated
+  ///   during a passive window converges here, when pushing is safe.
   void _finishBatch({
     required String? editedBlockId,
     required TextRange? editedRange,
@@ -1594,7 +1681,23 @@ class ImeService extends ChangeNotifier
         // The window diverged from the shadow (split moved it to a new
         // block, G1 merged across the sentinel) — or the composing region
         // no longer maps into one block, or the selection escaped the
-        // composing region. Terminating is the ONLY legal way to push here.
+        // composing region.
+        if (frontend == ImeFrontend.nonDeltaDiff) {
+          // Passive-while-composing (§web fallback): a snapshot-shaped
+          // surprise must not write to the browser mid-composition —
+          // absorb one-way or defer reconciliation to composition end.
+          _absorbComposingDivergence(
+            shadow,
+            window,
+            textConverged: textConverged,
+            mapped: mapped,
+            editedBlockId: editedBlockId,
+          );
+          return;
+        }
+        // Delta frontend: terminating is the ONLY legal way to push here
+        // (the G10 divergence rule — its ordering guarantees differ, and
+        // the cross-block composing type-over trace depends on it).
         terminateComposition('structuralDelta');
         return;
       }
@@ -1691,6 +1794,68 @@ class ImeService extends ChangeNotifier
       },
     );
     return true;
+  }
+
+  /// The diff frontend's mid-composition divergence absorption
+  /// (passive-while-composing, §web fallback). Every web IME corruption
+  /// this consolidates traces to one seam: writing to the browser while it
+  /// owns a live composition — the web engine cannot re-mark text, so a
+  /// `setEditingState` mid-composition (the old
+  /// `terminateComposition('structuralDelta')` reaction included) destroys
+  /// the IME's marked region while its internal buffer continues
+  /// (duplication, premature commits — the captured `nににhにほ…`
+  /// accumulation; v2 was immune by construction because it never synced to
+  /// the platform during composition). So a snapshot shape the delta
+  /// frontend would terminate on is absorbed instead:
+  ///
+  /// - Text converged and the composing region maps, only the selection
+  ///   diverged (outside the marked text, so [_adoptComposingSelection]
+  ///   declined): adopt the engine's selection one-way into the model and
+  ///   keep the composition — the engine knows where its own caret is, and
+  ///   nothing structural happened.
+  /// - Anything else (text structurally diverged, composing unmappable —
+  ///   should be impossible from a browser, guarded anyway): defer — arm
+  ///   [_passiveDivergence]; the model keeps this batch's one-way
+  ///   application and the existing ComposingState (the hardware-key gate
+  ///   stays closed: the browser genuinely still composes), later snapshots
+  ///   acknowledge into the shadow only, and the composition-ending
+  ///   snapshot runs the one authoritative reconciliation push
+  ///   ([_absorbWhileDiverged]). The G3 latch clears — its invalidation
+  ///   rule already covers "structurally changed before the composition
+  ///   ends".
+  void _absorbComposingDivergence(
+    TextEditingValue shadow,
+    ImeWindow window, {
+    required bool textConverged,
+    required ComposingState? mapped,
+    required String? editedBlockId,
+  }) {
+    if (textConverged && mapped != null) {
+      final adopted = _mapBufferSelection(window, shadow.selection);
+      if (adopted != null) {
+        controller.imeSetSelection(adopted);
+        controller.imeSetComposing(mapped);
+        // Same latch rule as the convergent path: only an edit-bearing
+        // batch arms it (G3 — rules deferred, not dropped).
+        if (editedBlockId != null) {
+          _rulesLatch = (blockId: mapped.blockId, range: mapped.range);
+        }
+        journal.record(
+          'passiveSelectionAbsorbed',
+          () => {
+            'sel': [shadow.selection.baseOffset, shadow.selection.extentOffset],
+            'composing': ImeJournal.describeRange(shadow.composing),
+          },
+        );
+        return;
+      }
+    }
+    _passiveDivergence = true;
+    _rulesLatch = null;
+    journal.record(
+      'passiveDivergence',
+      () => {'textConverged': textConverged, 'composingMapped': mapped != null},
+    );
   }
 
   /// Drops the remainder of the batch and re-pushes the authoritative

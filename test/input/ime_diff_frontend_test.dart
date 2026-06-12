@@ -1163,14 +1163,24 @@ void main() {
       expect(connection().pushed.length, pushesBefore);
     });
 
-    test('the structural rule still fires when the selection ESCAPES the '
-        'composing region (text converged, selection outside the marked '
-        'text is NOT the WebKit transient)', () {
+    test('a selection ESCAPING the composing region (text converged) is '
+        'absorbed, not terminated: the engine selection is adopted one-way '
+        'and the composition survives — the diff frontend is passive while '
+        'the browser owns a live composition (§web fallback)', () {
+      // Adjudication note: this fixture previously asserted
+      // terminateComposition('structuralDelta') — the delta frontend's G10
+      // divergence rule applied reactively to a snapshot. Under the
+      // passive-while-composing invariant a snapshot-shaped surprise must
+      // never write to the browser mid-composition (the engine cannot
+      // re-mark text; the viaTerminate push IS the #1641 corruption), so
+      // the shape is absorbed instead. The delta frontend keeps the
+      // terminating rule (ime_service_test §structural-while-composing).
       build([para('a', 'abc')], selection: caret('a', 3));
       expect(shadow().text, '. abc');
+      final pushesBefore = connection().pushed.length;
 
       // A composing insertion whose snapshot selection lands outside the
-      // marked range — unexplained mid-composition, the G10 shape.
+      // marked range — unexplained mid-composition.
       service.updateEditingValue(
         const TextEditingValue(
           text: '. abcか',
@@ -1180,9 +1190,142 @@ void main() {
       );
 
       expect(controller.document.blockById('a')!.plainText, 'abcか');
-      expect(service.debugLastTerminateReason, 'structuralDelta');
+      expect(service.debugLastTerminateReason, isNull);
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 3, end: 4)),
+        reason: 'the composition is kept — nothing may de-mark the browser',
+      );
+      expect(
+        controller.selection,
+        DocSelection(
+          base: const DocPosition('a', 0),
+          extent: const DocPosition('a', 2),
+        ),
+        reason: 'the engine selection is honored one-way into the model',
+      );
+      expect(
+        connection().pushed.length,
+        pushesBefore,
+        reason: 'no push of any kind while the composition is live',
+      );
+
+      // The composition still commits normally afterwards.
+      sendValue('. abcか', cursor: 6);
+      expect(controller.composing, isNull);
+      expect(controller.document.blockById('a')!.plainText, 'abcか');
+    });
+  });
+
+  group('passive-while-composing — deferred reconciliation '
+      '(§web fallback)', () {
+    test('an unmappable mid-composition snapshot (structural shape) defers: '
+        'no push, no terminate while the composition lives; the snapshot '
+        'ending the composition runs the ONE authoritative push', () {
+      build([para('a', 'one')], selection: caret('a', 3));
+      sendValue(
+        '. oneか',
+        cursor: 6,
+        composing: const TextRange(start: 5, end: 6),
+      );
+      expect(controller.composing, isNotNull);
+      final pushesBefore = connection().pushed.length;
+
+      // A \n lands mid-composition with the composing region GROWING over
+      // it (should be impossible from a browser composition — guarded
+      // anyway): the split moves the window away from the engine's buffer
+      // and the composing range stops mapping into one block. The old rule
+      // fired terminateComposition('structuralDelta') — a mid-flight push.
+      // (The region must differ from the shadow's: an unchanged region with
+      // an insert at its end is the dead-key append-commit shape, which the
+      // rewrite deliberately owns.)
+      sendValue(
+        '. oneか\nx',
+        cursor: 8,
+        composing: const TextRange(start: 5, end: 8),
+      );
+
+      expect(service.debugLastTerminateReason, isNull);
+      expect(
+        connection().pushed.length,
+        pushesBefore,
+        reason: 'no push while the browser composition is live',
+      );
+      expect(
+        controller.composing,
+        isNotNull,
+        reason: 'the composition is kept — the gate stays closed',
+      );
+      // The snapshot's text applied one-way into the model.
+      final blocks = controller.document.allBlocks;
+      expect(blocks, hasLength(2));
+      expect(blocks[0].plainText, 'oneか');
+      expect(blocks[1].plainText, 'x');
+
+      // While diverged, further composing snapshots acknowledge one-way
+      // into the shadow WITHOUT model application: the window mapping no
+      // longer matches the engine buffer, and mapping through it would
+      // corrupt.
+      sendValue(
+        '. oneか\nxや',
+        cursor: 9,
+        composing: const TextRange(start: 5, end: 9),
+      );
+      expect(connection().pushed.length, pushesBefore);
+      expect(shadow().text, '. oneか\nxや');
+      expect(controller.document.allBlocks[1].plainText, 'x');
+      expect(service.debugLastTerminateReason, isNull);
+
+      // The composition-ending snapshot (live→empty) reconciles: the model
+      // is the authority and the ONE push happens now — after the
+      // composition is over, when pushing is safe.
+      sendValue('. oneか\nxや', cursor: 9);
+
+      expect(controller.composing, isNull);
+      expect(connection().pushed.length, pushesBefore + 1);
+      expect(connection().pushed.last.text, '. x');
+      expect(connection().pushed.last.composing, TextRange.empty);
+      expect(
+        service.debugLastTerminateReason,
+        isNull,
+        reason: 'a reconciliation push, not a termination',
+      );
+    });
+
+    test('deliberate terminations survive the passive window: undo during '
+        'deferred divergence still terminates and pushes', () {
+      build([para('a', 'one')], selection: caret('a', 3));
+      sendValue(
+        '. oneか',
+        cursor: 6,
+        composing: const TextRange(start: 5, end: 6),
+      );
+      // Arm the deferred divergence (the structural shape above).
+      sendValue(
+        '. oneか\nx',
+        cursor: 8,
+        composing: const TextRange(start: 5, end: 8),
+      );
+      expect(service.debugLastTerminateReason, isNull);
+      expect(controller.composing, isNotNull);
+
+      controller.undo();
+
+      expect(service.debugLastTerminateReason, 'undo');
       expect(controller.composing, isNull);
       expect(connection().pushed.last.composing, TextRange.empty);
+
+      // The divergence is resolved by the terminate's authoritative push:
+      // the next composition starts clean (no stale deferral eats it).
+      sendValue(
+        '${shadow().text}に',
+        cursor: shadow().text.length + 1,
+        composing: TextRange(
+          start: shadow().text.length,
+          end: shadow().text.length + 1,
+        ),
+      );
+      expect(controller.composing, isNotNull);
     });
   });
 
