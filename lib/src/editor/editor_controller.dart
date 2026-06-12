@@ -157,6 +157,44 @@ class EditorController extends ChangeNotifier {
     _deleteSelectionNow(sel);
   }
 
+  /// IME backspace — macOS `performSelector('deleteBackward:')`: an editing
+  /// command the platform IME consumed the keystroke for but did not turn
+  /// into text (the dead-key marked-state backspace; the engine forwards it
+  /// because its own text input plugin implements no delete selectors).
+  /// Shares [backspace]'s body, so both input paths are ONE mechanism (G10):
+  /// grapheme delete mid-block, the `backspaceAtStart` policy at offset 0,
+  /// selection delete otherwise.
+  void imeBackspace() {
+    assert(_inEdit && _currentEditIsIme, 'imeBackspace runs inside imeEdit');
+    _backspaceAtSelection();
+  }
+
+  /// IME forward delete — macOS `performSelector('deleteForward:')`
+  /// (Fn+Delete): grapheme delete after the caret within the block; a
+  /// non-collapsed selection deletes. Forward delete at block end (a
+  /// forward merge) needs its own policy consultation and lands with the
+  /// day-10 hardware-key matrix — it no-ops here until then.
+  void imeDeleteForward() {
+    assert(
+      _inEdit && _currentEditIsIme,
+      'imeDeleteForward runs inside imeEdit',
+    );
+    final sel = _selection;
+    if (sel == null) return;
+    if (!sel.isCollapsed) {
+      _deleteSelectionNow(sel);
+      return;
+    }
+    final caret = sel.extent;
+    final block = _document.blockById(caret.blockId);
+    if (block == null || schema.isVoid(block.blockType)) return;
+    if (caret.offset >= block.length) return;
+    final length = _graphemeLengthAfter(block.plainText, caret.offset);
+    _applyBatch([
+      DeleteText(caret.blockId, caret.offset, length),
+    ], selectionAfter: (_) => DocSelection.collapsed(caret));
+  }
+
   /// G1: a deletion delta intersecting the sentinel maps to "structural
   /// backspace at block start" — the block type's declared `backspaceAtStart`
   /// policy, the same path hardware backspace consults.
@@ -611,7 +649,15 @@ class EditorController extends ChangeNotifier {
   /// block — where a previous *void* block consults its `voidBackspace`
   /// policy instead (select it, or delete it immediately).
   void backspace() {
-    _edit(() {
+    _edit(_backspaceAtSelection);
+  }
+
+  /// [backspace]'s body — also the IME verb for macOS `deleteBackward:`
+  /// commands ([imeBackspace]), so hardware and IME backspace stay one
+  /// mechanism (G10).
+  void _backspaceAtSelection() {
+    assert(_inEdit);
+    {
       final sel = _selection;
       if (sel == null) return;
       if (!sel.isCollapsed) {
@@ -636,7 +682,7 @@ class EditorController extends ChangeNotifier {
       }
 
       _structuralBackspace(block);
-    });
+    }
   }
 
   /// Length in code units of the grapheme cluster ending at [offset].

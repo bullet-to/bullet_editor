@@ -949,6 +949,152 @@ void main() {
       });
     });
 
+    group('macOS performSelector commands (dead-key editing)', () {
+      // Engine contract (FlutterTextInputPlugin.mm): deltas are sent
+      // synchronously over the channel, while `doCommandBySelector:`
+      // batches selectors into a run-loop block — so a keystroke's selector
+      // arrives AFTER its deltas. Backspace during a dead-key marked state
+      // therefore reaches the client as `unmarkText` (a NonTextUpdate with
+      // composing cleared — the underline disappearing) followed by
+      // `performSelector('deleteBackward:')` — the editing command that
+      // must remove the now-committed-looking accent.
+      test("the user's trace: marked ´, engine unmark + deleteBackward: → "
+          'the pending accent is removed and the shadow re-pushes '
+          'consistently', () {
+        build([para('a', '')], selection: caret('a', 0));
+        // Option+E: setMarkedText shape — insertion with composing over it.
+        sendInsertion('´', composing: const TextRange(start: 2, end: 3));
+        expect(controller.document.blockById('a')!.plainText, '´');
+        expect(controller.composing, isNotNull);
+
+        // Backspace deferred to the platform by the composing gate: the
+        // engine ends the dead-key state (unmark — composing clears) ...
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 3));
+        expect(controller.composing, isNull);
+        // ... then forwards the editing command on the next run-loop turn.
+        service.performSelector('deleteBackward:');
+
+        expect(
+          controller.document.blockById('a')!.plainText,
+          '',
+          reason:
+              'native dead-key backspace removes the pending accent '
+              'entirely (TextEdit/Safari behavior)',
+        );
+        expect(controller.composing, isNull);
+        expect(shadow().text, '. ');
+        expect(shadow().selection, const TextSelection.collapsed(offset: 2));
+        expect(
+          connection().pushed.last.text,
+          '. ',
+          reason: 'no delta accompanies a selector — the window re-pushes',
+        );
+      });
+
+      test('after that recovery a fresh Option+E composition marks and '
+          'commits é (the commit-shaped quarantine stays intact)', () {
+        build([para('a', '')], selection: caret('a', 0));
+        sendInsertion('´', composing: const TextRange(start: 2, end: 3));
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 3));
+        service.performSelector('deleteBackward:');
+        expect(controller.document.blockById('a')!.plainText, '');
+
+        // Second Option+E: fresh marked text at the same buffer offset.
+        sendInsertion('´', at: 2, composing: const TextRange(start: 2, end: 3));
+        expect(
+          controller.document.blockById('a')!.plainText,
+          '´',
+          reason: 'a fresh dead-key composition must not be quarantined',
+        );
+        expect(controller.composing, isNotNull);
+
+        // E: the IME replaces the marked range with the composed é, commit.
+        sendReplacement(const TextRange(start: 2, end: 3), 'é');
+        expect(controller.document.blockById('a')!.plainText, 'é');
+        expect(controller.composing, isNull);
+      });
+
+      test('deleteBackward: with the composition still live removes the '
+          'composed text and terminates through the choke point', () {
+        build([para('a', '')], selection: caret('a', 0));
+        sendInsertion('´', composing: const TextRange(start: 2, end: 3));
+        expect(controller.composing, isNotNull);
+
+        // No unmark preceded the command (orderings vary by IME): the
+        // deletion must remove the composed text and terminate cleanly.
+        service.performSelector('deleteBackward:');
+
+        expect(controller.document.blockById('a')!.plainText, '');
+        expect(controller.composing, isNull);
+        expect(service.debugLastTerminateReason, 'performSelector');
+        expect(shadow().text, '. ');
+
+        // Fresh dead-key composition still lands (the quarantine matches
+        // commit-shaped insertions only — 12af098's narrowing) and commits.
+        sendInsertion('´', at: 2, composing: const TextRange(start: 2, end: 3));
+        expect(controller.document.blockById('a')!.plainText, '´');
+        sendReplacement(const TextRange(start: 2, end: 3), 'é');
+        expect(controller.document.blockById('a')!.plainText, 'é');
+        expect(controller.composing, isNull);
+      });
+
+      test('deleteBackward: outside composition is a plain backspace — at '
+          'block start it merges per the controller semantics', () {
+        build([para('a', 'one'), para('b', 'two')], selection: caret('b', 0));
+
+        service.performSelector('deleteBackward:');
+
+        expect(controller.document.allBlocks, hasLength(1));
+        expect(controller.document.blockById('a')!.plainText, 'onetwo');
+        expect(controller.selection, caret('a', 3));
+        expect(shadow().text, '. onetwo');
+      });
+
+      test('deleteBackward: outside composition deletes a whole grapheme '
+          'cluster', () {
+        build([para('a', 'a👍')], selection: caret('a', 3));
+
+        service.performSelector('deleteBackward:');
+
+        expect(controller.document.blockById('a')!.plainText, 'a');
+        expect(controller.selection, caret('a', 1));
+        expect(shadow().text, '. a');
+      });
+
+      test('deleteForward: deletes the grapheme cluster after the caret', () {
+        build([para('a', 'a👍b')], selection: caret('a', 1));
+
+        service.performSelector('deleteForward:');
+
+        expect(controller.document.blockById('a')!.plainText, 'ab');
+        expect(controller.selection, caret('a', 1));
+      });
+
+      test(r'insertNewline: maps to the Enter path — unreachable in practice '
+          r'(the engine intercepts it and reports Enter as a \n delta + '
+          'performAction), mapped so the contract is recorded', () {
+        build([para('a', 'ab')], selection: caret('a', 1));
+
+        service.performSelector('insertNewline:');
+
+        expect(controller.document.allBlocks, hasLength(2));
+        expect(controller.document.blockById('a')!.plainText, 'a');
+      });
+
+      test('an unknown selector is a safe no-op with an inspector note '
+          '(the full selector matrix is day-10 hardware-keys work)', () {
+        build([para('a', 'ab')], selection: caret('a', 2));
+        final pushes = connection().pushed.length;
+
+        service.performSelector('moveLeft:');
+
+        expect(controller.document.blockById('a')!.plainText, 'ab');
+        expect(controller.selection, caret('a', 2));
+        expect(connection().pushed.length, pushes, reason: 'nothing pushed');
+        expect(service.debugLastUnhandledSelector, 'moveLeft:');
+      });
+    });
+
     group('structural-while-composing divergence rule (G10 refined)', () {
       test('cross-block composing type-over trace: select across two blocks, '
           'type "ki" via composing replacements → merged block carries き '

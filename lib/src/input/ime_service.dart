@@ -417,6 +417,8 @@ class ImeService extends ChangeNotifier
   List<TextEditingDelta>? debugLastDeltas;
   String? debugLastTerminateReason;
   String? debugLastDropReason;
+  String? debugLastSelector;
+  String? debugLastUnhandledSelector;
   bool get debugQuarantineArmed => _quarantine != null;
   ({String text, int offset})? get debugQuarantine => _quarantine;
 
@@ -637,6 +639,95 @@ class ImeService extends ChangeNotifier
     });
     _scheduleGeometryReport();
     notifyListeners();
+  }
+
+  /// macOS editing commands (`TextInputClient.performSelector` — the
+  /// macOS-only `NSStandardKeyBindingResponding` path). AppKit delivers a
+  /// keystroke the IME consumed but did not turn into text as
+  /// `doCommandBySelector:`; the engine forwards every selector its text
+  /// input plugin doesn't implement itself to the framework
+  /// (`FlutterTextInputPlugin.mm`, `TextInputClient.performSelectors`).
+  /// Two verified engine contracts shape this handler:
+  ///
+  /// - **Ordering**: deltas are sent over the channel synchronously, but
+  ///   selectors are batched into a run-loop block — a keystroke's selector
+  ///   always arrives AFTER its deltas. Backspace during a dead-key marked
+  ///   state therefore reaches us as `unmarkText` (a NonTextUpdate clearing
+  ///   composing — the underline disappearing) followed by
+  ///   `deleteBackward:`; by the time the selector lands, the marked `´`
+  ///   reads as committed text and the command is a plain backspace. The
+  ///   still-composing ordering is handled anyway (IME behaviors vary): the
+  ///   composed text is removed and the composition terminates through
+  ///   `terminateComposition('performSelector')` — the spec's reason set
+  ///   gains "the platform ended the composition with an editing command".
+  /// - **`insertNewline:` never actually arrives**: the engine intercepts
+  ///   it in `doCommandBySelector:` and reports Enter as an
+  ///   insertText `"\n"` delta plus `performAction(newline)` instead. It is
+  ///   mapped here anyway so the finding is recorded executable-side.
+  ///
+  /// Only what dead-key editing needs is implemented — the full selector
+  /// matrix (`intentForMacOSSelector`'s table: moves, word deletes,
+  /// scrolls) is day-10 hardware-keys work. Unknown selectors are a safe
+  /// no-op with an inspector note (pane 3), never an assert.
+  @override
+  void performSelector(String selectorName) {
+    debugLastSelector = selectorName;
+    if (_connection == null || _shadow == null) {
+      notifyListeners();
+      return;
+    }
+    switch (selectorName) {
+      case 'deleteBackward:':
+        _selectorDeleteBackward();
+      case 'deleteForward:':
+        _applySelectorVerb(controller.imeDeleteForward);
+      case 'insertNewline:':
+        _applySelectorVerb(controller.imeInsertNewline);
+      default:
+        debugLastUnhandledSelector = selectorName;
+    }
+    notifyListeners();
+  }
+
+  /// `deleteBackward:`'s two orderings relative to the composing state:
+  /// already unmarked (the verified macOS dead-key trace) → a plain
+  /// backspace; still composing → the pending composed text is removed and
+  /// the composition terminates through the choke point (native dead-key
+  /// backspace removes the pending accent entirely).
+  void _selectorDeleteBackward() {
+    final composing = controller.composing;
+    if (composing == null && !_shadowComposing) {
+      _applySelectorVerb(controller.imeBackspace);
+      return;
+    }
+    controller.imeEdit(() {
+      if (composing != null) {
+        controller.imeSetSelection(
+          DocSelection(
+            base: DocPosition(composing.blockId, composing.range.start),
+            extent: DocPosition(composing.blockId, composing.range.end),
+          ),
+        );
+        controller.imeDeleteSelection();
+      } else {
+        // Shadow-only composition (never mapped block-locally): a plain
+        // backspace, then the terminate resyncs the engine.
+        controller.imeBackspace();
+      }
+    });
+    terminateComposition('performSelector');
+  }
+
+  /// Applies one selector-mapped controller verb as an IME edit. No delta
+  /// accompanies a selector, so [performAction]'s reconciliation applies:
+  /// re-serialize and push iff diverged — through the choke point when the
+  /// shadow reports a live composition.
+  void _applySelectorVerb(void Function() verb) {
+    controller.imeEdit(() {
+      verb();
+      _finishBatch(editedBlockId: null, editedRange: null);
+    });
+    _scheduleGeometryReport();
   }
 
   @override

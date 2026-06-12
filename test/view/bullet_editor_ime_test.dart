@@ -267,6 +267,68 @@ void main() {
       expect(controller.composing, isNull);
     });
 
+    testWidgets('backspace during a dead-key marked state: the gate defers '
+        'the key, the engine unmarks and forwards deleteBackward: — the '
+        'pending accent is removed entirely', (tester) async {
+      await pumpEditor(tester, [para('a', '')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Option+E: the IME marks ´.
+      sendInsertion(tester, '´', composing: const TextRange(start: 2, end: 3));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+
+      // The composing gate defers backspace to the platform IME ...
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isFalse);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+
+      // ... and macOS ends the dead-key state: unmark first (deltas are
+      // sent synchronously), then the editing command (selectors are
+      // batched to the next run-loop turn) — the verified engine ordering.
+      final shadow = ime.currentTextEditingValue!;
+      ime.updateEditingValueWithDeltas([
+        TextEditingDeltaNonTextUpdate(
+          oldText: shadow.text,
+          selection: shadow.selection,
+          composing: TextRange.empty,
+        ),
+      ]);
+      ime.performSelector('deleteBackward:');
+      await tester.pump();
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        '',
+        reason: 'native dead-key backspace removes the pending accent',
+      );
+      expect(controller.composing, isNull);
+
+      // Recovery: a fresh Option+E marks and E commits é.
+      sendInsertion(
+        tester,
+        '´',
+        at: 2,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, '´');
+      final shadow2 = ime.currentTextEditingValue!;
+      ime.updateEditingValueWithDeltas([
+        TextEditingDeltaReplacement(
+          oldText: shadow2.text,
+          replacedRange: const TextRange(start: 2, end: 3),
+          replacementText: 'é',
+          selection: const TextSelection.collapsed(offset: 3),
+          composing: TextRange.empty,
+        ),
+      ]);
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+    });
+
     testWidgets('the composing gate defers Enter and Tab to the IME while '
         'marked text exists, and releases them when it clears', (tester) async {
       await pumpEditor(tester, [para('a', 'ab')]);

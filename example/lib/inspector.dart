@@ -352,7 +352,9 @@ class _ImePane extends StatelessWidget {
             Text(
               'last reason: ${ime.debugLastTerminateReason ?? '—'}\n'
               'last drop:   ${ime.debugLastDropReason ?? '—'}\n'
-              'quarantine:  ${ime.debugQuarantineArmed ? ime.debugQuarantine : 'disarmed'}',
+              'quarantine:  ${ime.debugQuarantineArmed ? ime.debugQuarantine : 'disarmed'}\n'
+              'selector:    ${ime.debugLastSelector ?? '—'}'
+              '${ime.debugLastUnhandledSelector == null ? '' : '\nunhandled:   ${ime.debugLastUnhandledSelector} (day-10 matrix)'}',
               style: mono,
             ),
           ],
