@@ -213,6 +213,28 @@ class BulletEditorState extends State<BulletEditor> {
       return KeyEventResult.ignored;
     }
 
+    // The minimal composing gate — day-10 work pulled forward (the full
+    // matrix over ALL editing/navigation handlers still lands day 10).
+    // While a composition is live the editing keys belong to the IME: on
+    // macOS the text input plugin is a SECONDARY key responder, so a key
+    // event the framework marks handled never reaches NSTextInputContext —
+    // handling backspace here while marked text exists both starves the IME
+    // of the keystroke it must consume (a dead key's marked-text removal)
+    // and edits the document out from under the live composition
+    // (terminateComposition → quarantine armed → the re-typed accent's
+    // signature). Returning ignored lets the platform IME consume the key
+    // and report the resulting edit as a delta. Undo deliberately stays
+    // above this gate: it is a first-class composition terminator (G7).
+    if (controller.composing != null) {
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.enter ||
+            LogicalKeyboardKey.numpadEnter ||
+            LogicalKeyboardKey.backspace ||
+            LogicalKeyboardKey.tab:
+          return KeyEventResult.ignored;
+      }
+    }
+
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
         controller.insertNewline();

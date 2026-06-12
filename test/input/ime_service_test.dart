@@ -877,6 +877,78 @@ void main() {
       });
     });
 
+    group('macOS dead-key recomposition (quarantine narrowed to commits)', () {
+      // Platform ordering (macOS embedder): the framework receives the
+      // hardware KeyDownEvent FIRST; FlutterTextInputPlugin is a SECONDARY
+      // key responder, so a framework-handled key never reaches
+      // NSTextInputContext and produces no delta. Pre-day-10-gate, our
+      // unconditional hardware backspace therefore edits the document out
+      // from under a live composition — a non-IME edit mid-composition →
+      // terminateComposition('externalEdit') → quarantine armed with the
+      // marked text and the pushed caret. The NEXT Option+E re-marks the
+      // same accent at the same offset: the quarantine signature exactly,
+      // but arriving as fresh MARKED text (live composing region), which a
+      // commit-echo never carries.
+      test('dead-key trace: compose ´, hardware backspace mid-composition, '
+          'compose ´ again → the re-typed accent lands and E commits é', () {
+        build([para('a', '')], selection: caret('a', 0));
+        // Option+E: setMarkedText shape — insertion with composing over it.
+        sendInsertion('´', composing: const TextRange(start: 2, end: 3));
+        expect(controller.document.blockById('a')!.plainText, '´');
+        expect(controller.composing, isNotNull);
+
+        // Hardware backspace handled by the framework (no composing gate):
+        // the IME never sees the key — no marked-text-removal delta — and
+        // the controller edit terminates the composition.
+        controller.backspace();
+        expect(controller.document.blockById('a')!.plainText, '');
+        expect(service.debugLastTerminateReason, 'externalEdit');
+        expect(service.debugQuarantine, (text: '´', offset: 2));
+
+        // Second Option+E: fresh marked text, same text, same offset. NOT
+        // an echo — a commit echo arrives with empty composing.
+        sendInsertion('´', at: 2, composing: const TextRange(start: 2, end: 3));
+        expect(
+          controller.document.blockById('a')!.plainText,
+          '´',
+          reason:
+              'a re-typed dead-key accent is genuine marked text, not the '
+              'post-terminate commit echo — it must not be quarantined',
+        );
+        expect(controller.composing, isNotNull);
+
+        // E: the IME replaces the marked range with the composed é, commit.
+        sendReplacement(const TextRange(start: 2, end: 3), 'é');
+        expect(controller.document.blockById('a')!.plainText, 'é');
+        expect(controller.composing, isNull);
+      });
+
+      test('a commit-shaped insertion matching the signature is still the '
+          'echo and is dropped; the editor recovers on the next keystrokes '
+          '(plain char AND a fresh dead-key composition)', () {
+        build([para('a', '')], selection: caret('a', 0));
+        sendInsertion('´', composing: const TextRange(start: 2, end: 3));
+        controller.backspace(); // terminate('externalEdit'), quarantine armed
+
+        // Same signature WITHOUT composing semantics: the analyzed echo
+        // pathology (an IME committing held text against the fresh push).
+        sendInsertion('´', at: 2);
+        expect(controller.document.blockById('a')!.plainText, '');
+        expect(service.debugLastDropReason, 'echoQuarantine');
+        expect(service.debugQuarantineArmed, isFalse, reason: 'one batch');
+
+        // Recovery: the next plain keystroke lands...
+        sendInsertion('x', at: 2);
+        expect(controller.document.blockById('a')!.plainText, 'x');
+
+        // ...and a fresh dead-key composition marks and commits normally.
+        sendInsertion('´', at: 3, composing: const TextRange(start: 3, end: 4));
+        sendReplacement(const TextRange(start: 3, end: 4), 'é');
+        expect(controller.document.blockById('a')!.plainText, 'xé');
+        expect(controller.composing, isNull);
+      });
+    });
+
     group('structural-while-composing divergence rule (G10 refined)', () {
       test('cross-block composing type-over trace: select across two blocks, '
           'type "ki" via composing replacements → merged block carries き '

@@ -197,6 +197,116 @@ void main() {
     });
   });
 
+  group('macOS dead-key trace (hardware keys racing the composition)', () {
+    // macOS key dispatch contract this trace models: the framework receives
+    // the hardware KeyDownEvent FIRST, and FlutterTextInputPlugin is a
+    // SECONDARY responder — NSTextInputContext (the IME) only processes a
+    // key the framework reports unhandled, and only then emits deltas. The
+    // test honors that contract literally: the marked-text-removal delta is
+    // delivered iff the framework did NOT handle the backspace key.
+    testWidgets('compose ´ (Option+E) → backspace → compose ´ again → E '
+        'commits é: the second accent must not vanish', (tester) async {
+      await pumpEditor(tester, [para('a', '')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Option+E: keyE is ignored by _onKeyEvent; the IME marks ´.
+      sendInsertion(tester, '´', composing: const TextRange(start: 2, end: 3));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+
+      // Backspace while marked text exists. If the framework handles it,
+      // the IME is starved (no delta); if it ignores it, macOS consumes the
+      // key and reports the marked-text removal as a deletion delta.
+      final handled = await simulateKeyDownEvent(LogicalKeyboardKey.backspace);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      if (!handled) {
+        final shadow = ime.currentTextEditingValue!;
+        ime.updateEditingValueWithDeltas([
+          TextEditingDeltaDeletion(
+            oldText: shadow.text,
+            deletedRange: const TextRange(start: 2, end: 3),
+            selection: const TextSelection.collapsed(offset: 2),
+            composing: TextRange.empty,
+          ),
+        ]);
+      }
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, '');
+      expect(controller.composing, isNull);
+
+      // Second Option+E: fresh marked ´ at the same buffer offset.
+      sendInsertion(
+        tester,
+        '´',
+        at: 2,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      await tester.pump();
+      expect(
+        controller.document.blockById('a')!.plainText,
+        '´',
+        reason: 'the re-typed dead-key accent must not be swallowed',
+      );
+
+      // E: the IME replaces the marked range with é and commits.
+      final shadow = ime.currentTextEditingValue!;
+      ime.updateEditingValueWithDeltas([
+        TextEditingDeltaReplacement(
+          oldText: shadow.text,
+          replacedRange: const TextRange(start: 2, end: 3),
+          replacementText: 'é',
+          selection: const TextSelection.collapsed(offset: 3),
+          composing: TextRange.empty,
+        ),
+      ]);
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(richTextContaining('é'), findsOneWidget);
+      expect(controller.composing, isNull);
+    });
+
+    testWidgets('the composing gate defers Enter and Tab to the IME while '
+        'marked text exists, and releases them when it clears', (tester) async {
+      await pumpEditor(tester, [para('a', 'ab')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await tester.pump();
+
+      sendInsertion(tester, 'か', composing: const TextRange(start: 4, end: 5));
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isFalse);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      expect(
+        controller.document.allBlocks,
+        hasLength(1),
+        reason: 'no hardware split mid-composition — the IME owns Enter',
+      );
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.tab), isFalse);
+      await simulateKeyUpEvent(LogicalKeyboardKey.tab);
+
+      // Commit clears the composition; the hardware handlers re-engage.
+      final ime = imeOf(tester);
+      final shadow = ime.currentTextEditingValue!;
+      ime.updateEditingValueWithDeltas([
+        TextEditingDeltaNonTextUpdate(
+          oldText: shadow.text,
+          selection: shadow.selection,
+          composing: TextRange.empty,
+        ),
+      ]);
+      await tester.pump();
+      expect(controller.composing, isNull);
+
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'ab');
+    });
+  });
+
   group('composing underline (G3 visibility)', () {
     final overlayLayer = find.byWidgetPredicate(
       (w) =>

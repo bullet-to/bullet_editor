@@ -397,7 +397,10 @@ class ImeService extends ChangeNotifier
   /// and cleared by any intervening non-terminate push (spec §echo
   /// quarantine: it covers the first batch after the *terminate* push; once
   /// a newer window has been pushed, a matching insertion is genuine input
-  /// against that window, not an echo).
+  /// against that window, not an echo). Matches only COMMIT-shaped
+  /// insertions (empty composing): a matching insertion carrying a live
+  /// composing region is fresh marked text (macOS dead-key recomposition),
+  /// never the held-syllable re-commit the quarantine exists for.
   ({String text, int offset})? _quarantine;
 
   /// The G3 rules latch: insert-pattern rules are deferred, not dropped —
@@ -680,11 +683,21 @@ class ImeService extends ChangeNotifier
       final shadow = _shadow!;
 
       // Post-terminate echo quarantine (G7/G10): an insertion that exactly
-      // re-inserts the terminated composing text at the pushed caret is an
+      // re-COMMITS the terminated composing text at the pushed caret is an
       // engine echo by construction (its oldText matches the fresh shadow,
       // so the stale-delta guard is structurally blind to it). Drop and
-      // re-push — worst case identical to the guard's lost-delta.
+      // re-push — worst case identical to the guard's lost-delta. The
+      // signature requires commit semantics (empty composing): the analyzed
+      // echo pathology is an OEM IME COMMITTING its held syllable against
+      // the fresh push (spec §echo quarantine — undo-mid-Hangul recommit,
+      // post-split head echo). An insertion arriving WITH a live composing
+      // region is new marked text from a fresh composition — a macOS dead
+      // key re-typed at the terminated composition's offset matches the
+      // text+offset signature exactly, and eating it wedges accent input.
+      final composingDelta =
+          delta.composing.isValid && !delta.composing.isCollapsed;
       if (quarantine != null &&
+          !composingDelta &&
           delta is TextEditingDeltaInsertion &&
           delta.textInserted == quarantine.text &&
           delta.insertionOffset == quarantine.offset) {
