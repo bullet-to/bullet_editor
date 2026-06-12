@@ -378,6 +378,7 @@ class ImeService extends ChangeNotifier
     ImeFrontend? frontend,
     ImeConnectionFactory? connectionFactory,
     TextInputConfiguration? configuration,
+    int Function()? monotonicNowMs,
   }) : assert(
          configuration == null ||
              configuration.enableDeltaModel ==
@@ -390,6 +391,7 @@ class ImeService extends ChangeNotifier
          'callback.',
        ),
        frontend = frontend ?? ImeFrontend.platformDefault,
+       _monotonicNowMs = monotonicNowMs ?? _newStopwatchClock(),
        _connectionFactory = connectionFactory ?? _attachRealConnection,
        _configuration =
            configuration ??
@@ -436,6 +438,17 @@ class ImeService extends ChangeNotifier
   final ImeFrontend frontend;
   final ImeConnectionFactory _connectionFactory;
   final TextInputConfiguration _configuration;
+
+  /// Monotonic elapsed-ms clock behind the commit-key suppression window —
+  /// the journal's Stopwatch pattern (wall clocks can step; a window check
+  /// must be monotonic), injectable so tests drive the window
+  /// deterministically. Defaults to a service-lifetime [Stopwatch].
+  final int Function() _monotonicNowMs;
+
+  static int Function() _newStopwatchClock() {
+    final stopwatch = Stopwatch()..start();
+    return () => stopwatch.elapsedMilliseconds;
+  }
 
   /// The geometry reporter — a distinct object with no access to
   /// `setEditingState` (G15). The widget wires its lookups.
@@ -524,6 +537,45 @@ class ImeService extends ChangeNotifier
   /// any non-IME change.
   ({String blockId, TextRange range})? _rulesLatch;
 
+  /// The one-shot commit-key suppression's arming timestamp
+  /// ([_monotonicNowMs] domain; null = disarmed) — the WebKit
+  /// keydown-after-compositionend compensation. Safari fires compositionend
+  /// BEFORE the keydown of the key that ended the composition, so the Enter
+  /// that COMMITS a Japanese conversion reaches the framework as an
+  /// ordinary keydown with `controller.composing` already null — the
+  /// widget's composing gate cannot defer it, and the handled key inserts a
+  /// spurious paragraph (the captured Safari Japanese session: conversion
+  /// display → compositionend reflected → Enter keydown 29 ms later).
+  /// Chrome/Firefox fire the keydown first (keyCode 229, composition still
+  /// live), so the gate covers them there. Prior art: ProseMirror's Safari
+  /// workaround (prosemirror-view `input.ts`: `compositionEndedAt` recorded
+  /// on compositionend, a near-composition keydown — keyCodes 13/27 —
+  /// within 500 ms treated as part of the just-ended composition, the
+  /// timestamp reset once consumed).
+  ///
+  /// Lifecycle: armed by [_armCommitKeySuppression] when an ENGINE-reported
+  /// snapshot ends a live shadow composition (the diff frontend's
+  /// `updateEditingValue` — the delta frontend never arms: on the delta
+  /// platforms the committing keydown precedes the composing-clear and the
+  /// gate already owns it, so arming there would swallow the user's next
+  /// genuine Enter after every commit). NOT armed when WE end the
+  /// composition ([terminateComposition] disarms outright — the engine-side
+  /// fallout of our own terminate is the echo quarantine's territory) nor
+  /// off the dead-key rewrite (its snapshot still carries the live — stale
+  /// — region, so the live→empty transition never matches; the late
+  /// compositionend reflects against an already-empty shadow composing).
+  /// Disarmed by [consumeCommitKeySuppression] (the one-shot), by
+  /// [terminateComposition], and by [detach].
+  int? _commitKeySuppressionArmedAtMs;
+
+  /// Elapsed-ms timestamp of the last Enter keydown the widget's composing
+  /// gate deferred to the IME (null = none) — [noteCommitKeyDeferred]. The
+  /// Chrome/Firefox ordering proof: when the committing keydown reached the
+  /// framework BEFORE the composing-clear, the gate already consumed it, so
+  /// the composition end it produces must not arm the suppression (see
+  /// [_armCommitKeySuppression]).
+  int? _commitKeyDeferredAtMs;
+
   bool get isAttached => _connection != null;
 
   // --- Inspector / debug surface (pane 3) ---
@@ -553,6 +605,13 @@ class ImeService extends ChangeNotifier
   /// The armed stale-composing refusal ([_staleComposingLatch]); null when
   /// disarmed. Only meaningful when [frontend] is [ImeFrontend.nonDeltaDiff].
   TextRange? get debugStaleComposingLatch => _staleComposingLatch;
+
+  /// Whether the commit-key suppression is armed
+  /// ([_commitKeySuppressionArmedAtMs]) — window expiry is checked at
+  /// consumption, not here. Only meaningful when [frontend] is
+  /// [ImeFrontend.nonDeltaDiff] (the delta frontend never arms).
+  bool get debugCommitKeySuppressionArmed =>
+      _commitKeySuppressionArmedAtMs != null;
 
   // --- Lifecycle ---
 
@@ -585,6 +644,8 @@ class ImeService extends ChangeNotifier
     _staleComposingLatch = null;
     _quarantine = null;
     _rulesLatch = null;
+    _commitKeySuppressionArmedAtMs = null;
+    _commitKeyDeferredAtMs = null;
     controller.imeClearComposing();
     notifyListeners();
   }
@@ -676,6 +737,11 @@ class ImeService extends ChangeNotifier
   void terminateComposition(String reason) {
     debugLastTerminateReason = reason;
     _rulesLatch = null; // a stale latch can never fire (G3 invalidation)
+    // The engine did not end this composition — we did. The commit-key
+    // suppression must never arm (or stay armed) off our own terminate: the
+    // engine-side fallout of a terminate push is the echo quarantine's
+    // territory, and an armed one-shot here would swallow a genuine Enter.
+    _commitKeySuppressionArmedAtMs = null;
 
     // Record the quarantine payload BEFORE clearing: the engine-side
     // composed text is what an OEM IME holding internal composition would
@@ -724,6 +790,81 @@ class ImeService extends ChangeNotifier
     _push(value, window, viaTerminate: true);
     _scheduleGeometryReport();
     notifyListeners();
+  }
+
+  // --- The commit-key suppression (Safari's keydown-after-compositionend
+  // ordering — see [_commitKeySuppressionArmedAtMs] for the full story) ---
+
+  /// How long after an engine-reported composition end a hardware Enter
+  /// still reads as the keystroke that COMMITTED it. ProseMirror's number:
+  /// prosemirror-view treats a Safari Enter/Escape keydown within 500 ms of
+  /// `compositionEndedAt` as belonging to the just-ended composition. The
+  /// real gap is tens of milliseconds (29 ms in the captured session); the
+  /// window only bounds how long a stray arm can linger before expiring.
+  static const Duration commitKeySuppressionWindow = Duration(
+    milliseconds: 500,
+  );
+
+  /// The widget's composing gate deferred an Enter to the platform IME —
+  /// the Chrome/Firefox ordering, where the committing keydown reaches the
+  /// framework BEFORE compositionend (keyCode 229, model composition still
+  /// live). Recording it keeps [_armCommitKeySuppression] from arming off
+  /// that key's own composition end: the gate already consumed the commit
+  /// Enter there, and an armed one-shot would swallow the user's next
+  /// genuine Enter (commit the conversion, Enter for a new line — the
+  /// standard Japanese flow).
+  void noteCommitKeyDeferred() {
+    _commitKeyDeferredAtMs = _monotonicNowMs();
+  }
+
+  /// Consults — and disarms — the one-shot commit-key suppression: true iff
+  /// a live composition ended engine-side within
+  /// [commitKeySuppressionWindow] and nothing consumed the arm yet. The
+  /// widget's Enter handler calls this after the composing gate: true means
+  /// the keydown is Safari's post-compositionend commit Enter and must not
+  /// insert a newline. One consult disarms regardless of the verdict
+  /// (ProseMirror's consumed-once-then-reset), so the very next Enter
+  /// behaves normally.
+  bool consumeCommitKeySuppression() {
+    final armedAt = _commitKeySuppressionArmedAtMs;
+    if (armedAt == null) return false;
+    _commitKeySuppressionArmedAtMs = null;
+    final sinceArmedMs = _monotonicNowMs() - armedAt;
+    if (sinceArmedMs > commitKeySuppressionWindow.inMilliseconds) {
+      journal.record(
+        'commitKeySuppressionExpired',
+        () => {'sinceArmedMs': sinceArmedMs},
+      );
+      return false;
+    }
+    journal.record(
+      'commitKeySuppressionConsumed',
+      () => {'sinceArmedMs': sinceArmedMs},
+    );
+    return true;
+  }
+
+  /// Arms the one-shot — called from the diff frontend's snapshot path when
+  /// an accepted engine snapshot ends a live shadow composition (the
+  /// composing-clear that reflects compositionend). Skipped when a
+  /// gate-deferred Enter preceded the clear within the window: that is the
+  /// Chrome/Firefox keydown-first ordering, where the commit key already
+  /// passed through the gate ([noteCommitKeyDeferred]) and no second
+  /// keydown is coming.
+  void _armCommitKeySuppression() {
+    final deferredAt = _commitKeyDeferredAtMs;
+    _commitKeyDeferredAtMs = null;
+    final now = _monotonicNowMs();
+    if (deferredAt != null &&
+        now - deferredAt <= commitKeySuppressionWindow.inMilliseconds) {
+      journal.record(
+        'commitKeySuppressionSkipped',
+        () => const {'reason': 'commitKeyDeferred'},
+      );
+      return;
+    }
+    _commitKeySuppressionArmedAtMs = now;
+    journal.record('commitKeySuppressionArmed', () => const {});
   }
 
   // --- Non-IME changes (the no-echo clauses (a) and (b)) ---
@@ -933,6 +1074,15 @@ class ImeService extends ChangeNotifier
     _previousShadowText = null;
     if (delta == null) return; // pure echo of our own push
     debugLastDeltas = [delta];
+    // An engine snapshot ending a live shadow composition is compositionend
+    // reflected — on WebKit the keydown of the key that ended it (the
+    // commit Enter) is still in flight BEHIND this snapshot, so arm the
+    // one-shot commit-key suppression (see [_commitKeySuppressionArmedAtMs]
+    // for the ordering story and the scoping). Checked against the FILTERED
+    // incoming region, so the dead-key rewrite never matches (its snapshot
+    // still carries the live — stale — range), and armed BEFORE the batch
+    // runs so a terminate the batch itself triggers disarms it.
+    if (_shadowComposing && !composingLive) _armCommitKeySuppression();
     controller.imeEdit(() => _processBatch([delta]));
     if (deadKeyRewrite) {
       // The append-shaped commit was rewritten, so the BROWSER's DOM still

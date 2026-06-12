@@ -62,9 +62,16 @@ class ImeJournalEvent {
 ///   composed text, when any).
 /// - `performAction` / `performSelector` / `selectorUnhandled` — the
 ///   engine's non-delta callbacks.
+/// - `commitKeySuppressionArmed` / `commitKeySuppressionSkipped` /
+///   `commitKeySuppressionConsumed` / `commitKeySuppressionExpired` — the
+///   Safari post-compositionend commit-Enter one-shot's decisions: armed
+///   when an engine snapshot ends a live composition, skipped when a
+///   gate-deferred Enter proved the keydown-first ordering, consumed (or
+///   expired) by the widget's Enter consult.
 /// - `key` — a hardware key event seen by the editor widget (kind, logical
 ///   key label, character, whether the composing gate deferred it, which
-///   handler consumed it or `ignored`).
+///   handler consumed it or `ignored` — `commitEnterSuppressed` names a
+///   swallowed commit Enter).
 ///
 /// Replayable kinds (`snapshot`, `deltas`, `performAction`,
 /// `performSelector`, `key`) reconstruct the inbound side in a unit test —

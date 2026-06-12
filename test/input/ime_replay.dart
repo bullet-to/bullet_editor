@@ -64,7 +64,8 @@ List<Map<String, Object?>> parseImeJournalDump(String dump) => [
 ];
 
 /// Runs the controller verb the widget's key dispatch recorded as `handler`
-/// — keys it ignored or deferred to the IME carry no verb and are skipped.
+/// — keys it ignored or deferred to the IME carry no verb and are skipped,
+/// as is `commitEnterSuppressed` (a swallowed commit Enter ran no verb).
 void _replayKey(EditorController controller, Map<String, Object?> payload) {
   switch (payload['handler']) {
     case 'undo':

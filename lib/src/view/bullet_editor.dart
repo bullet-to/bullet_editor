@@ -285,16 +285,36 @@ class BulletEditorState extends State<BulletEditor> {
     // above this gate: it is a first-class composition terminator (G7).
     if (controller.composing != null) {
       switch (event.logicalKey) {
-        case LogicalKeyboardKey.enter ||
-            LogicalKeyboardKey.numpadEnter ||
-            LogicalKeyboardKey.backspace ||
-            LogicalKeyboardKey.tab:
+        case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
+          // A gate-deferred Enter is noted with the service: it proves the
+          // keydown-first ordering (Chrome/Firefox — keyCode 229 while the
+          // composition is live), so the composing-clear this key produces
+          // must not arm the commit-key suppression below.
+          return (
+            KeyEventResult.ignored,
+            'ignored',
+            true,
+            imeService.noteCommitKeyDeferred,
+          );
+        case LogicalKeyboardKey.backspace || LogicalKeyboardKey.tab:
           return (KeyEventResult.ignored, 'ignored', true, null);
       }
     }
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
+        // Safari fires compositionend BEFORE the keydown of the key that
+        // ended the composition, so the Enter that COMMITS a conversion
+        // arrives here with `controller.composing` already null — past the
+        // gate above. The service's one-shot suppression (ProseMirror's
+        // `compositionEndedAt` precedent) identifies it: swallow it
+        // handled, no newline; the next Enter is genuine (the consult
+        // disarmed it). Escape — ProseMirror's other suppressed key — is
+        // deliberately not consulted: nothing here handles Escape today, so
+        // it falls through ignored either way.
+        if (imeService.consumeCommitKeySuppression()) {
+          return (KeyEventResult.handled, 'commitEnterSuppressed', false, null);
+        }
         return (
           KeyEventResult.handled,
           'insertNewline',

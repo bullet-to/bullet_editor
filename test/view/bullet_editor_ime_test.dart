@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../input/ime_replay.dart';
+
 /// Day 5–7 widget wiring: the IME connection follows focus, engine deltas
 /// reach the document through the editor's [ImeService], the composing
 /// underline renders (G3 visibility), and geometry (editable transform +
@@ -619,6 +621,113 @@ void main() {
             'composition) for a no-op',
       );
       expect(imeOf(tester).isAttached, isTrue);
+    });
+  });
+
+  group("Safari's post-compositionend commit Enter (web diff fallback)", () {
+    // The tail of a REAL journal capture (Safari, Japanese): にほんご was
+    // converted to 日本語 (seq 60), Safari echoed the caret move (seq 69),
+    // and compositionend was reflected as the composing-clear snapshot
+    // (seq 72). 29 ms later the Enter that COMMITTED the conversion reached
+    // the framework as an ordinary keydown — Safari fires compositionend
+    // BEFORE the committing key's keydown (Chrome/Firefox do the opposite,
+    // keyCode 229), so by then `controller.composing` is null and the
+    // composing gate cannot defer it.
+    const captureTail = r'''
+{"seq":60,"ms":9450,"kind":"snapshot","payload":{"text":". 日本語","sel":[2,5],"composing":[2,5]}}
+{"seq":69,"ms":10379,"kind":"snapshot","payload":{"text":". 日本語","sel":[5,5],"composing":[2,5]}}
+{"seq":72,"ms":10379,"kind":"snapshot","payload":{"text":". 日本語","sel":[5,5],"composing":null}}
+''';
+
+    testWidgets('the Enter that commits a conversion is swallowed once — '
+        'no spurious paragraph; the next Enter splits normally', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      replayImeJournal(imeOf(tester), parseImeJournalDump(captureTail));
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, '日本語');
+      expect(controller.composing, isNull, reason: 'compositionend reflected');
+
+      // The commit Enter (the capture's seq 75, 29 ms after the clear):
+      // handled, but NO newline — it already did its job engine-side.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(
+        controller.document.allBlocks,
+        hasLength(1),
+        reason: 'the commit Enter must not also insert a paragraph',
+      );
+      expect(controller.document.blockById('a')!.plainText, '日本語');
+      expect(
+        [
+          for (final e in imeOf(tester).journal.toJson())
+            if (e['kind'] == 'key')
+              ((e['payload']! as Map).cast<String, Object?>())['handler'],
+        ],
+        contains('commitEnterSuppressed'),
+        reason: 'the decision is journaled for future captures',
+      );
+
+      // One-shot: the suppression disarmed on consumption, so the very next
+      // Enter is a genuine split.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(controller.document.allBlocks, hasLength(2));
+      expect(controller.document.allBlocks.first.plainText, '日本語');
+    });
+
+    testWidgets("Chrome's ordering (commit keydown deferred by the gate "
+        'BEFORE compositionend) never arms — the next Enter splits', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Compose か, then the commit Enter: on Chrome the keydown reaches
+      // the framework while the composition is still live, so the gate
+      // defers it to the browser ...
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 3),
+          composing: TextRange(start: 2, end: 3),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isFalse);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+
+      // ... which commits the composition and reflects compositionend.
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 3),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+
+      // The user's quick follow-up Enter (commit-then-new-line, the
+      // standard Japanese flow) is a genuine split — the gate-deferred
+      // commit key already proved the keydown-first ordering, so the
+      // suppression never armed.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(controller.document.allBlocks, hasLength(2));
     });
   });
 
