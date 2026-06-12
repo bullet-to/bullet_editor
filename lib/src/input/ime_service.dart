@@ -38,10 +38,10 @@ abstract interface class ImeGeometryChannel {
   /// view). On web this is the ONLY styling that reaches the engine's
   /// hidden editing element after creation: the engine applies it as CSS
   /// `font` + `text-align` (engine `text_editing.dart`:
-  /// `EditableTextStyle.applyToDomElement`), and without it the element
-  /// keeps the browser's default input font — whose line box does not match
-  /// our rendered text, which is what made Safari's native marked-text
-  /// underline land mid-glyph (see [ImeGeometryReporter]).
+  /// `EditableTextStyle.applyToDomElement`); without it the element keeps
+  /// the browser's default input font, whose DOM caret height — the box
+  /// the browser hangs the IME candidate window off — does not match our
+  /// rendered line (see [ImeGeometryReporter]).
   void setStyle({
     required String? fontFamily,
     required double? fontSize,
@@ -2375,34 +2375,47 @@ class ImeService extends ChangeNotifier
 /// caret/composing geometry (no selection, offscreen block) the editor box
 /// is reported as before — never silence, the engine needs *some* editable.
 ///
+/// **The anchored editable reports a minimal size — 1 logical px wide, one
+/// line tall — never the composing region's real bounds** (the
+/// Monaco/CodeMirror hidden-input pattern: a tiny input AT the caret, not
+/// an input that pretends to BE the text). The web engine's hidden editing
+/// element renders our buffer text invisibly: `color`/`caret-color`/
+/// `background` are forced `transparent` once at element creation (engine
+/// `text_editing.dart`: `_setStaticStyleAttributes` — which also sets
+/// `overflow: hidden` and `white-space: pre-wrap`). Chromium derives its
+/// IME composition underline from the element's computed text color, so it
+/// inherits the transparency and disappears; WebKit paints the underlines
+/// the platform IME attaches to the marked text (per-clause thick/thin,
+/// blue active clause on macOS) with their OWN colors, untouched by any
+/// CSS the engine can set — the entire post-create style surface is
+/// `TextInput.setStyle` = font + alignment, no color, no decoration
+/// control. Making that native line COINCIDE with our rendered text was
+/// tried (day 8) and abandoned: the browser lays the hidden `<textarea>`'s
+/// content out by its own rules (wrapping at the reported width, its own
+/// line boxes), so the blue line wandered as the composition grew — under
+/// に, above にほ, fragmented over にほん (the manual Safari screenshots).
+/// Starving it of area instead is structural: the engine applies the
+/// reported size verbatim as CSS width/height with no clamping or minimum
+/// (`EditableTextGeometry.applyToDomElement`), focus never depends on size
+/// (`focusWithoutScroll`; input still routes through the focused element),
+/// and inside a 1px-wide `overflow: hidden` box WebKit has nowhere to draw
+/// a visible underline — OUR painted composing underline (G3 visibility)
+/// is the single cross-browser one. The height stays one line (the anchor
+/// rect's height) rather than 1px because browsers drop the IME candidate
+/// window below the focused element's caret box: a line-height-tall
+/// element keeps the candidate list below the composed line instead of
+/// over it.
+///
 /// **The reporter also sends `TextInput.setStyle` with the caret block's
-/// resolved font metrics** (the Safari double-underline fix, day 8). The
-/// web engine's hidden editing element renders our buffer text invisibly:
-/// `color`/`caret-color`/`background` are forced `transparent` once at
-/// element creation (engine `text_editing.dart`:
-/// `_setStaticStyleAttributes`). Chromium derives its IME composition
-/// underline from the element's computed text color, so it inherits the
-/// transparency and disappears; WebKit paints the underlines the platform
-/// IME attaches to the marked text (per-clause thick/thin, blue for the
-/// active clause on macOS) with their OWN colors, untouched by CSS `color`
-/// — so on Safari the native decoration is visible over our canvas. It
-/// cannot be hidden from the framework side: the entire style surface the
-/// engine accepts after element creation is `TextInput.setStyle` =
-/// {fontFamily, fontSize, fontWeight, textAlign, textDirection}, applied as
-/// CSS `font` + `text-align` (`EditableTextStyle.fromFrameworkMessage` /
-/// `applyToDomElement`) — no color, no decoration control. What we CAN do
-/// is make the native line land where an underline belongs: the editable is
-/// already anchored at the composing rect (above), and `setStyle` with the
-/// block's real font family/size/weight makes the `<textarea>` the engine
-/// creates for `TextInputType.multiline` (`input_type.dart`:
-/// `MultilineInputType.createDomElement`; `white-space: pre-wrap`,
-/// `padding: 0`, `overflow: hidden`) lay its marked text out with our
-/// metrics, so its baseline — and WebKit's underline under it — coincides
-/// with the rendered glyphs instead of bisecting them (the default input
-/// font's line box is what put the artifact mid-glyph). The painted-
-/// underline half of the fix is the widget's `nativeComposingUnderline`
-/// knob. The style is cached per channel and re-sent only when the
-/// connection or the resolved metrics change.
+/// resolved font metrics.** On web this is the only styling that reaches
+/// the hidden element after creation, applied as CSS `font` + `text-align`
+/// (`EditableTextStyle.fromFrameworkMessage`/`applyToDomElement`). With
+/// the element shrunk to nothing it no longer needs to mirror our line
+/// layout, but the metrics still size the DOM caret the browser anchors
+/// the candidate window's vertical offset to — and they are what keeps a
+/// future element (or a platform that grows a real style consumer)
+/// honest. Cheap and cached: re-sent only when the connection or the
+/// resolved metrics change.
 class ImeGeometryReporter {
   /// The editor's root render box — the coordinate space the per-block
   /// rects are lifted into before anchoring.
@@ -2481,8 +2494,16 @@ class ImeGeometryReporter {
       );
       return;
     }
+    // Minimal size at the anchored position (see the class doc): 1 logical
+    // px wide so WebKit's native marked-text underline has no area to
+    // render in, one line tall so the browser drops the candidate window
+    // below the composed line. The engine applies these verbatim as CSS
+    // width/height (`EditableTextGeometry.applyToDomElement` — no clamping,
+    // no minimum) and nothing in the input path depends on the element's
+    // size: focus is `focusWithoutScroll`, events route through the
+    // focused element regardless of its box.
     channel.setEditableSizeAndTransform(
-      anchor.size,
+      Size(1, anchor.height),
       editorBox.getTransformTo(null)
         ..translateByDouble(anchor.left, anchor.top, 0, 1),
     );

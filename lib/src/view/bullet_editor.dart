@@ -33,7 +33,6 @@ class BulletEditor extends StatefulWidget {
     this.padding,
     this.onLinkTap,
     this.imeFrontend,
-    this.nativeComposingUnderline = false,
   });
 
   final EditorController controller;
@@ -72,34 +71,6 @@ class BulletEditor extends StatefulWidget {
   /// live composition outright — the teardown goes through the service
   /// rebuild, not `terminateComposition`.
   final ImeFrontend? imeFrontend;
-
-  /// Whether the HOST's text input decorates composing (marked) text
-  /// visibly itself, so the editor's own painted underline should yield to
-  /// it while the browser owns a live composition.
-  ///
-  /// The web engine's hidden editing element renders our buffer with
-  /// `color: transparent` (engine `text_editing.dart`:
-  /// `_setStaticStyleAttributes`), but browsers draw their IME marked-text
-  /// underline differently: Chromium derives it from the (transparent) text
-  /// color — invisible — while WebKit paints the IME-supplied underlines
-  /// (per-clause thick/thin, blue active clause) with their own colors,
-  /// which no engine-settable CSS reaches (the engine's entire post-create
-  /// style surface is `TextInput.setStyle` = font + alignment). On Safari
-  /// both underlines therefore show during Japanese composition. Since the
-  /// hidden input is metrics-aligned with the composing text
-  /// ([ImeGeometryReporter]), the native decoration is the strictly richer
-  /// one there (real clause segmentation); setting this true suppresses the
-  /// painted underline while the NON-DELTA DIFF frontend (web) holds a live
-  /// composition — painting resumes the moment the composition ends, and
-  /// the delta frontend (desktop/mobile) always paints regardless.
-  ///
-  /// Defaults to false (paint everywhere): the native visibility is decided
-  /// by the BROWSER's editing painter, not the Flutter engine, so the
-  /// editor cannot determine it without user-agent sniffing — the embedding
-  /// app opts WebKit hosts in. With the default, Safari shows the native
-  /// line over our underline at the same position (coinciding, not
-  /// mid-glyph) — degraded but correct.
-  final bool nativeComposingUnderline;
 
   @override
   State<BulletEditor> createState() => BulletEditorState();
@@ -197,8 +168,8 @@ class BulletEditorState extends State<BulletEditor> {
     // ambient dependencies — MediaQuery's text scaler, DefaultTextStyle,
     // Directionality (the geometry reporter's lookups read them off this
     // context) — so a dependency change must re-report, or the engine's
-    // DOM font goes stale and WebKit's native marked-text underline lands
-    // mid-glyph again. Cheap by construction: the report is post-frame
+    // DOM font (the caret box browsers hang the IME candidate window off)
+    // goes stale. Cheap by construction: the report is post-frame
     // coalesced and setStyle is cached against the resolved style, so an
     // unchanged resolution stays silent.
     imeService.scheduleGeometryReport();
@@ -462,23 +433,12 @@ class BulletEditorState extends State<BulletEditor> {
     final controller = widget.controller;
     final baseStyle = widget.textStyle ?? DefaultTextStyle.of(context).style;
 
-    // The Safari double-underline fix's painted half (see
-    // [BulletEditor.nativeComposingUnderline]): while the browser owns a
-    // live composition behind the web diff frontend AND the host declared
-    // its native marked-text decoration visible (WebKit), the painted
-    // underline yields — the composition itself stays first-class (gates,
-    // geometry, shadow); only the decoration slice is withheld from the
-    // components. The delta frontend always paints (G3 visibility).
-    final suppressPaintedComposing =
-        widget.nativeComposingUnderline &&
-        imeService.frontend == ImeFrontend.nonDeltaDiff;
-
     Widget sliver = BlockListView(
       document: controller.document,
       schema: controller.schema,
       baseStyle: baseStyle,
       selection: controller.selection,
-      composing: suppressPaintedComposing ? null : controller.composing,
+      composing: controller.composing,
       showCaret: _focusNode.hasFocus && !widget.readOnly,
       onLinkTap: widget.onLinkTap,
     );

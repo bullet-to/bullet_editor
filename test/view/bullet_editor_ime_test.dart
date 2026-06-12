@@ -28,7 +28,6 @@ void main() {
     bool readOnly = false,
     bool autofocus = true,
     ImeFrontend? imeFrontend,
-    bool nativeComposingUnderline = false,
   }) async {
     controller = EditorController(
       document: Document(blocks),
@@ -43,7 +42,6 @@ void main() {
             readOnly: readOnly,
             autofocus: autofocus,
             imeFrontend: imeFrontend,
-            nativeComposingUnderline: nativeComposingUnderline,
             textStyle: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
           ),
         ),
@@ -662,13 +660,18 @@ void main() {
         DocSelection.collapsed(const DocPosition('b15', 8)),
       );
       await tester.pump();
-      tester.testTextInput.log.clear();
 
-      // Compose か at the end of 'block 15' (buffer offset 10, sentinel +8).
+      // Compose かな at the end of 'block 15' (buffer offset 10, sentinel
+      // +8), caret AFTER the marked text. The composing anchor stays at the
+      // region's left edge (8 glyphs in) while the caret sits 2 glyphs
+      // further — and the framework's TextInputConnection suppresses
+      // identical size+transform re-sends, so the LAST placement on the
+      // channel proves the anchor: a caret-anchored implementation would
+      // have emitted a fresh call at the caret's x.
       sendInsertion(
         tester,
-        'か',
-        composing: const TextRange(start: 10, end: 11),
+        'かな',
+        composing: const TextRange(start: 10, end: 12),
       );
       await tester.pump(); // the post-frame geometry report
 
@@ -680,21 +683,39 @@ void main() {
       );
       final args = lastSizeAndTransform(tester);
       final transform = (args['transform'] as List).cast<double>();
-      // The composing か spans one 16px glyph after the 8 of 'block 15'.
+      // The composing かな starts after the 8 glyphs of 'block 15'.
       expect(
         transform[12],
         closeTo(blockRect.left + 8 * 16, 1.0),
-        reason: 'x: the hidden input must sit at the composing region',
+        reason:
+            'x: the hidden input must sit at the composing region, not '
+            'the caret (2 glyphs further) and not the editor origin',
       );
       expect(
         transform[13],
         closeTo(blockRect.top, 1.0),
         reason: 'y: the block position, not the editor top-left',
       );
+      // The Monaco/CodeMirror hidden-input shape: position = the composing
+      // region (that places the candidate window), size = nothing visible —
+      // 1 logical px wide, one line tall. WebKit paints its marked-text
+      // underline INSIDE the hidden element, and no font/size matching
+      // keeps the browser's own line layout glued to our rendered text
+      // (the manual Safari finding: the native blue line wandered as the
+      // composition grew), so the element gets no area to draw it in.
+      expect(
+        args['width'] as double,
+        1.0,
+        reason:
+            'a 1px-wide editable leaves WebKit nowhere to paint its '
+            'native marked-text underline',
+      );
       expect(
         args['height'] as double,
-        lessThan(100),
-        reason: 'the editable is the composing region, not the viewport',
+        closeTo(16.0, 1.0),
+        reason:
+            'one line tall: the browser drops the candidate window '
+            "below the element's bottom edge — below the composed line",
       );
     });
 
@@ -734,8 +755,8 @@ void main() {
   });
 
   group("hidden-input metrics (TextInput.setStyle — the engine's editing "
-      'element must use OUR font metrics, or the native marked-text '
-      'decoration Safari paints lands mid-glyph)', () {
+      'element carries OUR font metrics so its DOM caret box, the anchor '
+      "browsers hang the IME candidate window off, matches our line)", () {
     Map<String, dynamic> lastSetStyle(WidgetTester tester) {
       final call = tester.testTextInput.log.lastWhere(
         (c) => c.method == 'TextInput.setStyle',
@@ -822,7 +843,8 @@ void main() {
 
       // The ambient scale changes — no widget field changed, so only a
       // dependency-driven re-report can refresh the engine's DOM font, and
-      // a stale font puts WebKit's native marked-text underline mid-glyph.
+      // a stale font mis-sizes the DOM caret box the candidate window
+      // anchors to.
       await tester.pumpWidget(app(2.0));
       await tester.pump(); // the scheduled post-frame report
 
@@ -856,82 +878,6 @@ void main() {
         methods,
         isNot(contains('TextInput.setStyle')),
         reason: 'same block, same resolved style — nothing to re-send',
-      );
-    });
-  });
-
-  group('native composing underline (the Safari double-underline fix: '
-      'WebKit decorates marked text in the hidden input with the '
-      'IME-supplied underline, which CSS cannot hide — when the host opts '
-      'in, OUR painted underline yields to it while the browser owns the '
-      'composition)', () {
-    final overlayLayer = find.byWidgetPredicate(
-      (w) =>
-          w is CustomPaint &&
-          w.foregroundPainter != null &&
-          w.child is RichText,
-    );
-
-    testWidgets('diff frontend + nativeComposingUnderline: the painted '
-        'underline is suppressed while the composition is live (caret rect '
-        'only)', (tester) async {
-      await pumpEditor(
-        tester,
-        [para('a', '')],
-        imeFrontend: ImeFrontend.nonDeltaDiff,
-        nativeComposingUnderline: true,
-      );
-      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
-      await tester.pump();
-
-      tester.testTextInput.updateEditingValue(
-        const TextEditingValue(
-          text: '. かな',
-          selection: TextSelection.collapsed(offset: 4),
-          composing: TextRange(start: 2, end: 4),
-        ),
-      );
-      await tester.pump();
-
-      // The composition itself stays first-class (gates, geometry, shadow);
-      // only the painted decoration yields to the browser's.
-      expect(
-        controller.composing,
-        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 2)),
-      );
-      expect(
-        tester.renderObject(overlayLayer),
-        isNot(
-          paints
-            ..rect()
-            ..rect(),
-        ),
-        reason: 'no underline rect — the browser owns the decoration',
-      );
-      expect(
-        tester.renderObject(overlayLayer),
-        paints..rect(),
-        reason: 'the caret still paints',
-      );
-    });
-
-    testWidgets('the delta frontend keeps the painted underline even with '
-        'nativeComposingUnderline set — no hidden input is visible off the '
-        'web fallback', (tester) async {
-      await pumpEditor(tester, [para('a', '')], nativeComposingUnderline: true);
-      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
-      await tester.pump();
-
-      sendInsertion(tester, 'かな', composing: const TextRange(start: 2, end: 4));
-      await tester.pump();
-
-      expect(controller.composing, isNotNull);
-      // Two filled rects: the composing underline, then the caret.
-      expect(
-        tester.renderObject(overlayLayer),
-        paints
-          ..rect()
-          ..rect(),
       );
     });
   });
