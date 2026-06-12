@@ -345,7 +345,11 @@ void main() {
 
         expect(controller.document.allBlocks, hasLength(1));
         expect(controller.document.blockById('c')!.plainText, 'a\nb');
-        expect(connection().pushed, hasLength(1), reason: 'convergent — no echo');
+        expect(
+          connection().pushed,
+          hasLength(1),
+          reason: 'convergent — no echo',
+        );
       });
 
       test('Enter on an empty list item converts to the default type', () {
@@ -612,6 +616,62 @@ void main() {
       });
     });
 
+    group('G4: autocorrect replacement racing Enter (mechanical cases)', () {
+      test('case 1: replacement + newline in ONE batch apply sequentially '
+          'against the evolving shadow', () {
+        build([para('a', 'teh')], selection: caret('a', 3));
+
+        sendDeltas([
+          const TextEditingDeltaReplacement(
+            oldText: '. teh',
+            replacedRange: TextRange(start: 2, end: 5),
+            replacementText: 'the',
+            selection: TextSelection.collapsed(offset: 5),
+            composing: TextRange.empty,
+          ),
+          const TextEditingDeltaInsertion(
+            oldText: '. the',
+            textInserted: '\n',
+            insertionOffset: 5,
+            selection: TextSelection.collapsed(offset: 6),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        final blocks = controller.document.allBlocks;
+        expect(blocks, hasLength(2));
+        expect(blocks[0].plainText, 'the', reason: 'split sees corrected text');
+        expect(blocks[1].plainText, '');
+        expect(connection().pushed.last.text, '. ');
+      });
+
+      test('case 3: the action arrives first; the late replacement delta '
+          'references the pre-split buffer and the guard drops it', () {
+        build([para('a', 'teh')], selection: caret('a', 3));
+
+        service.performAction(TextInputAction.newline);
+        expect(controller.document.allBlocks, hasLength(2));
+
+        // The autocorrect replacement lands after the split: its oldText is
+        // the pre-split buffer, not the freshly pushed window.
+        sendDeltas([
+          const TextEditingDeltaReplacement(
+            oldText: '. teh',
+            replacedRange: TextRange(start: 2, end: 5),
+            replacementText: 'the',
+            selection: TextSelection.collapsed(offset: 5),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        // The correction is lost; the document is never corrupted.
+        expect(controller.document.allBlocks[0].plainText, 'teh');
+        expect(controller.document.allBlocks, hasLength(2));
+        expect(service.debugLastDropReason, 'staleDelta');
+        expect(connection().pushed.last.text, '. ');
+      });
+    });
+
     group('terminateComposition choke point', () {
       test('a non-IME edit while composing terminates with externalEdit', () {
         build([para('a', '')], selection: caret('a', 0));
@@ -690,7 +750,11 @@ void main() {
         expect(service.isAttached, isFalse);
         expect(controller.composing, isNull);
         expect(service.debugLastTerminateReason, 'connectionClosed');
-        expect(connection().pushed.length, pushesBefore, reason: 'push skipped');
+        expect(
+          connection().pushed.length,
+          pushesBefore,
+          reason: 'push skipped',
+        );
 
         // The next edit lazily re-attaches and re-serializes.
         controller.insertText('!');
@@ -785,7 +849,11 @@ void main() {
           ),
           reason: 'remapped block-locally into the merged block',
         );
-        expect(connection().pushed.length, pushesBefore, reason: 'sent nothing');
+        expect(
+          connection().pushed.length,
+          pushesBefore,
+          reason: 'sent nothing',
+        );
 
         // Conversion: 'k' → 'き', still composing.
         sendReplacement(
@@ -805,6 +873,29 @@ void main() {
         expect(controller.document.allBlocks, hasLength(2));
         expect(controller.document.blockById('a')!.plainText, 'one');
         expect(controller.document.blockById('b')!.plainText, 'two');
+      });
+
+      test('type-over of a selection spanning a void: one replacement delta '
+          'removes the swept void and merges the text endpoints', () {
+        build([
+          para('a', 'one'),
+          TextBlock(id: 'img', blockType: ImageKeys.type),
+          para('b', 'two'),
+        ]);
+        controller.setSelection(
+          DocSelection(
+            base: const DocPosition('a', 1),
+            extent: const DocPosition('b', 2),
+          ),
+        );
+        expect(shadow().text, '. one\n~\ntwo');
+
+        sendReplacement(const TextRange(start: 3, end: 10), 'k');
+
+        final blocks = controller.document.allBlocks;
+        expect(blocks, hasLength(1));
+        expect(blocks.single.plainText, 'oko');
+        expect(controller.document.blockById('img'), isNull);
       });
     });
 
