@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show Matrix4, MatrixUtils, RenderBox;
 
 import '../editor/editor_controller.dart';
+import '../editor/text_diff.dart';
 import '../model/block.dart';
 import '../model/doc_selection.dart';
 import '../model/document.dart';
@@ -84,6 +85,29 @@ ImeConnection _attachRealConnection(
   TextInputConfiguration configuration,
 ) {
   return _RealImeConnection(TextInput.attach(client, configuration));
+}
+
+/// Which engine frontend feeds the shared IME core (architecture §IME: "one
+/// IME strategy, two frontends, one core"). Both frontends drive the same
+/// shadow-buffer + resolve-at-apply machinery through the same choke point
+/// and are full peers for composing state — every composing-gated mechanism
+/// (underline, G3 latch, hardware-key gate, no-echo comparison) works
+/// identically behind either.
+enum ImeFrontend {
+  /// `TextEditingDelta` batches (`enableDeltaModel: true`) — iOS, Android,
+  /// desktop.
+  delta,
+
+  /// Full [TextEditingValue] snapshots diffed against the shadow buffer
+  /// (`text_diff.dart`, appflowy's `NonDeltaInputService` shape) — web
+  /// engines don't deliver reliable deltas (§IME web fallback). Flippable
+  /// per-platform; also the R1 mitigation for Android OEM delta breakage.
+  nonDeltaDiff;
+
+  /// The per-platform default: web takes the diff fallback, everything else
+  /// the delta model.
+  static ImeFrontend get platformDefault =>
+      kIsWeb ? ImeFrontend.nonDeltaDiff : ImeFrontend.delta;
 }
 
 /// One block's slice of the IME buffer.
@@ -348,10 +372,16 @@ class ImeService extends ChangeNotifier
     with TextInputClient, DeltaTextInputClient {
   ImeService({
     required this.controller,
+    ImeFrontend? frontend,
     ImeConnectionFactory? connectionFactory,
     TextInputConfiguration? configuration,
-  }) : _connectionFactory = connectionFactory ?? _attachRealConnection,
-       _configuration = configuration ?? defaultConfiguration {
+  }) : frontend = frontend ?? ImeFrontend.platformDefault,
+       _connectionFactory = connectionFactory ?? _attachRealConnection,
+       _configuration =
+           configuration ??
+           ((frontend ?? ImeFrontend.platformDefault) == ImeFrontend.delta
+               ? defaultConfiguration
+               : nonDeltaConfiguration) {
     controller.imeExternalChangeHandler = _onExternalChange;
   }
 
@@ -370,7 +400,26 @@ class ImeService extends ChangeNotifier
         textCapitalization: TextCapitalization.sentences,
       );
 
+  /// [defaultConfiguration] minus the delta model — the [ImeFrontend
+  /// .nonDeltaDiff] attach shape: the engine delivers full editing values
+  /// through `updateEditingValue` and the diff frontend synthesizes the
+  /// deltas itself (§IME web fallback).
+  static const TextInputConfiguration nonDeltaConfiguration =
+      TextInputConfiguration(
+        inputType: TextInputType.multiline,
+        inputAction: TextInputAction.newline,
+        enableDeltaModel: false,
+        autocorrect: true,
+        enableSuggestions: true,
+        textCapitalization: TextCapitalization.sentences,
+      );
+
   final EditorController controller;
+
+  /// Which frontend this service was attached as — fixed for the service's
+  /// lifetime (a connection's delta-model declaration cannot change without
+  /// a re-attach; the widget rebuilds the service to flip it).
+  final ImeFrontend frontend;
   final ImeConnectionFactory _connectionFactory;
   final TextInputConfiguration _configuration;
 
@@ -415,6 +464,11 @@ class ImeService extends ChangeNotifier
 
   TextEditingValue? get debugShadow => _shadow;
   List<TextEditingDelta>? debugLastDeltas;
+
+  /// The diff frontend's last `diffTexts` result (null = the incoming value
+  /// carried no text change — the NonTextUpdate analogue or a pure echo).
+  /// Only meaningful when [frontend] is [ImeFrontend.nonDeltaDiff].
+  TextDiff? debugLastDiff;
   String? debugLastTerminateReason;
   String? debugLastDropReason;
   String? debugLastSelector;
@@ -618,11 +672,98 @@ class ImeService extends ChangeNotifier
     notifyListeners();
   }
 
+  /// The non-delta diff frontend (web — architecture §IME web fallback):
+  /// web engines don't deliver reliable `TextEditingDelta`s, so the engine
+  /// sends full [TextEditingValue] snapshots here. Each snapshot is diffed
+  /// against the shadow (`text_diff.dart`, appflowy's `NonDeltaInputService`
+  /// precedent) and the equivalent delta is synthesized and routed through
+  /// the SAME batch path the delta client uses ([_processBatch]) — stale
+  /// guard, echo quarantine, sentinel decomposition (G1), the divergence
+  /// rule, and the composing mapping (−2 shift, block-local, via
+  /// [_finishBatch]) all apply identically; the pipeline is never forked.
+  ///
+  /// A value with unchanged text is the `TextEditingDeltaNonTextUpdate`
+  /// analogue (§NonTextUpdate analogue): acknowledged into the shadow so
+  /// composing-only updates are never echo-pushed, and a composing-cleared
+  /// value is the same G3 latch-fire trigger a `NonTextUpdate` commit is —
+  /// the latch still arms only from batches that changed text. A value
+  /// equal to the shadow in all three of text + selection + composing is
+  /// the engine echoing our own push: acknowledged silently.
+  ///
+  /// The delta frontend declares enableDeltaModel and never receives text
+  /// through this callback; it stays a no-op there.
   @override
   void updateEditingValue(TextEditingValue value) {
-    // Non-delta values arrive only behind the day-8 web diff frontend
-    // (`text_diff.dart` over the same shadow-buffer core); the delta
-    // frontend declares enableDeltaModel and ignores this callback.
+    if (frontend != ImeFrontend.nonDeltaDiff) return;
+    if (_connection == null || _shadow == null) return;
+    final delta = _synthesizeDelta(_shadow!, value);
+    if (delta == null) return; // pure echo of our own push
+    debugLastDeltas = [delta];
+    controller.imeEdit(() => _processBatch([delta]));
+    _scheduleGeometryReport();
+    notifyListeners();
+  }
+
+  /// Diffs [value] against [shadow] and synthesizes the equivalent delta —
+  /// `oldText` is the shadow text by construction (full snapshots are
+  /// diffed against the very state the guard validates), and the incoming
+  /// selection/composing ride along so `delta.apply(shadow)` converges the
+  /// shadow to exactly the engine's value (the acknowledge half of the
+  /// no-echo triple). Returns null when the value matches the shadow in
+  /// text AND selection AND composing.
+  TextEditingDelta? _synthesizeDelta(
+    TextEditingValue shadow,
+    TextEditingValue value,
+  ) {
+    final diff = diffTexts(
+      shadow.text,
+      value.text,
+      cursorOffset: value.selection.isValid
+          ? value.selection.extentOffset
+          : null,
+    );
+    debugLastDiff = diff;
+    if (diff == null) {
+      if (_selectionsEquivalent(value.selection, shadow.selection) &&
+          value.composing == shadow.composing) {
+        return null;
+      }
+      return TextEditingDeltaNonTextUpdate(
+        oldText: shadow.text,
+        selection: value.selection,
+        composing: value.composing,
+      );
+    }
+    if (diff.isInsert) {
+      return TextEditingDeltaInsertion(
+        oldText: shadow.text,
+        textInserted: diff.insertedText,
+        insertionOffset: diff.start,
+        selection: value.selection,
+        composing: value.composing,
+      );
+    }
+    if (diff.isDelete) {
+      return TextEditingDeltaDeletion(
+        oldText: shadow.text,
+        deletedRange: TextRange(
+          start: diff.start,
+          end: diff.start + diff.deletedLength,
+        ),
+        selection: value.selection,
+        composing: value.composing,
+      );
+    }
+    return TextEditingDeltaReplacement(
+      oldText: shadow.text,
+      replacedRange: TextRange(
+        start: diff.start,
+        end: diff.start + diff.deletedLength,
+      ),
+      replacementText: diff.insertedText,
+      selection: value.selection,
+      composing: value.composing,
+    );
   }
 
   @override
