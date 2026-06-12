@@ -868,6 +868,207 @@ void main() {
       expect(controller.document.blockById('a')!.plainText, 'にほ');
     });
 
+    test("the rewrite's follow-up (the stuck-IME Safari bug): the engine's "
+        'composition latch outlives the commit, so post-commit snapshots '
+        'still carry the dead range — refused, never re-armed: the '
+        'underline stays cleared and the next keystrokes land as plain '
+        'inserts, not the é→e replacement', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      // The dead-key commit (the append-shaped fixture's first half).
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+      expect(connection().pushed.last.text, '. é');
+
+      // What Safari sends next (engine source:
+      // composition_aware_mixin.dart): composingText/composingBase reset
+      // ONLY at compositionstart/end, and nothing we push fires a
+      // composition event — so until a real compositionend every
+      // handleChange-driven snapshot still reports the dead (2,3).
+      //
+      // (1) The late append-shaped snapshot (computed before the resync
+      // push reached the DOM) — STILL composing-latched: the stale race
+      // shape. With the dead latch refused it falls to the previous-shadow
+      // drop instead of being applied as fresh marked text.
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'é',
+        reason:
+            'the stale append shape must not resurrect the dead key — '
+            'with or without the latched composing region riding along',
+      );
+      expect(controller.composing, isNull);
+      expect(service.debugLastDropReason, 'staleSnapshot');
+
+      // (2) The resync push's own selectionchange echo: text and selection
+      // match the pushed window exactly, composing still the dead (2,3).
+      // This must NOT synthesize a NonTextUpdate that re-arms
+      // ComposingState over the committed é — the stuck underline.
+      sendValue('. é', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'the composing-only re-arm of a terminated range is refused',
+      );
+      expect(controller.document.blockById('a')!.plainText, 'é');
+
+      // (3) E: a plain insert at the caret, composing STILL latched at the
+      // dead (2,3) — the rewrite must not fire again (the observed é→e
+      // replacement: the user "pressing E replaces the é with a plain e").
+      sendValue(
+        '. ée',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'ée',
+        reason: 'a plain insert, never a second dead-key rewrite',
+      );
+      expect(controller.composing, isNull);
+
+      // (4) Continued typing under the still-latched range keeps working.
+      sendValue(
+        '. ées',
+        cursor: 5,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'ées');
+      expect(controller.composing, isNull);
+
+      // (5) Safari's compositionend corrective (composing finally cleared)
+      // converges silently — and the flow above already converged without
+      // it.
+      final pushesBefore = connection().pushed.length;
+      sendValue('. ées', cursor: 5);
+      expect(controller.document.blockById('a')!.plainText, 'ées');
+      expect(controller.composing, isNull);
+      expect(connection().pushed.length, pushesBefore, reason: 'silent');
+    });
+
+    test('a genuine immediate re-composition is NOT suppressed: Option+E '
+        'right after the commit re-latches the engine base at the caret — '
+        'fresh numbers, a live composition that commits normally', () {
+      build([para('a', '')], selection: caret('a', 0));
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      // The post-commit stale echo (the refusal armed and exercised).
+      sendValue('. é', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.composing, isNull);
+
+      // Option+E again at the caret: compositionstart reset the engine
+      // latch and the new ´ re-latched at base = extent − 1 = 3
+      // (composition_aware_mixin.dart) — a different range, live by
+      // construction.
+      sendValue(
+        '. é´',
+        cursor: 4,
+        composing: const TextRange(start: 3, end: 4),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'é´');
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 1, end: 2)),
+        reason: 'the fresh composition composes — the refusal must not eat it',
+      );
+
+      // The new composition commits through the same append-shaped rewrite.
+      sendValue(
+        '. é´é',
+        cursor: 5,
+        composing: const TextRange(start: 3, end: 4),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'éé');
+      expect(controller.composing, isNull);
+    });
+
+    test('a fresh composition re-latched over the SAME numbers is honored: '
+        'caret placed before the é, Option+E marks a new ´ at (2,3) — a '
+        'text change ending at the caret is a live compositionupdate, not '
+        'the dead latch', () {
+      build([para('a', '')], selection: caret('a', 0));
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'é');
+
+      // Click before the é while the engine latch persists: a
+      // selectionchange snapshot, composing still the dead (2,3) —
+      // refused, the caret still applies.
+      sendValue('. é', cursor: 2, composing: const TextRange(start: 2, end: 3));
+      expect(controller.composing, isNull);
+      expect(controller.selection, caret('a', 0));
+
+      // Option+E at offset 2: compositionstart reset the engine latch and
+      // the new ´ re-latched at base = extent − 1 = 2 — the dead range's
+      // exact numbers, but over a NEW ´ (text changed, region ends at the
+      // caret: the live-compositionupdate shape).
+      sendValue(
+        '. ´é',
+        cursor: 3,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, '´é');
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+        reason: 'same numbers, genuinely fresh — must compose, not suppress',
+      );
+
+      // The new composition commits (the append shape again).
+      sendValue(
+        '. ´éé',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      expect(controller.document.blockById('a')!.plainText, 'éé');
+      expect(controller.composing, isNull);
+    });
+
+    test("Safari's late compositionend corrective (composing cleared, text "
+        'unchanged) converges silently and disarms the refusal', () {
+      build([para('a', '')], selection: caret('a', 0));
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+      // The stale echo first (the refusal is live).
+      sendValue('. é', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.composing, isNull);
+      final pushesBefore = connection().pushed.length;
+
+      // compositionend finally reflects: the composing-cleared echo.
+      sendValue('. é', cursor: 3);
+      expect(controller.document.blockById('a')!.plainText, 'é');
+      expect(controller.composing, isNull);
+      expect(connection().pushed.length, pushesBefore, reason: 'silent');
+
+      // Plain typing continues clean.
+      sendValue('. éx', cursor: 4);
+      expect(controller.document.blockById('a')!.plainText, 'éx');
+    });
+
     test('dead-key double cycle (the day-8 web bug): compose+commit é, '
         'hardware backspace, compose+commit é again — the second commit '
         'lands and plain typing afterwards still works', () {

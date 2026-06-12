@@ -470,6 +470,39 @@ class ImeService extends ChangeNotifier
   /// flavor of the race is the echo quarantine's territory.
   String? _previousShadowText;
 
+  /// The composing range whose composition the dead-key rewrite just
+  /// terminated (null when none) — the diff frontend's refusal of Safari's
+  /// stale composing re-arm, the rewrite's follow-up half. The engine's
+  /// composition bookkeeping (composition_aware_mixin.dart: `composingText`
+  /// held from every compositionupdate, `composingBase ??=` — both reset
+  /// ONLY by compositionstart/compositionend) outlives the commit we
+  /// rewrote: nothing we push fires a composition event, so until a real
+  /// compositionend reaches the engine, every handleChange-driven snapshot
+  /// (the resync push's own selectionchange echo, the user's next plain
+  /// keystrokes) still reports the dead range. Re-armed into the shadow it
+  /// sticks the underline over the committed character, and the very next
+  /// keystroke satisfies [_rewriteDeadKeyCommit]'s guards again and
+  /// replaces the é with a plain e — the "IME status gets stuck" Safari
+  /// bug. v2 was immune by construction: it honored the platform's
+  /// composing only as an is-composing gate and deferred its engine sync to
+  /// the first non-composing frame (v0.1.7, 1abe94b — `_finalizeComposing`),
+  /// never mapping the region into model state; v3's composing-complete
+  /// frontend (§web fallback's full-peer contract) must refuse the dead
+  /// latch explicitly instead — [_filterStaleComposing].
+  ///
+  /// Lifecycle: armed by the dead-key rewrite ([updateEditingValue]'s
+  /// rewrite block); survives every push INCLUDING terminate pushes —
+  /// `setEditingState` cannot reset the browser-side latch, so the refusal
+  /// must outlive anything we send. Disarmed by the first snapshot proving
+  /// the engine latch dead or re-latched: one carrying no composing region
+  /// (the mixin only attaches a region while it holds `composingText`, so
+  /// compositionend finally reflected), one carrying a DIFFERENT range
+  /// (only compositionstart re-latches the base — a new live composition),
+  /// or a composition-shaped report of the same range (the freshness test
+  /// in [_filterStaleComposing]); and by detach/connectionClosed (a fresh
+  /// attach gets a fresh engine strategy, mixin state included).
+  TextRange? _staleComposingLatch;
+
   /// The one-batch echo quarantine (G7/G10): the terminated composing text
   /// and the pushed-window caret it would echo back at. Armed by
   /// [terminateComposition], consumed (disarmed) by the next TEXT-bearing
@@ -508,6 +541,10 @@ class ImeService extends ChangeNotifier
   bool get debugQuarantineArmed => _quarantine != null;
   ({String text, int offset})? get debugQuarantine => _quarantine;
 
+  /// The armed stale-composing refusal ([_staleComposingLatch]); null when
+  /// disarmed. Only meaningful when [frontend] is [ImeFrontend.nonDeltaDiff].
+  TextRange? get debugStaleComposingLatch => _staleComposingLatch;
+
   // --- Lifecycle ---
 
   /// Opens the connection and pushes the current window. Idempotent.
@@ -534,6 +571,7 @@ class ImeService extends ChangeNotifier
     _shadow = null;
     _window = null;
     _previousShadowText = null;
+    _staleComposingLatch = null;
     _quarantine = null;
     _rulesLatch = null;
     controller.imeClearComposing();
@@ -635,10 +673,12 @@ class ImeService extends ChangeNotifier
 
     if (reason == 'connectionClosed' || _connection == null) {
       // Push and re-attach skipped: there is no connection. State clears so
-      // the lazy re-attach starts fresh.
+      // the lazy re-attach starts fresh (a new attach means a new engine
+      // strategy — the stale-composing refusal's engine latch died with it).
       _shadow = null;
       _window = null;
       _previousShadowText = null;
+      _staleComposingLatch = null;
       _quarantine = null;
       notifyListeners();
       return;
@@ -756,7 +796,12 @@ class ImeService extends ChangeNotifier
   ///   no-echo invariant), so every snapshot computed against the replaced
   ///   window was composing-free — a composing match is fresh marked text
   ///   the browser started AFTER the push, and dropping it severs a live
-  ///   browser composition mid-flight.
+  ///   browser composition mid-flight. The one window this reasoning does
+  ///   NOT cover is the dead-key rewrite's own race: the window IT replaced
+  ///   was mid-composition, so its in-flight snapshots can still carry the
+  ///   engine's dead latched range — [_filterStaleComposing] strips exactly
+  ///   that range first, so the exemption only ever sees genuinely live
+  ///   regions.
   ///
   /// The residual post-terminate flavor of the race stays the echo
   /// quarantine's territory, exactly as on the delta path.
@@ -775,16 +820,35 @@ class ImeService extends ChangeNotifier
   void updateEditingValue(TextEditingValue value) {
     if (frontend != ImeFrontend.nonDeltaDiff) return;
     if (_connection == null || _shadow == null) return;
+    final diff = diffTexts(
+      _shadow!.text,
+      value.text,
+      cursorOffset: value.selection.isValid
+          ? value.selection.extentOffset
+          : null,
+    );
+    debugLastDiff = diff;
+    // The incoming composing region passes two filters before anything keys
+    // on it: the sanity boundary ([_sanitizeComposing] — a mis-reported
+    // region is no state worth preserving) and the stale-latch refusal
+    // ([_filterStaleComposing] — the engine re-reporting the range a
+    // dead-key rewrite already terminated is not a composition). The drop
+    // below and the synthesis must agree on the result, so it is computed
+    // once here.
+    final composing = _filterStaleComposing(
+      _sanitizeComposing(value.composing, value.text),
+      diff,
+      value.selection,
+    );
+    final composingLive = composing.isValid && !composing.isCollapsed;
     // The previous-shadow drop (the doc comment's pre-push race): a snapshot
     // shaped like the window the latest push replaced is stale by
     // construction — but only commit-shaped and only while the race window
     // is still open (see the doc comment's scoping). A composing-carrying
     // match is fresh marked text: the replaced window was composing-free
     // (a non-terminate push is illegal mid-composition), so no in-flight
-    // stale snapshot can carry one. Sanitized like the synthesis boundary:
-    // a mis-reported region is no exemption.
-    final composing = _sanitizeComposing(value.composing, value.text);
-    final composingLive = composing.isValid && !composing.isCollapsed;
+    // stale snapshot can carry one — except the dead-key rewrite's own
+    // race, whose stale latched range the filter above already stripped.
     if (value.text != _shadow!.text &&
         value.text == _previousShadowText &&
         !composingLive) {
@@ -793,7 +857,12 @@ class ImeService extends ChangeNotifier
       notifyListeners();
       return;
     }
-    final (:delta, :deadKeyRewrite) = _synthesizeDelta(_shadow!, value);
+    final (:delta, :deadKeyRewrite) = _synthesizeDelta(
+      _shadow!,
+      value,
+      diff: diff,
+      composing: composing,
+    );
     // Any accepted post-push snapshot closes the pre-push race window: the
     // engine is provably working from the pushed window now (the pure echo
     // acknowledges it; synthesized input is diffed against it). Cleared
@@ -824,33 +893,37 @@ class ImeService extends ChangeNotifier
       // so the fix converges identically whether or not the corrective
       // arrives.
       _previousShadowText = value.text;
+      // And arm the stale-composing refusal with the range the rewrite just
+      // terminated (== the snapshot's own region, by the rewrite's guards):
+      // the commit ended the composition only on OUR side — the engine's
+      // latch holds the dead range until a real compositionend, and every
+      // snapshot it decorates until then must not re-arm the underline or
+      // re-enter the rewrite (see [_staleComposingLatch]'s lifecycle).
+      _staleComposingLatch = composing;
     }
     _scheduleGeometryReport();
     notifyListeners();
   }
 
-  /// Diffs [value] against [shadow] and synthesizes the equivalent delta —
+  /// Synthesizes the delta equivalent to [value] arriving over [shadow] —
   /// `oldText` is the shadow text by construction (full snapshots are
   /// diffed against the very state the guard validates), and the incoming
   /// selection/composing ride along so `delta.apply(shadow)` converges the
   /// shadow to exactly the engine's value (the acknowledge half of the
-  /// no-echo triple). `delta` is null when the value matches the shadow in
-  /// text AND selection AND composing; `deadKeyRewrite` reports whether the
-  /// append-shaped dead-key compensation ([_rewriteDeadKeyCommit]) replaced
-  /// the verbatim synthesis — the caller owes the engine a resync push.
+  /// no-echo triple). [diff] and [composing] are the caller's — computed
+  /// once in [updateEditingValue] so the previous-shadow drop and the
+  /// synthesis agree on them ([composing] is already sanitized AND
+  /// stale-latch-filtered). `delta` is null when the value matches the
+  /// shadow in text AND selection AND composing; `deadKeyRewrite` reports
+  /// whether the append-shaped dead-key compensation
+  /// ([_rewriteDeadKeyCommit]) replaced the verbatim synthesis — the caller
+  /// owes the engine a resync push.
   ({TextEditingDelta? delta, bool deadKeyRewrite}) _synthesizeDelta(
     TextEditingValue shadow,
-    TextEditingValue value,
-  ) {
-    final composing = _sanitizeComposing(value.composing, value.text);
-    final diff = diffTexts(
-      shadow.text,
-      value.text,
-      cursorOffset: value.selection.isValid
-          ? value.selection.extentOffset
-          : null,
-    );
-    debugLastDiff = diff;
+    TextEditingValue value, {
+    required TextDiff? diff,
+    required TextRange composing,
+  }) {
     if (diff == null) {
       if (_selectionsEquivalent(value.selection, shadow.selection) &&
           composing == shadow.composing) {
@@ -943,6 +1016,12 @@ class ImeService extends ChangeNotifier
   /// equality guard is the narrowing over v2 (v2 checked only the incoming
   /// region): it additionally keeps a region freshly marked over
   /// pre-existing text from being collapsed by an unrelated insert.
+  ///
+  /// The rewrite terminates the composition only on OUR side — the engine's
+  /// latch keeps reporting this range until a real compositionend, so the
+  /// caller arms [_staleComposingLatch] and [_filterStaleComposing] keeps
+  /// the dead range from re-arming the underline or steering a later plain
+  /// keystroke back into this rule (the follow-up stuck-IME Safari bug).
   TextEditingDelta? _rewriteDeadKeyCommit(
     TextEditingValue shadow,
     TextDiff diff,
@@ -963,6 +1042,57 @@ class ImeService extends ChangeNotifier
       ),
       composing: TextRange.empty,
     );
+  }
+
+  /// Refuses the engine's stale composing re-arm after a dead-key rewrite
+  /// (the rewrite's follow-up half — see [_staleComposingLatch] for the
+  /// mechanism and lifecycle; v2 provenance: 1abe94b's gate-only composing
+  /// never mapped the platform region into model state, so it had nothing
+  /// to refuse). Returns [composing] untouched while disarmed; otherwise:
+  ///
+  /// - No live region incoming ⇒ the engine latch is provably dead (the
+  ///   mixin only decorates snapshots while it holds `composingText`):
+  ///   disarm, pass through — Safari's compositionend corrective converges
+  ///   silently through the ordinary echo path.
+  /// - A DIFFERENT region ⇒ only compositionstart resets the latched base,
+  ///   so different numbers are a fresh latch — a new live composition:
+  ///   disarm, pass through (the immediate Option+E re-composition).
+  /// - The SAME region ⇒ live only if the snapshot is composition-shaped:
+  ///   a compositionupdate always changes text AND reports the region
+  ///   ending at the caret (`composingBase ??= extent − composingText
+  ///   .length` ⇒ end == extent on every live report — kana growth and
+  ///   conversion included). Both honored: disarm, pass through, even at
+  ///   the dead range's exact numbers (a re-latched ´ after the caret moved
+  ///   before the é). Either failing is the dead latch decorating
+  ///   non-composition input — the push-induced selectionchange echo (no
+  ///   text change) or plain typing after the commit (caret beyond the dead
+  ///   range's end): treated as no composition, latch kept armed for the
+  ///   next snapshot. The flow therefore converges whether or not the
+  ///   compositionend corrective ever arrives.
+  TextRange _filterStaleComposing(
+    TextRange composing,
+    TextDiff? diff,
+    TextSelection selection,
+  ) {
+    final latch = _staleComposingLatch;
+    if (latch == null) return composing;
+    if (!composing.isValid || composing.isCollapsed) {
+      _staleComposingLatch = null;
+      return composing;
+    }
+    if (composing != latch) {
+      _staleComposingLatch = null;
+      return composing;
+    }
+    final fresh =
+        diff != null &&
+        selection.isValid &&
+        selection.extentOffset == composing.end;
+    if (fresh) {
+      _staleComposingLatch = null;
+      return composing;
+    }
+    return TextRange.empty;
   }
 
   /// Engine-supplied composing ranges are sanitized before they enter the
