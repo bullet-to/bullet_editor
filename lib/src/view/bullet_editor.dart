@@ -221,10 +221,42 @@ class BulletEditorState extends State<BulletEditor> {
   // connection. The composing gate over all handlers is day-10 work.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
-    if (widget.readOnly) return KeyEventResult.ignored;
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
+    final (result, handler, deferred, action) = _classifyKeyEvent(event);
+    // Every key event lands in the IME journal so hardware keys interleave
+    // with the engine traffic in one capturable stream — `handler` names
+    // the controller verb that consumed it (or `ignored`), `deferred`
+    // whether the composing gate left it to the IME. Recorded BEFORE the
+    // verb runs so the key precedes the pushes it causes.
+    imeService.journal.record(
+      'key',
+      () => {
+        'kind': switch (event) {
+          KeyDownEvent() => 'down',
+          KeyRepeatEvent() => 'repeat',
+          KeyUpEvent() => 'up',
+          _ => event.runtimeType.toString(),
+        },
+        'key': event.logicalKey.keyLabel,
+        'character': event.character,
+        'deferred': deferred,
+        'handler': handler,
+      },
+    );
+    action?.call();
+    return result;
+  }
+
+  /// The key dispatch decision, split from [_onKeyEvent] so the journal can
+  /// record the outcome alongside the event before the verb runs. Returns
+  /// (result, the handler label that will consume the key or `ignored`,
+  /// whether the composing gate deferred it to the IME, the controller verb
+  /// to run — null when nothing consumes it).
+  (KeyEventResult, String, bool, VoidCallback?) _classifyKeyEvent(
+    KeyEvent event,
+  ) {
+    const ignored = (KeyEventResult.ignored, 'ignored', false, null);
+    if (widget.readOnly) return ignored;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return ignored;
 
     final controller = widget.controller;
     final pressed = HardwareKeyboard.instance;
@@ -232,10 +264,11 @@ class BulletEditorState extends State<BulletEditor> {
 
     if (isShortcut) {
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
-        pressed.isShiftPressed ? controller.redo() : controller.undo();
-        return KeyEventResult.handled;
+        return pressed.isShiftPressed
+            ? (KeyEventResult.handled, 'redo', false, controller.redo)
+            : (KeyEventResult.handled, 'undo', false, controller.undo);
       }
-      return KeyEventResult.ignored;
+      return ignored;
     }
 
     // The minimal composing gate — day-10 work pulled forward (the full
@@ -256,29 +289,46 @@ class BulletEditorState extends State<BulletEditor> {
             LogicalKeyboardKey.numpadEnter ||
             LogicalKeyboardKey.backspace ||
             LogicalKeyboardKey.tab:
-          return KeyEventResult.ignored;
+          return (KeyEventResult.ignored, 'ignored', true, null);
       }
     }
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
-        controller.insertNewline();
-        return KeyEventResult.handled;
+        return (
+          KeyEventResult.handled,
+          'insertNewline',
+          false,
+          controller.insertNewline,
+        );
       case LogicalKeyboardKey.backspace:
-        controller.backspace();
-        return KeyEventResult.handled;
+        return (
+          KeyEventResult.handled,
+          'backspace',
+          false,
+          controller.backspace,
+        );
       case LogicalKeyboardKey.tab:
-        pressed.isShiftPressed ? controller.outdent() : controller.indent();
-        return KeyEventResult.handled;
+        return pressed.isShiftPressed
+            ? (KeyEventResult.handled, 'outdent', false, controller.outdent)
+            : (KeyEventResult.handled, 'indent', false, controller.indent);
       case LogicalKeyboardKey.arrowLeft:
-        controller.moveCaret(-1);
-        return KeyEventResult.handled;
+        return (
+          KeyEventResult.handled,
+          'moveCaretBack',
+          false,
+          () => controller.moveCaret(-1),
+        );
       case LogicalKeyboardKey.arrowRight:
-        controller.moveCaret(1);
-        return KeyEventResult.handled;
+        return (
+          KeyEventResult.handled,
+          'moveCaretForward',
+          false,
+          () => controller.moveCaret(1),
+        );
     }
 
-    return KeyEventResult.ignored;
+    return ignored;
   }
 
   @override

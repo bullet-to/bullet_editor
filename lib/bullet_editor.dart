@@ -12,6 +12,7 @@ export 'src/editor/input_rule.dart';
 export 'src/editor/text_diff.dart';
 export 'src/editor/undo_manager.dart';
 // Input
+export 'src/input/ime_journal.dart';
 export 'src/input/ime_service.dart';
 // Model
 export 'src/model/block.dart';

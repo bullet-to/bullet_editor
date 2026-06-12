@@ -12,6 +12,7 @@ import '../model/doc_selection.dart';
 import '../model/document.dart';
 import '../schema/editor_schema.dart';
 import '../view/block_layout_registry.dart';
+import 'ime_journal.dart';
 
 /// The connection surface `ImeService` writes through — a thin seam over
 /// [TextInputConnection] so the service unit-tests against a fake without a
@@ -527,6 +528,14 @@ class ImeService extends ChangeNotifier
 
   // --- Inspector / debug surface (pane 3) ---
 
+  /// The structured debug event log (see [ImeJournal] for the kinds): every
+  /// inbound snapshot/batch, every filter decision, every push and
+  /// terminate — plus the editor widget's hardware key events, interleaved.
+  /// Debug-only by default ([ImeJournal.enabled]); a capture pastes out of
+  /// the inspector's journal pane and replays as a unit test
+  /// (`test/input/ime_replay.dart`).
+  final ImeJournal journal = ImeJournal();
+
   TextEditingValue? get debugShadow => _shadow;
   List<TextEditingDelta>? debugLastDeltas;
 
@@ -554,6 +563,7 @@ class ImeService extends ChangeNotifier
   void attach() {
     _wantsConnection = true;
     if (_connection != null) return;
+    journal.record('attach', () => {'frontend': frontend.name});
     _connection = _connectionFactory(this, _configuration);
     _connection!.show();
     _pushAuthoritativeWindow();
@@ -566,6 +576,7 @@ class ImeService extends ChangeNotifier
   void detach() {
     _wantsConnection = false;
     if (_connection == null) return;
+    journal.record('detach', () => const {});
     _connection!.close();
     _connection = null;
     _shadow = null;
@@ -586,6 +597,7 @@ class ImeService extends ChangeNotifier
     if (controller.imeExternalChangeHandler == _onExternalChange) {
       controller.imeExternalChangeHandler = null;
     }
+    journal.dispose();
     super.dispose();
   }
 
@@ -611,6 +623,10 @@ class ImeService extends ChangeNotifier
       'no-echo invariant violated: pushing editing state while the shadow '
       'reports an active composition is only legal through '
       'terminateComposition (architecture §IME choke point)',
+    );
+    journal.record(
+      'push',
+      () => {...ImeJournal.describeValue(value), 'viaTerminate': viaTerminate},
     );
     // Any push that is NOT the terminate push obsoletes the quarantine: the
     // engine now holds a newer window, so a delta matching the quarantine
@@ -668,6 +684,10 @@ class ImeService extends ChangeNotifier
     final composedText = _shadowComposing
         ? shadow!.composing.textInside(shadow.text)
         : null;
+    journal.record(
+      'terminate',
+      () => {'reason': reason, 'composed': composedText},
+    );
 
     controller.imeClearComposing();
 
@@ -749,6 +769,16 @@ class ImeService extends ChangeNotifier
 
   @override
   void updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
+    // Recorded raw, before every guard — the journal's job is the exact
+    // inbound stream, engine confusion included.
+    journal.record(
+      'deltas',
+      () => {
+        'deltas': [
+          for (final d in textEditingDeltas) ImeJournal.describeDelta(d),
+        ],
+      },
+    );
     // Mirror of [updateEditingValue]'s frontend guard: the diff frontend
     // attaches WITHOUT the delta model, so a delta batch arriving here is
     // engine confusion (or a misuse of the test surface), never input — it
@@ -818,6 +848,9 @@ class ImeService extends ChangeNotifier
   /// through this callback; it stays a no-op there.
   @override
   void updateEditingValue(TextEditingValue value) {
+    // Recorded raw, BEFORE any filtering — the journal captures the exact
+    // engine snapshot (sentinel visible, offsets unshifted).
+    journal.record('snapshot', () => ImeJournal.describeValue(value));
     if (frontend != ImeFrontend.nonDeltaDiff) return;
     if (_connection == null || _shadow == null) return;
     final diff = diffTexts(
@@ -828,6 +861,16 @@ class ImeService extends ChangeNotifier
           : null,
     );
     debugLastDiff = diff;
+    journal.record(
+      'diff',
+      () => diff == null
+          ? const {'result': null}
+          : {
+              'start': diff.start,
+              'deleted': diff.deletedLength,
+              'inserted': diff.insertedText,
+            },
+    );
     // The incoming composing region passes two filters before anything keys
     // on it: the sanity boundary ([_sanitizeComposing] — a mis-reported
     // region is no state worth preserving) and the stale-latch refusal
@@ -835,11 +878,23 @@ class ImeService extends ChangeNotifier
     // dead-key rewrite already terminated is not a composition). The drop
     // below and the synthesis must agree on the result, so it is computed
     // once here.
-    final composing = _filterStaleComposing(
-      _sanitizeComposing(value.composing, value.text),
-      diff,
-      value.selection,
-    );
+    final sanitized = _sanitizeComposing(value.composing, value.text);
+    if (sanitized != value.composing) {
+      journal.record(
+        'composingSanitized',
+        () => {
+          'from': ImeJournal.describeRange(value.composing),
+          'to': ImeJournal.describeRange(sanitized),
+        },
+      );
+    }
+    final composing = _filterStaleComposing(sanitized, diff, value.selection);
+    if (composing != sanitized) {
+      journal.record(
+        'staleComposingSuppressed',
+        () => {'range': ImeJournal.describeRange(sanitized)},
+      );
+    }
     final composingLive = composing.isValid && !composing.isCollapsed;
     // The previous-shadow drop (the doc comment's pre-push race): a snapshot
     // shaped like the window the latest push replaced is stale by
@@ -862,6 +917,13 @@ class ImeService extends ChangeNotifier
       value,
       diff: diff,
       composing: composing,
+    );
+    journal.record(
+      'synthesized',
+      () => {
+        'delta': delta == null ? null : ImeJournal.describeDelta(delta),
+        if (deadKeyRewrite) 'deadKeyRewrite': true,
+      },
     );
     // Any accepted post-push snapshot closes the pre-push race window: the
     // engine is provably working from the pushed window now (the pure echo
@@ -1112,6 +1174,7 @@ class ImeService extends ChangeNotifier
 
   @override
   void performAction(TextInputAction action) {
+    journal.record('performAction', () => {'action': action.name});
     if (action != TextInputAction.newline) return;
     if (_shadow == null) return;
     controller.imeEdit(() {
@@ -1157,6 +1220,7 @@ class ImeService extends ChangeNotifier
   @override
   void performSelector(String selectorName) {
     debugLastSelector = selectorName;
+    journal.record('performSelector', () => {'selector': selectorName});
     if (_connection == null || _shadow == null) {
       notifyListeners();
       return;
@@ -1170,6 +1234,7 @@ class ImeService extends ChangeNotifier
         _applySelectorVerb(controller.imeInsertNewline);
       default:
         debugLastUnhandledSelector = selectorName;
+        journal.record('selectorUnhandled', () => {'selector': selectorName});
     }
     notifyListeners();
   }
@@ -1234,6 +1299,7 @@ class ImeService extends ChangeNotifier
   /// skipped), lazily re-attach + re-serialize on the next focus or edit.
   @override
   void connectionClosed() {
+    journal.record('connectionClosed', () => const {});
     // Acknowledge before discarding: TextInput's current-connection
     // bookkeeping clears only through connectionClosedReceived(), and a
     // stale current connection corrupts the next attach.
@@ -1428,6 +1494,7 @@ class ImeService extends ChangeNotifier
   /// Safari/web polish pass rather than speculatively coded here.
   void _recoverAuthoritative(String reason) {
     debugLastDropReason = reason;
+    journal.record('drop', () => {'reason': reason});
     if (_shadowComposing) {
       terminateComposition(reason);
     } else {
