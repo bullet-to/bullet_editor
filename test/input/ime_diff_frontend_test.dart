@@ -760,6 +760,114 @@ void main() {
       expect(controller.document.blockById('a')!.plainText, 'éx');
     });
 
+    test("Safari's append-shaped dead-key commit (the v2 Safari fix, "
+        'v0.1.7 / day-15 drip row): the commit snapshot APPENDS the '
+        'resolved char after the still-marked ´ with composing unchanged — '
+        'rewritten to the replace shape, composing cleared, engine '
+        'resynced', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      // Option+E: Safari marks the accent (compositionstart).
+      sendValue('. ´', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.document.blockById('a')!.plainText, '´');
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+      );
+
+      // E: WebKit's append shape (the v2 fix's recorded trace — v0.1.7).
+      // The DOM input event fires BEFORE compositionend, so the engine's
+      // latched composingBase still reports (2,3) over the stale ´ while
+      // the resolved é sits appended AFTER it.
+      sendValue(
+        '. ´é',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 3),
+      );
+
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'é',
+        reason:
+            'the dead key must be replaced, not kept alongside the '
+            'resolved char (the user-visible v2/Safari symptom)',
+      );
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'the appended char IS the commit — the underline clears',
+      );
+      expect(
+        connection().pushed.last.text,
+        '. é',
+        reason:
+            "the browser's DOM still holds the append-shaped text — "
+            'the corrected window must be synced back (v2: '
+            '_finalizeComposing)',
+      );
+
+      // Whether or not Safari follows up, the result converges (channel
+      // order: anything computed before the resync push arrives first):
+      // (a) a late append-shaped snapshot (computed before the resync push
+      // reached the DOM, composing now cleared at compositionend) is the
+      // stale race shape — dropped, never re-applied as an insertion of
+      // the stale ´;
+      sendValue('. ´é', cursor: 4);
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'é',
+        reason:
+            'idempotent under the corrective: the stale append shape '
+            'must not resurrect the dead key',
+      );
+      expect(controller.composing, isNull);
+      expect(service.debugLastDropReason, 'staleSnapshot');
+      // (b) an echo of OUR corrected push is acknowledged silently.
+      sendValue('. é', cursor: 3);
+      expect(controller.document.blockById('a')!.plainText, 'é');
+
+      // Follow-up typing lands clean.
+      sendValue('. éx', cursor: 4);
+      expect(controller.document.blockById('a')!.plainText, 'éx');
+      sendValue('. éxy', cursor: 5);
+      expect(controller.document.blockById('a')!.plainText, 'éxy');
+    });
+
+    test('kana growth is NOT the append-shaped commit: a composing region '
+        'that grows to cover the appended character stays a composition '
+        '(the CJK non-misfire edge)', () {
+      build([para('a', '')], selection: caret('a', 0));
+      sendValue('. に', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      final pushesBefore = connection().pushed.length;
+
+      // The next kana appends AT the old composing end — the same insert
+      // offset as the dead-key shape — but the engine's composing region
+      // grew to (2,4) to cover it: the engine itself says the new char is
+      // part of the composition, so it must NOT collapse into a commit.
+      sendValue(
+        '. にほ',
+        cursor: 4,
+        composing: const TextRange(start: 2, end: 4),
+      );
+
+      expect(controller.document.blockById('a')!.plainText, 'にほ');
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 2)),
+        reason: 'the composition continues — both kana stay marked',
+      );
+      expect(
+        connection().pushed.length,
+        pushesBefore,
+        reason: 'no commit ⇒ no resync push — nothing mid-composition',
+      );
+
+      // The composition still commits normally afterwards.
+      sendValue('. にほ', cursor: 4);
+      expect(controller.composing, isNull);
+      expect(controller.document.blockById('a')!.plainText, 'にほ');
+    });
+
     test('dead-key double cycle (the day-8 web bug): compose+commit é, '
         'hardware backspace, compose+commit é again — the second commit '
         'lands and plain typing afterwards still works', () {

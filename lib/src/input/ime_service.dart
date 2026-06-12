@@ -458,7 +458,9 @@ class ImeService extends ChangeNotifier
   /// snapshot whose text equals this was computed by the browser against
   /// the window we just replaced (host-app edit → clause (a)/(b) push → the
   /// in-flight snapshot lands) and must not be diffed against the fresh
-  /// shadow — see [updateEditingValue]. Cleared the moment the race window
+  /// shadow — see [updateEditingValue]. A dead-key rewrite's resync push
+  /// arms it with the append-shaped snapshot text for the same reason
+  /// ([_rewriteDeadKeyCommit]). Cleared the moment the race window
   /// provably closes: the race can only involve snapshots already in flight
   /// AT push time, so the first ACCEPTED post-push snapshot (the pure-echo
   /// acknowledgement or a successfully synthesized value) clears it —
@@ -791,7 +793,7 @@ class ImeService extends ChangeNotifier
       notifyListeners();
       return;
     }
-    final delta = _synthesizeDelta(_shadow!, value);
+    final (:delta, :deadKeyRewrite) = _synthesizeDelta(_shadow!, value);
     // Any accepted post-push snapshot closes the pre-push race window: the
     // engine is provably working from the pushed window now (the pure echo
     // acknowledges it; synthesized input is diffed against it). Cleared
@@ -801,6 +803,28 @@ class ImeService extends ChangeNotifier
     if (delta == null) return; // pure echo of our own push
     debugLastDeltas = [delta];
     controller.imeEdit(() => _processBatch([delta]));
+    if (deadKeyRewrite) {
+      // The append-shaped commit was rewritten, so the BROWSER's DOM still
+      // holds the stale marked char plus the appended commit while the
+      // shadow now holds the corrected text — sync the corrected window
+      // back (the v2 fix's `_finalizeComposing` sync, v0.1.7). Legal as a
+      // plain push: the rewritten delta carried empty composing, so the
+      // shadow no longer reports a composition (and _finishBatch can never
+      // have terminated off it). When a rule fire already pushed inside
+      // _finishBatch this re-push is an identical no-op engine-side.
+      if (_connection != null && _shadow != null && !_shadowComposing) {
+        _pushAuthoritativeWindow();
+      }
+      // Arm the previous-shadow drop with the APPEND-SHAPED text: a late
+      // Safari snapshot still carrying it (computed before the resync push
+      // reached the DOM, composing since cleared) is the pre-push race
+      // shape exactly — diffing it against the corrected shadow would
+      // resurrect the stale dead key as an insertion. Same scoping rules
+      // as every other arm: the next accepted snapshot closes the window,
+      // so the fix converges identically whether or not the corrective
+      // arrives.
+      _previousShadowText = value.text;
+    }
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -810,9 +834,11 @@ class ImeService extends ChangeNotifier
   /// diffed against the very state the guard validates), and the incoming
   /// selection/composing ride along so `delta.apply(shadow)` converges the
   /// shadow to exactly the engine's value (the acknowledge half of the
-  /// no-echo triple). Returns null when the value matches the shadow in
-  /// text AND selection AND composing.
-  TextEditingDelta? _synthesizeDelta(
+  /// no-echo triple). `delta` is null when the value matches the shadow in
+  /// text AND selection AND composing; `deadKeyRewrite` reports whether the
+  /// append-shaped dead-key compensation ([_rewriteDeadKeyCommit]) replaced
+  /// the verbatim synthesis — the caller owes the engine a resync push.
+  ({TextEditingDelta? delta, bool deadKeyRewrite}) _synthesizeDelta(
     TextEditingValue shadow,
     TextEditingValue value,
   ) {
@@ -828,43 +854,114 @@ class ImeService extends ChangeNotifier
     if (diff == null) {
       if (_selectionsEquivalent(value.selection, shadow.selection) &&
           composing == shadow.composing) {
-        return null;
+        return (delta: null, deadKeyRewrite: false);
       }
-      return TextEditingDeltaNonTextUpdate(
-        oldText: shadow.text,
-        selection: value.selection,
-        composing: composing,
+      return (
+        delta: TextEditingDeltaNonTextUpdate(
+          oldText: shadow.text,
+          selection: value.selection,
+          composing: composing,
+        ),
+        deadKeyRewrite: false,
       );
     }
     if (diff.isInsert) {
-      return TextEditingDeltaInsertion(
-        oldText: shadow.text,
-        textInserted: diff.insertedText,
-        insertionOffset: diff.start,
-        selection: value.selection,
-        composing: composing,
+      final rewritten = _rewriteDeadKeyCommit(shadow, diff, composing);
+      if (rewritten != null) return (delta: rewritten, deadKeyRewrite: true);
+      return (
+        delta: TextEditingDeltaInsertion(
+          oldText: shadow.text,
+          textInserted: diff.insertedText,
+          insertionOffset: diff.start,
+          selection: value.selection,
+          composing: composing,
+        ),
+        deadKeyRewrite: false,
       );
     }
     if (diff.isDelete) {
-      return TextEditingDeltaDeletion(
+      return (
+        delta: TextEditingDeltaDeletion(
+          oldText: shadow.text,
+          deletedRange: TextRange(
+            start: diff.start,
+            end: diff.start + diff.deletedLength,
+          ),
+          selection: value.selection,
+          composing: composing,
+        ),
+        deadKeyRewrite: false,
+      );
+    }
+    return (
+      delta: TextEditingDeltaReplacement(
         oldText: shadow.text,
-        deletedRange: TextRange(
+        replacedRange: TextRange(
           start: diff.start,
           end: diff.start + diff.deletedLength,
         ),
+        replacementText: diff.insertedText,
         selection: value.selection,
         composing: composing,
-      );
-    }
+      ),
+      deadKeyRewrite: false,
+    );
+  }
+
+  /// Safari's append-shaped dead-key commit (the v2 Safari fix, v0.1.7
+  /// commits 1abe94b/8a5eb6f; §web fallback's day-15 drip row — "the v2
+  /// Safari fix's scenario, carried over"): on WebKit, pressing the
+  /// committing key during a dead-key composition fires the DOM input event
+  /// BEFORE compositionend, with the resolved character appended AFTER the
+  /// still-present marked text — the engine's latched `composingBase`
+  /// (composition_aware_mixin.dart: `composingBase ??=`, reset only by
+  /// compositionstart/end) therefore reports the composing range unchanged
+  /// over the stale dead key. v2's recorded trace: "hello´" composing (5,6)
+  /// → "hello´é" composing STILL (5,6) — and no corrective snapshot ever
+  /// removes the ´. Diffed verbatim that synthesizes "insert é after the
+  /// marked ´, composition continues": the user's underlined-´-plus-new-e
+  /// symptom. Chrome sends the replace shape ("helloé", composing cleared)
+  /// and never reaches this rule.
+  ///
+  /// The rule (v2's `_handleComposingEdit` rewrite, narrowed): a pure-insert
+  /// diff landing at/beyond the end of a live composing region that the
+  /// snapshot itself reports UNCHANGED from the shadow's is the engine
+  /// saying "new committed text, stale marked text still in the buffer" —
+  /// rewrite it as the commit: replace the composing range with the
+  /// inserted text, composing cleared, caret after the replacement.
+  ///
+  /// Why this cannot misfire on multi-char IME composition (the risky CJK
+  /// edge): a kana composition growing by appended characters inserts at
+  /// the SAME offset (the old composing end), but every compositionupdate
+  /// re-reports the region grown to cover the new character
+  /// (`composingBase..composingBase + composingText.length`), so
+  /// `composing != shadow.composing` and the insert lands INSIDE the
+  /// incoming region — both guards fail and the snapshot flows through as
+  /// ordinary composition. The same holds for Hangul syllable handoff (the
+  /// new syllable's region covers the inserted jamo) and for conversion
+  /// commits (replacement-shaped or zero-diff, never a pure insert). The
+  /// equality guard is the narrowing over v2 (v2 checked only the incoming
+  /// region): it additionally keeps a region freshly marked over
+  /// pre-existing text from being collapsed by an unrelated insert.
+  TextEditingDelta? _rewriteDeadKeyCommit(
+    TextEditingValue shadow,
+    TextDiff diff,
+    TextRange composing,
+  ) {
+    if (!composing.isValid || composing.isCollapsed) return null;
+    if (composing != shadow.composing) return null;
+    if (diff.start < composing.end) return null;
     return TextEditingDeltaReplacement(
       oldText: shadow.text,
-      replacedRange: TextRange(
-        start: diff.start,
-        end: diff.start + diff.deletedLength,
-      ),
+      replacedRange: composing,
       replacementText: diff.insertedText,
-      selection: value.selection,
-      composing: composing,
+      // The snapshot's own selection indexes the append-shaped text and
+      // does not survive the rewrite; the commit leaves the caret after
+      // the replacement.
+      selection: TextSelection.collapsed(
+        offset: composing.start + diff.insertedText.length,
+      ),
+      composing: TextRange.empty,
     );
   }
 
