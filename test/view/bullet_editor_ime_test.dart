@@ -1310,6 +1310,208 @@ void main() {
     });
   });
 
+  group('browser-chrome blur mid-composition (windowBlur recovery)', () {
+    // The wedge this group covers (manual Safari repro): compose にほんご,
+    // click the URL bar — browser focus leaves the page WITHOUT blurring
+    // Flutter's FocusNode (no detach), and on Safari desktop the engine
+    // attaches NO blur listener to its hidden input (engine
+    // text_editing.dart, addEventHandlers: `this is!
+    // SafariDesktopTextEditingStrategy`), so no connectionClosed arrives
+    // either. No composition-ending snapshot ever comes: the composing
+    // gate stays closed, typing wedges. Page-level focus loss IS
+    // observable as AppLifecycleState.inactive/hidden — the recovery seam.
+    Future<void> setLifecycleState(
+      WidgetTester tester,
+      AppLifecycleState state,
+    ) async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/lifecycle',
+        const StringCodec().encodeMessage(state.toString()),
+        (_) {},
+      );
+    }
+
+    List<Object?> terminateReasons(ImeService ime) => [
+      for (final e in ime.journal.events)
+        if (e.kind == 'terminate') e.payload['reason'],
+    ];
+
+    testWidgets('lifecycle inactive terminates a live diff-frontend '
+        'composition (windowBlur): composing cleared, gate open, journaled; '
+        'after resumed typing and a fresh composition work', (tester) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+      addTearDown(() => setLifecycleState(tester, AppLifecycleState.resumed));
+
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. にほんご',
+          selection: TextSelection.collapsed(offset: 6),
+          composing: TextRange(start: 2, end: 6),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      expect(ime.engineComposing, isTrue);
+
+      // The URL-bar click: window focus leaves, the FocusNode keeps focus,
+      // no engine traffic of any kind follows (Safari).
+      await setLifecycleState(tester, AppLifecycleState.inactive);
+      await tester.pump();
+
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'deactivation commits the composition (native macOS shape)',
+      );
+      expect(
+        ime.engineComposing,
+        isFalse,
+        reason: 'the hardware-key gate must reopen',
+      );
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'にほんご',
+        reason: 'commit, not discard',
+      );
+      expect(terminateReasons(ime), contains('windowBlur'));
+
+      await setLifecycleState(tester, AppLifecycleState.resumed);
+      await tester.pump();
+      expect(
+        ime.isAttached,
+        isTrue,
+        reason:
+            'no detach happened — and no '
+            'double-attach either (attach is idempotent)',
+      );
+
+      // Typing works against the re-pushed window.
+      final shadow = ime.currentTextEditingValue!;
+      ime.updateEditingValue(
+        TextEditingValue(
+          text: '${shadow.text}x',
+          selection: TextSelection.collapsed(offset: shadow.text.length + 1),
+        ),
+      );
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'にほんごx');
+
+      // A fresh composition works: the underline state is live again.
+      final shadow2 = ime.currentTextEditingValue!;
+      ime.updateEditingValue(
+        TextEditingValue(
+          text: '${shadow2.text}か',
+          selection: TextSelection.collapsed(offset: shadow2.text.length + 1),
+          composing: TextRange(
+            start: shadow2.text.length,
+            end: shadow2.text.length + 1,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      expect(ime.engineComposing, isTrue);
+    });
+
+    testWidgets('the passive-divergence variant: lifecycle inactive resolves '
+        'a deferred reconciliation that never installed a ComposingState — '
+        'engineComposing reopens the gate and editing keys work after '
+        'resumed', (tester) async {
+      await pumpEditor(tester, [
+        para('a', 'one'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 3)));
+      await tester.pump();
+      final ime = imeOf(tester);
+      addTearDown(() => setLifecycleState(tester, AppLifecycleState.resumed));
+
+      // The composition's FIRST snapshot is unmappable (composing spans a
+      // \n): passive divergence arms with NO ComposingState — the gate is
+      // held closed by ImeService.engineComposing alone, and no ending
+      // snapshot will ever come once the window blurs.
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. one\nx',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange(start: 5, end: 7),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+      expect(ime.engineComposing, isTrue);
+      // The \n half of the snapshot applied structurally (the split is
+      // real; only the composing mapping deferred): ['one', 'x'], caret in
+      // the new tail block.
+      List<String> blockTexts() => [
+        for (final b in controller.document.allBlocks) b.plainText,
+      ];
+      expect(blockTexts(), ['one', 'x']);
+      await simulateKeyDownEvent(LogicalKeyboardKey.backspace);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(blockTexts(), [
+        'one',
+        'x',
+      ], reason: 'gate closed: the key deferred to the IME');
+
+      await setLifecycleState(tester, AppLifecycleState.inactive);
+      await tester.pump();
+
+      expect(ime.engineComposing, isFalse, reason: 'the gate must reopen');
+      expect(terminateReasons(ime), contains('windowBlur'));
+
+      await setLifecycleState(tester, AppLifecycleState.resumed);
+      await tester.pump();
+
+      // The gate is open: backspace reaches the model again (the caret sits
+      // after the 'x' the split landed in the tail block).
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(blockTexts(), ['one', '']);
+
+      // And a fresh composition still maps and installs ComposingState.
+      final shadow = ime.currentTextEditingValue!;
+      ime.updateEditingValue(
+        TextEditingValue(
+          text: '${shadow.text}か',
+          selection: TextSelection.collapsed(offset: shadow.text.length + 1),
+          composing: TextRange(
+            start: shadow.text.length,
+            end: shadow.text.length + 1,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+    });
+
+    testWidgets('no live composition: lifecycle inactive terminates nothing '
+        '(no spurious terminate push, no quarantine arm)', (tester) async {
+      await pumpEditor(tester, [
+        para('a', 'hi'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await tester.pump();
+      final ime = imeOf(tester);
+      addTearDown(() => setLifecycleState(tester, AppLifecycleState.resumed));
+      ime.journal.clear();
+
+      await setLifecycleState(tester, AppLifecycleState.inactive);
+      await setLifecycleState(tester, AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(terminateReasons(ime), isEmpty);
+      expect(ime.debugQuarantineArmed, isFalse);
+      expect(ime.isAttached, isTrue);
+    });
+  });
+
   group('controller swap', () {
     testWidgets('swapping controllers re-homes the IME service', (
       tester,

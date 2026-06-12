@@ -76,7 +76,8 @@ class BulletEditor extends StatefulWidget {
   State<BulletEditor> createState() => BulletEditorState();
 }
 
-class BulletEditorState extends State<BulletEditor> {
+class BulletEditorState extends State<BulletEditor>
+    with WidgetsBindingObserver {
   /// blockId → geometry-or-null (GATE-L). Exposed for the inspector,
   /// interactors, and the IME geometry reporter.
   final BlockLayoutRegistry registry = BlockLayoutRegistry();
@@ -158,7 +159,47 @@ class BulletEditorState extends State<BulletEditor> {
     super.initState();
     // GATE-K: schema validation at the editor boundary, debug-mode.
     assert(widget.controller.schema.validate());
+    WidgetsBinding.instance.addObserver(this);
     _attach(widget.controller, _focusNode);
+  }
+
+  /// Window/app focus loss while a composition is live terminates it
+  /// (`'windowBlur'`) — the browser-chrome blur recovery.
+  ///
+  /// The wedge (manual Safari repro): compose にほんご, click the URL bar.
+  /// Browser focus leaves the page WITHOUT blurring Flutter's [FocusNode]
+  /// (no detach fires), and nothing arrives from the engine either — on
+  /// Safari desktop the engine deliberately attaches NO blur listener to
+  /// its hidden input (engine `text_editing.dart`, `addEventHandlers`:
+  /// `this is! SafariDesktopTextEditingStrategy` — "handleBlur causes
+  /// Safari to reopen autofill dialogs"), so the `connectionClosed` other
+  /// browsers send on window focus loss (`handleBlur`: `relatedTarget ==
+  /// null` ⇒ `sendTextConnectionClosedToFrameworkIfAny`, flutter#155265)
+  /// never comes, and Safari delivers no compositionend to the page on
+  /// browser-chrome focus loss. The composing gate stays closed
+  /// ([ImeService.engineComposing] — shadow composing / passive divergence
+  /// armed with no ending snapshot ever coming), underline state goes
+  /// stale, typing wedges.
+  ///
+  /// Page-level focus loss IS observable in the framework: on web the
+  /// window blur reports [AppLifecycleState.inactive] (hidden/paused when
+  /// the page hides). Terminating there matches native macOS behavior —
+  /// apps commit/cancel marked text on deactivate — and guarantees the
+  /// gate reopens and composition state resets through the one choke
+  /// point (quarantine armed against a late engine echo, passive
+  /// divergence resolved, commit-key one-shot disarmed). On [
+  /// AppLifecycleState.resumed] the attachment re-syncs: a no-op where the
+  /// connection survived (Safari — `attach` is idempotent), a fresh attach
+  /// where the engine closed it (Chrome's `connectionClosed` path).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncImeAttachment();
+      return;
+    }
+    if (widget.controller.composing != null || imeService.engineComposing) {
+      imeService.terminateComposition('windowBlur');
+    }
   }
 
   @override
@@ -217,6 +258,7 @@ class BulletEditorState extends State<BulletEditor> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _detach(widget.controller, _focusNode);
     _ownedScrollController?.dispose();
     _ownedFocusNode?.dispose();
