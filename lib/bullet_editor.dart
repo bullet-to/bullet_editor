@@ -7,6 +7,7 @@ export 'src/codec/inline_codec.dart';
 export 'src/codec/markdown_codec.dart';
 // Editor
 export 'src/editor/edit_operation.dart';
+export 'src/editor/editor_controller.dart';
 export 'src/editor/input_rule.dart';
 export 'src/editor/text_diff.dart';
 export 'src/editor/undo_manager.dart';
@@ -24,10 +25,12 @@ export 'src/schema/inline_entity_def.dart';
 export 'src/schema/inline_style_def.dart';
 // View
 export 'src/view/block_component_context.dart';
+export 'src/view/block_geometry_mixins.dart';
 export 'src/view/block_layout_registry.dart';
 export 'src/view/block_list_view.dart' show BlockListView;
 export 'src/view/bullet_editor.dart';
 export 'src/view/components/default_text_component.dart';
 export 'src/view/components/divider_block.dart';
 export 'src/view/components/image_block.dart';
+export 'src/view/components/void_block_geometry.dart';
 export 'src/view/standard_prefixes.dart';

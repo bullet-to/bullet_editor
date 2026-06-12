@@ -243,10 +243,16 @@ class ToggleStyle extends EditOperation {
 /// `onSplitEmpty` half is the controller's concern, consulted before an op
 /// is chosen — this op always splits.
 class SplitBlock extends EditOperation {
-  SplitBlock(this.blockId, this.offset);
+  SplitBlock(this.blockId, this.offset, {String? newBlockId})
+    : newBlockId = newBlockId ?? generateBlockId();
 
   final String blockId;
   final int offset;
+
+  /// The id the block created by this split will carry — caller-suppliable
+  /// so the caller can place the post-split caret without rediscovering the
+  /// minted id from the new document.
+  final String newBlockId;
 
   @override
   Document? apply(Document doc, EditContext ctx) {
@@ -270,10 +276,7 @@ class SplitBlock extends EditOperation {
     // For empty blocks (e.g. divider rule creating a trailing paragraph),
     // fall through to the normal split which inserts after.
     if (offset == 0 && block.plainText.isNotEmpty) {
-      final emptyBlock = TextBlock(
-        id: generateBlockId(),
-        blockType: newBlockType,
-      );
+      final emptyBlock = TextBlock(id: newBlockId, blockType: newBlockType);
       return doc.insertBeforeFlatIndex(index, emptyBlock);
     }
 
@@ -290,7 +293,7 @@ class SplitBlock extends EditOperation {
       segments: mergeSegments(beforeSegments),
     );
     final newBlock = TextBlock(
-      id: generateBlockId(),
+      id: newBlockId,
       blockType: newBlockType,
       segments: mergeSegments(afterSegments),
       metadata: newMetadata,

@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../model/block.dart';
+import '../model/doc_selection.dart';
 import '../model/document.dart';
 import '../model/inline_entity.dart';
 import '../schema/block_def.dart';
@@ -19,12 +20,21 @@ class BlockListView extends StatelessWidget {
     required this.document,
     required this.schema,
     required this.baseStyle,
+    this.selection,
+    this.showCaret = false,
     this.onLinkTap,
   });
 
   final Document document;
   final EditorSchema schema;
   final TextStyle baseStyle;
+
+  /// The current selection; components derive their block-local slice.
+  final DocSelection? selection;
+
+  /// Whether the caret should render (the editor has focus).
+  final bool showCaret;
+
   final void Function(String blockId, int offset, InlineEntitySnapshot entity)?
   onLinkTap;
 
@@ -53,6 +63,8 @@ class BlockListView extends StatelessWidget {
                   : _lastDescendant(roots[index - 1]).blockType,
               isFirstInDocument: index == 0,
               containsDocumentEnd: index == roots.length - 1,
+              selection: selection,
+              showCaret: showCaret,
               schema: schema,
               baseStyle: baseStyle,
               onLinkTap: onLinkTap,
@@ -84,10 +96,12 @@ TextBlock _lastDescendant(TextBlock block) =>
 /// Renders one block — gutter slot (prefixBuilder) + component — plus its
 /// children Column, recursing through the componentBuilder registry.
 ///
-/// Consumes only plain values (the [BlockComponentContext] seam plus what the
-/// parent walk already knows) — never the [Document]. This keeps every input
-/// value-comparable for the day-10 rebuild-skip predicate: a keystroke
-/// elsewhere must not change this widget's inputs.
+/// Consumes only plain values (the [BlockComponentContext] seam plus what
+/// the parent walk already knows) — never the [Document]. One caveat for
+/// the day-10 rebuild-skip predicate: [selection] is the doc-global
+/// selection (it changes on every caret move anywhere), so the predicate
+/// must compare the DERIVED slice ([_caretOffset], [_isSelected]) — the
+/// value-comparable rebuild key — not this constructor input.
 class BlockSubtree extends StatelessWidget {
   const BlockSubtree({
     super.key,
@@ -99,6 +113,8 @@ class BlockSubtree extends StatelessWidget {
     required this.containsDocumentEnd,
     required this.schema,
     required this.baseStyle,
+    this.selection,
+    this.showCaret = false,
     this.onLinkTap,
   });
 
@@ -115,10 +131,35 @@ class BlockSubtree extends StatelessWidget {
   /// Whether this subtree's last descendant is the document's last block.
   final bool containsDocumentEnd;
 
+  /// The document selection; this widget derives only same-block slices
+  /// (caret offset, void atomic selection), so no [Document] is needed.
+  final DocSelection? selection;
+
+  /// Whether the caret should render (the editor has focus).
+  final bool showCaret;
+
   final EditorSchema schema;
   final TextStyle baseStyle;
   final void Function(String blockId, int offset, InlineEntitySnapshot entity)?
   onLinkTap;
+
+  /// The collapsed caret offset when it sits in this block (and the editor
+  /// has focus).
+  int? get _caretOffset {
+    final sel = selection;
+    if (!showCaret || sel == null || !sel.isCollapsed) return null;
+    return sel.extent.blockId == block.id ? sel.extent.offset : null;
+  }
+
+  /// Whether this block is atomically selected (a void's whole-block
+  /// selection: both endpoints in this block, non-collapsed).
+  bool get _isSelected {
+    final sel = selection;
+    return sel != null &&
+        !sel.isCollapsed &&
+        sel.base.blockId == block.id &&
+        sel.extent.blockId == block.id;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -138,12 +179,24 @@ class BlockSubtree extends StatelessWidget {
       schema: schema,
       gutter: gutter,
       resolvedStyle: resolvedStyle,
+      caretOffset: _caretOffset,
+      isSelected: _isSelected,
       onLinkTap: onLinkTap,
     );
 
-    final component = def.componentBuilder != null
+    Widget component = def.componentBuilder != null
         ? def.componentBuilder!(componentContext)
         : DefaultTextComponent(componentContext);
+
+    // Voids are not text: override the editor-wide I-beam (any registered
+    // void type, not just the built-ins). Link-segment cursors are day-14
+    // interactor work.
+    if (def.isVoid) {
+      component = MouseRegion(
+        cursor: SystemMouseCursors.basic,
+        child: component,
+      );
+    }
 
     final prefix = def.prefixBuilder?.call(block, gutter, resolvedStyle);
 
@@ -202,6 +255,8 @@ class BlockSubtree extends StatelessWidget {
           isFirstInDocument: false,
           containsDocumentEnd:
               containsDocumentEnd && i == block.children.length - 1,
+          selection: selection,
+          showCaret: showCaret,
           schema: schema,
           baseStyle: baseStyle,
           onLinkTap: onLinkTap,

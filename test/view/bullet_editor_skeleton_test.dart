@@ -26,8 +26,10 @@ Widget _editor(Document document, {EditorSchema? schema}) {
   return MaterialApp(
     home: Scaffold(
       body: BulletEditor(
-        document: document,
-        schema: schema ?? EditorSchema.standard(),
+        controller: EditorController(
+          document: document,
+          schema: schema ?? EditorSchema.standard(),
+        ),
         textStyle: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
       ),
     ),
@@ -359,8 +361,10 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: BulletEditor(
-              document: buildGauntletDocument(tailLength: 0),
-              schema: EditorSchema.standard(),
+              controller: EditorController(
+                document: buildGauntletDocument(tailLength: 0),
+                schema: EditorSchema.standard(),
+              ),
               textStyle: const TextStyle(
                 fontSize: 16,
                 color: Color(0xFF000000),

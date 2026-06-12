@@ -9,15 +9,17 @@ import '../schema/editor_schema.dart';
 /// components consume only this tuple, so a computed view-model layer can be
 /// inserted behind it later without touching components.
 ///
-/// The day 3–4 controller skeleton adds the controller reference and the
-/// block-local selection slice; the reserved [BlockDef.semanticsBuilder] hook
-/// covers future editing semantics (GATE-A).
+/// The block-local selection slice is [caretOffset] + [isSelected] today;
+/// day 10 widens it with the range-highlight slice. The reserved
+/// [BlockDef.semanticsBuilder] hook covers future editing semantics (GATE-A).
 class BlockComponentContext {
   const BlockComponentContext({
     required this.block,
     required this.schema,
     required this.gutter,
     required this.resolvedStyle,
+    this.caretOffset,
+    this.isSelected = false,
     this.onLinkTap,
   });
 
@@ -31,6 +33,14 @@ class BlockComponentContext {
   /// The block's resolved text style (editor base style folded through the
   /// def's `baseStyle`).
   final TextStyle resolvedStyle;
+
+  /// The collapsed caret's block-local offset, when the caret is in this
+  /// block and the editor has focus; null otherwise.
+  final int? caretOffset;
+
+  /// Whether this (void) block is atomically selected — its `[0,1)` is the
+  /// whole selection (D3). Range-spanning selection slices arrive day 10.
+  final bool isSelected;
 
   /// Link/entity tap surface (D3) — driven by the link-span recognizers in
   /// the default text component.
