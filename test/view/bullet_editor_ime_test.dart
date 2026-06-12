@@ -25,6 +25,7 @@ void main() {
     List<TextBlock> blocks, {
     bool readOnly = false,
     bool autofocus = true,
+    ImeFrontend? imeFrontend,
   }) async {
     controller = EditorController(
       document: Document(blocks),
@@ -38,6 +39,7 @@ void main() {
             controller: controller,
             readOnly: readOnly,
             autofocus: autofocus,
+            imeFrontend: imeFrontend,
             textStyle: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
           ),
         ),
@@ -479,6 +481,108 @@ void main() {
       final methods = tester.testTextInput.log.map((c) => c.method).toList();
       // setComposingRect's wire name is TextInput.setMarkedTextRect.
       expect(methods, contains('TextInput.setMarkedTextRect'));
+    });
+  });
+
+  group('web diff fallback wiring (day 8)', () {
+    testWidgets('imeFrontend: nonDeltaDiff attaches WITHOUT the delta model '
+        'and full-value updates from the platform drive the document', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      expect(imeOf(tester).frontend, ImeFrontend.nonDeltaDiff);
+      final setClient = tester.testTextInput.log.firstWhere(
+        (call) => call.method == 'TextInput.setClient',
+      );
+      final config =
+          (setClient.arguments as List<dynamic>)[1] as Map<String, dynamic>;
+      expect(config['enableDeltaModel'], isFalse);
+
+      // The engine's full-value callback, end to end over the channel —
+      // what a web engine sends for every DOM input event.
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '. hi',
+          selection: TextSelection.collapsed(offset: 4),
+        ),
+      );
+      await tester.pump();
+
+      expect(controller.document.blockById('a')!.plainText, 'hi');
+      expect(richTextContaining('hi'), findsOneWidget);
+    });
+
+    testWidgets('a composing snapshot maps to ComposingState and paints the '
+        'underline (the full-peer contract: composing is never invisible '
+        'on web)', (tester) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '. かな',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange(start: 2, end: 4),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 2)),
+      );
+      // Two filled rects: the composing underline, then the caret.
+      expect(
+        tester.renderObject(
+          find.byWidgetPredicate(
+            (w) =>
+                w is CustomPaint &&
+                w.foregroundPainter != null &&
+                w.child is RichText,
+          ),
+        ),
+        paints
+          ..rect()
+          ..rect(),
+      );
+    });
+
+    testWidgets('flipping imeFrontend rebuilds the IME service with the new '
+        'frontend (a connection cannot change its delta declaration in '
+        'place)', (tester) async {
+      await pumpEditor(tester, [para('a', 'hi')]);
+      final deltaService = imeOf(tester);
+      expect(deltaService.frontend, ImeFrontend.delta);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BulletEditor(
+              controller: controller,
+              autofocus: true,
+              imeFrontend: ImeFrontend.nonDeltaDiff,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF000000),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final diffService = imeOf(tester);
+      expect(identical(diffService, deltaService), isFalse);
+      expect(diffService.frontend, ImeFrontend.nonDeltaDiff);
+      expect(diffService.isAttached, isTrue);
     });
   });
 

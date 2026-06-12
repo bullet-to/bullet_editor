@@ -13,11 +13,12 @@ import 'editor_view_scope.dart';
 
 /// The v3 editor root widget: lazy render through the component registry,
 /// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
-/// painting, the IME delta path (day 5–7 — character input arrives as
-/// engine deltas through [ImeService], never as key events), and the
-/// hardware-key handlers the IME doesn't own (Enter, Backspace, Tab,
-/// arrows, undo). Day 10 brings the full shortcut matrix with the composing
-/// gate over all handlers.
+/// painting, the IME path (days 5–8 — character input arrives through
+/// [ImeService], never as key events: engine deltas on delta platforms,
+/// diffed full-value snapshots behind the web fallback, per [imeFrontend]),
+/// and the hardware-key handlers the IME doesn't own (Enter, Backspace,
+/// Tab, arrows, undo). Day 10 brings the full shortcut matrix with the
+/// composing gate over all handlers.
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -29,6 +30,7 @@ class BulletEditor extends StatefulWidget {
     this.textStyle,
     this.padding,
     this.onLinkTap,
+    this.imeFrontend,
   });
 
   final EditorController controller;
@@ -55,6 +57,13 @@ class BulletEditor extends StatefulWidget {
   /// Link tap surface (D3) — driven by the link-span recognizers.
   final void Function(String blockId, int offset, InlineEntitySnapshot entity)?
   onLinkTap;
+
+  /// Which engine frontend feeds the IME core (architecture §IME: one
+  /// strategy, two frontends, one core). Null takes the platform default —
+  /// the delta model everywhere except web, which gets the non-delta diff
+  /// fallback. Override per-platform only as the R1 escape hatch (an OEM
+  /// keyboard with broken delta support).
+  final ImeFrontend? imeFrontend;
 
   @override
   State<BulletEditor> createState() => BulletEditorState();
@@ -91,12 +100,13 @@ class BulletEditorState extends State<BulletEditor> {
     controller.addListener(_onControllerChanged);
     controller.attachFocusNode(node);
     node.addListener(_onFocusChanged);
-    imeService = ImeService(controller: controller)
-      ..geometryReporter.editorRenderBox = () {
-        final renderObject = context.findRenderObject();
-        return renderObject is RenderBox ? renderObject : null;
-      }
-      ..geometryReporter.blockGeometryOf = registry.geometryOf;
+    imeService =
+        ImeService(controller: controller, frontend: widget.imeFrontend)
+          ..geometryReporter.editorRenderBox = () {
+            final renderObject = context.findRenderObject();
+            return renderObject is RenderBox ? renderObject : null;
+          }
+          ..geometryReporter.blockGeometryOf = registry.geometryOf;
     _syncImeAttachment();
   }
 
@@ -138,7 +148,11 @@ class BulletEditorState extends State<BulletEditor> {
       oldWidget.controller,
     );
     final nodeChanged = !identical(widget.focusNode, oldWidget.focusNode);
-    if (!controllerChanged && !nodeChanged) return;
+    // The frontend is fixed per ImeService (a connection's delta-model
+    // declaration cannot change in place); flipping it rebuilds the
+    // service, which re-attaches with the matching configuration.
+    final frontendChanged = widget.imeFrontend != oldWidget.imeFrontend;
+    if (!controllerChanged && !nodeChanged && !frontendChanged) return;
 
     // The node the old pair was attached with (the owned node when the old
     // widget supplied none — initState guarantees it exists by now).

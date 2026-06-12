@@ -49,7 +49,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('bullet_editor inspector — v3 day 5-7'),
+        title: const Text('bullet_editor inspector — v3 day 8'),
         actions: [
           IconButton(
             tooltip: 'Undo',
@@ -280,10 +280,12 @@ class _SelectionPane extends StatelessWidget {
   }
 }
 
-/// Pane 3 — the IME window (v3-build-strategy §dev harness): the shadow
-/// buffer as the engine sees it (sentinel visible), the last received delta
-/// batch, the last terminateComposition reason, and the quarantine state.
-/// This pane is why IME bugs get diagnosed in minutes instead of days.
+/// Pane 3 — the IME window (v3-build-strategy §dev harness): the active
+/// frontend (delta vs the day-8 web diff fallback), the shadow buffer as
+/// the engine sees it (sentinel visible), the last received/synthesized
+/// delta batch, the last value diff in web-fallback mode, the last
+/// terminateComposition reason, and the quarantine state. This pane is why
+/// IME bugs get diagnosed in minutes instead of days.
 class _ImePane extends StatelessWidget {
   const _ImePane({required this.editorKey});
 
@@ -308,12 +310,34 @@ class _ImePane extends StatelessWidget {
       builder: (context, _) {
         final shadow = ime.debugShadow;
         final deltas = ime.debugLastDeltas;
+        final isDiffFrontend = ime.frontend == ImeFrontend.nonDeltaDiff;
+        final diff = ime.debugLastDiff;
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
             Text('Connection', style: Theme.of(context).textTheme.titleSmall),
-            Text(ime.isAttached ? 'attached' : 'detached', style: mono),
+            Text(
+              '${ime.isAttached ? 'attached' : 'detached'}\n'
+              'frontend: ${ime.frontend.name}'
+              '${isDiffFrontend ? ' (web diff fallback)' : ' (delta model)'}',
+              style: mono,
+            ),
             const SizedBox(height: 12),
+            if (isDiffFrontend) ...[
+              Text(
+                'Last value diff (web fallback)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              Text(
+                diff == null
+                    ? '— (no text change: NonTextUpdate analogue or echo)'
+                    : 'start: ${diff.start}  '
+                          'deleted: ${diff.deletedLength}  '
+                          'inserted: ${visible(diff.insertedText)}',
+                style: mono,
+              ),
+              const SizedBox(height: 12),
+            ],
             Text(
               'Shadow buffer (as the engine sees it)',
               style: Theme.of(context).textTheme.titleSmall,
@@ -329,7 +353,9 @@ class _ImePane extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Last delta batch',
+              isDiffFrontend
+                  ? 'Last delta batch (synthesized from the value diff)'
+                  : 'Last delta batch',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             Text(
