@@ -184,9 +184,19 @@ class BlockSubtree extends StatelessWidget {
       onLinkTap: onLinkTap,
     );
 
-    final component = def.componentBuilder != null
+    Widget component = def.componentBuilder != null
         ? def.componentBuilder!(componentContext)
         : DefaultTextComponent(componentContext);
+
+    // Voids are not text: override the editor-wide I-beam (any registered
+    // void type, not just the built-ins). Link-segment cursors are day-14
+    // interactor work.
+    if (def.isVoid) {
+      component = MouseRegion(
+        cursor: SystemMouseCursors.basic,
+        child: component,
+      );
+    }
 
     final prefix = def.prefixBuilder?.call(block, gutter, resolvedStyle);
 

@@ -371,6 +371,21 @@ void main() {
       expect(newBlock.metadata[TaskItemKeys.checked], isFalse);
     });
 
+    test('on a block quote the new block continues the quote', () {
+      final c = controller([typed('q', BlockQuoteKeys.type, 'wise words')]);
+      c.setSelection(caret('q', 10));
+      c.insertNewline();
+      expect(c.document.allBlocks[1].blockType, BlockQuoteKeys.type);
+    });
+
+    test('on an EMPTY block quote converts to a paragraph (the escape)', () {
+      final c = controller([typed('q', BlockQuoteKeys.type, '')]);
+      c.setSelection(caret('q', 0));
+      c.insertNewline();
+      expect(c.document.allBlocks.length, 1);
+      expect(c.document.blockById('q')!.blockType, ParagraphKeys.type);
+    });
+
     test(
       'on an EMPTY list item converts to a paragraph instead of splitting',
       () {

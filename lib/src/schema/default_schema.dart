@@ -380,6 +380,11 @@ abstract final class Blocks {
         canHaveChildren: true,
         maxDepth: 6,
       ),
+      // Industry norm (Medium/Bear/Craft), adopted over v2's split-to-
+      // paragraph at checkpoint 2: Enter continues the quote, Enter on an
+      // empty quote escapes to a paragraph. Codec side effect: adjacent
+      // quotes join tight (`> a\n> b`) — idiomatic continued-quote markdown.
+      split: SplitPolicy.listLike,
       backspaceAtStart: BackspaceAtStartPolicy.outdentOrConvert,
       baseStyle: (base) {
         final size = (base?.fontSize ?? kFallbackFontSize) * 1.1;

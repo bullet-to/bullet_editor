@@ -93,6 +93,9 @@ void main() {
         ListItemKeys.type,
         NumberedListKeys.type,
         TaskItemKeys.type,
+        // Quotes continue on Enter too (checkpoint-2 decision — the
+        // Medium/Bear norm, replacing v2's split-to-paragraph).
+        BlockQuoteKeys.type,
       ]) {
         final split = schema.splitPolicyOf(type);
         expect(
