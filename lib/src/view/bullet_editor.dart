@@ -231,9 +231,14 @@ class BulletEditorState extends State<BulletEditor> {
           onPointerDown: _onPointerDown,
           onPointerUp: _onPointerUp,
           behavior: HitTestBehavior.opaque,
-          child: CustomScrollView(
-            controller: _scrollController,
-            slivers: [sliver],
+          // I-beam over editor content. Per-segment refinement (click over
+          // links, basic over voids) is interactor-side, day 14.
+          child: MouseRegion(
+            cursor: SystemMouseCursors.text,
+            child: CustomScrollView(
+              controller: _scrollController,
+              slivers: [sliver],
+            ),
           ),
         ),
       ),

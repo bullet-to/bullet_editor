@@ -60,7 +60,12 @@ class _ImageBlockComponentState extends State<ImageBlockComponent>
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: VoidSelectionTint(
             isSelected: widget.componentContext.isSelected,
-            child: child,
+            // Image corners match the tint/placeholder radius, so the
+            // selection border hugs the content (checkpoint-2 finding).
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: child,
+            ),
           ),
         ),
       ),

@@ -101,6 +101,51 @@ void main() {
     });
   });
 
+  group('void selection affordances (checkpoint-2 findings)', () {
+    testWidgets(
+      'the divider has a tappable band and a visible selected state',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'above'),
+          TextBlock(id: 'd', blockType: DividerKeys.type),
+          para('b', 'below'),
+        ]);
+        // A 1px rule is an unusable midpoint-rule target and an invisible
+        // tint; the component provides a band around the rule.
+        final band = tester.getSize(find.byType(DividerBlockComponent));
+        expect(band.height, greaterThanOrEqualTo(8));
+
+        await tester.tapAt(
+          tester.getCenter(find.byType(DividerBlockComponent)),
+        );
+        await tester.pump();
+        expect(controller.selection!.base.blockId, 'd');
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Container && w.foregroundDecoration != null,
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('image corners are clipped to match the selection tint', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        TextBlock(id: 'img', blockType: ImageKeys.type),
+        para('a', 'after'),
+      ]);
+      expect(
+        find.descendant(
+          of: find.byType(ImageBlockComponent),
+          matching: find.byType(ClipRRect),
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('void geometry (midpoint hit rule, G5)', () {
     testWidgets('top half resolves upstream (0), bottom half downstream (1)', (
       tester,

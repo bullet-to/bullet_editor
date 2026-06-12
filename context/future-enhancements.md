@@ -118,3 +118,26 @@ The current editor renders the entire document as a single `TextField` with a ri
 A multi-widget architecture (one `EditableText` per block, coordinated by a shared focus/selection controller) would solve all of these. Reference: [super_editor](https://github.com/superlistapp/super_editor) uses this approach. Flutter has no plans to add a block-based editor to the framework (issue #167039 closed as "not planned").
 
 **Trade-off:** Significant rewrite of selection handling, cursor navigation across block boundaries, and IME integration. The current single-TextField approach covers most use cases well.
+
+---
+
+## Image Captions (type-to-caption UX)
+
+Checkpoint-2 idea (2026-06-12): with an image atomically selected, typing could
+begin a caption instead of replacing the image — a genuinely nice authoring flow.
+
+Decision for launch: typing over a selected void **replaces** it (the day-14
+spec'd Notion behavior; type-over-selection must stay uniform across voids and
+text or the IME replacement path forks). Revisit captions post-launch as a
+first-class feature:
+
+- **Not via alt text** — alt is an accessibility surface; reusing it for visible
+  captions corrupts both (the screen reader would read the caption twice, and
+  decorative captions would pollute alt).
+- Natural shape: a `caption` metadata key on the image block (declared in
+  `metadataKeys`, rendered by the image component as a styled line under the
+  image, edited via a small inline text field or a child text block), with the
+  markdown codec emitting `![alt](url "caption")` — the title slot round-trips.
+- Entry UX can then be exactly the proposed one: image selected + typing routes
+  into the caption editor instead of the replace path — a per-type
+  `voidTypeOver` policy if more void types want it.

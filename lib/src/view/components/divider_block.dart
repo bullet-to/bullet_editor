@@ -27,16 +27,30 @@ class _DividerBlockComponentState extends State<DividerBlockComponent>
 
   @override
   Widget build(BuildContext context) {
-    final resolved =
-        widget.color ??
-        (widget.componentContext.resolvedStyle.color ?? const Color(0xFF000000))
-            .withValues(alpha: 0.2);
-    // Vertical breathing room comes from the def's spacingBefore/After
-    // policy, not the component. A few px of tappable height around the
-    // 1px rule comes from the selection tint container.
+    final isSelected = widget.componentContext.isSelected;
+    final resolved = isSelected
+        ? const Color(0xFF2196F3)
+        : widget.color ??
+              (widget.componentContext.resolvedStyle.color ??
+                      const Color(0xFF000000))
+                  .withValues(alpha: 0.2);
+    // Major vertical breathing room comes from the def's spacingBefore/After
+    // policy; the band around the 1px rule gives the midpoint hit rule a
+    // real target and makes the selection tint visible (checkpoint-2
+    // finding: a 1px tint was imperceptible).
     return VoidSelectionTint(
-      isSelected: widget.componentContext.isSelected,
-      child: Container(width: double.infinity, height: 1, color: resolved),
+      isSelected: isSelected,
+      child: SizedBox(
+        width: double.infinity,
+        height: 9,
+        child: Center(
+          child: Container(
+            width: double.infinity,
+            height: isSelected ? 2 : 1,
+            color: resolved,
+          ),
+        ),
+      ),
     );
   }
 }
