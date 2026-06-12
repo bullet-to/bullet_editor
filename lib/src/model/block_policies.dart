@@ -32,6 +32,16 @@ class BlockPolicies {
 // expressed as named policies with enumerated values, never as booleans.
 // Booleans are reserved for structural *kind* facts (e.g. `isVoid`).
 
+/// What Enter does at all on this block type.
+enum OnEnter {
+  /// Split the block (the default for every text block).
+  split,
+
+  /// Insert a literal `\n` at the caret instead of splitting — code blocks
+  /// store multi-line content as a single block.
+  insertLineBreak,
+}
+
 /// What type the new block gets when Enter splits a block.
 enum SplitNewBlockType {
   /// The new block keeps the split block's type (list items continue lists).
@@ -52,10 +62,11 @@ enum OnSplitEmpty {
 }
 
 /// What Enter does for a block type. Consulted by the controller's Enter
-/// path ([OnSplitEmpty]) and by `SplitBlock.apply` via `EditContext`
-/// ([SplitNewBlockType]).
+/// path ([OnEnter], [OnSplitEmpty]) and by `SplitBlock.apply` via
+/// `EditContext` ([SplitNewBlockType]).
 class SplitPolicy {
   const SplitPolicy({
+    this.onEnter = OnEnter.split,
     this.newBlockType = SplitNewBlockType.defaultType,
     this.onSplitEmpty = OnSplitEmpty.none,
   });
@@ -67,6 +78,10 @@ class SplitPolicy {
     onSplitEmpty: OnSplitEmpty.convertToDefault,
   );
 
+  /// The code-block shape: Enter inserts a literal line break.
+  static const lineBreak = SplitPolicy(onEnter: OnEnter.insertLineBreak);
+
+  final OnEnter onEnter;
   final SplitNewBlockType newBlockType;
   final OnSplitEmpty onSplitEmpty;
 }

@@ -549,15 +549,7 @@ class InsertBlocks extends EditOperation {
   @override
   Document? apply(Document doc, EditContext ctx) {
     if (blocks.isEmpty) return doc;
-    var result = doc;
-    var anchorId = afterBlockId;
-    for (final block in blocks) {
-      final anchorIndex = result.idToFlatIndex[anchorId];
-      if (anchorIndex == null) return null;
-      result = result.insertAfterFlatIndex(anchorIndex, block);
-      anchorId = block.id;
-    }
-    return result;
+    return _chainInsertAfter(doc, afterBlockId, blocks);
   }
 
   @override
@@ -672,18 +664,10 @@ class PasteBlocks extends EditOperation {
       tailBlock,
     ];
 
-    // 5. Replace target with head, then chain-insert each block after the
-    //    previous inserted block's id, resolved against the evolving doc —
-    //    siblings land at the target's depth regardless of nesting.
-    var result = doc.replaceBlock(doc.idToFlatIndex[target.id]!, headBlock);
-    var anchorId = headBlock.id;
-    for (final block in toInsert) {
-      final anchorIndex = result.idToFlatIndex[anchorId];
-      if (anchorIndex == null) return null;
-      result = result.insertAfterFlatIndex(anchorIndex, block);
-      anchorId = block.id;
-    }
-    return result;
+    // 5. Replace target with head, then chain-insert after it — siblings
+    //    land at the target's depth regardless of nesting.
+    final result = doc.replaceBlock(doc.idToFlatIndex[target.id]!, headBlock);
+    return _chainInsertAfter(result, headBlock.id, toInsert);
   }
 
   @override
@@ -852,6 +836,26 @@ class MoveBlock extends EditOperation {
 }
 
 // --- Helpers ---
+
+/// Insert [blocks] in order, each as the sibling after the previously
+/// inserted block's id, resolved against the evolving document. Shared by
+/// [InsertBlocks] and [PasteBlocks] — one implementation of id-chained
+/// sibling insertion. Returns null if an anchor id is gone.
+Document? _chainInsertAfter(
+  Document doc,
+  String anchorId,
+  List<TextBlock> blocks,
+) {
+  var result = doc;
+  var anchor = anchorId;
+  for (final block in blocks) {
+    final anchorIndex = result.idToFlatIndex[anchor];
+    if (anchorIndex == null) return null;
+    result = result.insertAfterFlatIndex(anchorIndex, block);
+    anchor = block.id;
+  }
+  return result;
+}
 
 /// Insert [text] at [offset] in [segments].
 ///

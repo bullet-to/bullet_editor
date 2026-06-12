@@ -116,6 +116,7 @@ void main() {
     test('paragraph takes the default policies', () {
       final schema = EditorSchema.standard();
       final split = schema.splitPolicyOf(ParagraphKeys.type);
+      expect(split.onEnter, OnEnter.split);
       expect(split.newBlockType, SplitNewBlockType.defaultType);
       expect(split.onSplitEmpty, OnSplitEmpty.none);
       expect(
@@ -123,6 +124,15 @@ void main() {
         BackspaceAtStartPolicy.merge,
       );
       expect(schema.blockDef(ParagraphKeys.type).headingLevel, isNull);
+    });
+
+    test('code block declares Enter-inserts-line-break (replaces the old '
+        'CodeBlockEnterRule interceptor)', () {
+      final schema = EditorSchema.standard();
+      final split = schema.splitPolicyOf(CodeBlockKeys.type);
+      expect(split.onEnter, OnEnter.insertLineBreak);
+      // And the code block carries no input rules at all anymore.
+      expect(schema.blockDef(CodeBlockKeys.type).inputRules, isEmpty);
     });
 
     test('defaultBlockType is paragraph', () {
@@ -580,11 +590,7 @@ void main() {
 
       // Block rules should come before inline rules.
       final lastBlockRule = rules.lastIndexWhere(
-        (r) =>
-            r is PrefixBlockRule ||
-            r is TaskItemRule ||
-            r is DividerRule ||
-            r is CodeBlockEnterRule,
+        (r) => r is PrefixBlockRule || r is TaskItemRule || r is DividerRule,
       );
       final firstInlineRule = rules.indexWhere(
         (r) => r is LinkWrapRule || r is InlineWrapRule,

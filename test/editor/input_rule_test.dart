@@ -639,76 +639,10 @@ void main() {
   // DividerBackspaceRule group deleted — behavior moved to the BlockDef
   // `voidBackspace` policy.
 
-  group('CodeBlockEnterRule', () {
-    test('Enter inside a code block inserts a literal newline', () {
-      const rule = CodeBlockEnterRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: CodeBlockKeys.type,
-          segments: [const StyledSegment('hello')],
-        ),
-      ]);
-
-      final outcome = rule.intercept(
-        const StructuralTrigger.split('a', 5),
-        doc,
-        schema,
-      );
-      expect(outcome, isNotNull);
-
-      final resultDoc = applyOutcome(doc, outcome!, schema);
-      // Still one block — the newline is embedded, not a split.
-      expect(resultDoc.allBlocks.length, 1);
-      expect(resultDoc.allBlocks[0].blockType, CodeBlockKeys.type);
-      expect(resultDoc.allBlocks[0].plainText, 'hello\n');
-      expect(
-        outcome.selectionAfter,
-        DocSelection.collapsed(const DocPosition('a', 6)),
-      );
-    });
-
-    test('does not intercept Enter on non-code blocks', () {
-      const rule = CodeBlockEnterRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: ParagraphKeys.type,
-          segments: [const StyledSegment('hello')],
-        ),
-      ]);
-
-      expect(
-        rule.intercept(const StructuralTrigger.split('a', 5), doc, schema),
-        isNull,
-      );
-    });
-
-    test('does not intercept backspace-at-start triggers', () {
-      const rule = CodeBlockEnterRule();
-      final doc = Document([
-        TextBlock(
-          id: 'a',
-          blockType: ParagraphKeys.type,
-          segments: [const StyledSegment('above')],
-        ),
-        TextBlock(
-          id: 'b',
-          blockType: CodeBlockKeys.type,
-          segments: [const StyledSegment('code')],
-        ),
-      ]);
-
-      expect(
-        rule.intercept(
-          const StructuralTrigger.backspaceAtStart('b'),
-          doc,
-          schema,
-        ),
-        isNull,
-      );
-    });
-  });
+  // CodeBlockEnterRule deleted — Enter-inside-code-block is the
+  // `SplitPolicy(onEnter: insertLineBreak)` policy on the code block's def
+  // (the controller's Enter path consults it from day 5–7; the declaration
+  // is asserted in editor_schema_test).
 
   group('RemoveBlock', () {
     test('removes a block from document', () {

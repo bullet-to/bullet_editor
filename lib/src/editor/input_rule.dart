@@ -18,13 +18,14 @@ class InputRuleOutcome {
 /// Base type for input rules, registered on block defs / inline defs and
 /// collected by the schema.
 ///
-/// The contract is split (architecture §input rules):
-/// - [PatternInputRule] — insert-pattern rules (markdown shortcuts). Run
-///   AFTER an insertion has applied, against the committed text.
-/// - [StructuralInputRule] — pre-application interceptors for structural
-///   triggers (Enter, backspace-at-start). The escape hatch for behavior the
-///   named BlockDef policies can't express; consulted first from the
-///   controller's split/merge paths.
+/// There is exactly one rule contract: [PatternInputRule] — insert-pattern
+/// rules (markdown shortcuts) that run AFTER an insertion has applied,
+/// against the committed text. Structural behavior (Enter, backspace at
+/// start) is expressed entirely through the named BlockDef policies
+/// (`SplitPolicy` incl. `OnEnter`, `BackspaceAtStartPolicy`,
+/// `VoidBackspacePolicy`); interceptors are deliberately not a rule concept
+/// (D13 — if ever needed they are one pre-commit seam on the single-writer
+/// queue).
 abstract class InputRule {
   const InputRule();
 
@@ -46,46 +47,6 @@ abstract class PatternInputRule extends InputRule {
     Document docAfter,
     String blockId,
     TextRange editedRange,
-    EditorSchema schema,
-  );
-}
-
-/// What structural event a [StructuralInputRule] is being consulted about.
-enum StructuralTriggerKind {
-  /// Enter at (blockId, offset).
-  split,
-
-  /// Backspace with the caret at offset 0 of blockId.
-  backspaceAtStart,
-}
-
-/// A structural trigger passed to interceptors before the controller's
-/// standard policy behavior runs.
-class StructuralTrigger {
-  const StructuralTrigger.split(this.blockId, this.offset)
-    : kind = StructuralTriggerKind.split;
-
-  const StructuralTrigger.backspaceAtStart(this.blockId)
-    : kind = StructuralTriggerKind.backspaceAtStart,
-      offset = 0;
-
-  final StructuralTriggerKind kind;
-  final String blockId;
-  final int offset;
-}
-
-/// A pre-application structural interceptor — the escape hatch consulted
-/// first from the controller's split/merge paths, before the standard
-/// `split`/`backspaceAtStart` BlockDef policies.
-///
-/// Return an outcome to REPLACE the standard behavior, or null to let the
-/// policies run.
-abstract class StructuralInputRule extends InputRule {
-  const StructuralInputRule();
-
-  InputRuleOutcome? intercept(
-    StructuralTrigger trigger,
-    Document doc,
     EditorSchema schema,
   );
 }
@@ -403,32 +364,7 @@ class DividerRule extends PatternInputRule {
   }
 }
 
-/// Enter inside a code block inserts a literal newline instead of splitting.
-///
-/// Code blocks store multi-line content as a single block with embedded `\n`.
-/// This structural interceptor replaces the standard split behavior.
-class CodeBlockEnterRule extends StructuralInputRule {
-  const CodeBlockEnterRule({this.typeKey = CodeBlockKeys.type});
-
-  /// The block type this rule fires for — defaults to the built-in code
-  /// block; custom code-like types pass their own key.
-  final String typeKey;
-
-  @override
-  InputRuleOutcome? intercept(
-    StructuralTrigger trigger,
-    Document doc,
-    EditorSchema schema,
-  ) {
-    if (trigger.kind != StructuralTriggerKind.split) return null;
-    final block = doc.blockById(trigger.blockId);
-    if (block == null || block.blockType != typeKey) return null;
-
-    return InputRuleOutcome(
-      operations: [InsertText(trigger.blockId, trigger.offset, '\n')],
-      selectionAfter: DocSelection.collapsed(
-        DocPosition(trigger.blockId, trigger.offset + 1),
-      ),
-    );
-  }
-}
+// Enter-inside-a-code-block (insert a literal `\n` instead of splitting) is
+// not a rule: it is `SplitPolicy(onEnter: OnEnter.insertLineBreak)` on the
+// code block's def, consulted by the controller's Enter path like every
+// other split behavior.

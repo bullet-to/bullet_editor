@@ -154,19 +154,18 @@ lib/src/
                                                    (blockId, offset); package-private
                                                    (surface hygiene)
                 undo_manager.dart                  KEPT + composition-scoped grouping (~20)
-                input_rule.dart                    KEPT, **contract-split** (~1 day, NOT a
-                                                   half-day sweep): insert-pattern rules →
+                input_rule.dart                    KEPT, ONE contract: insert-pattern rules →
                                                    post-state tryTransform (docAfter, blockId,
-                                                   editedRange); structural interceptors stay
-                                                   pre-application as the ESCAPE HATCH,
-                                                   consulted first from the controller's
-                                                   split/merge paths (standard behaviors are
-                                                   now BlockDef policies — the four standard
-                                                   structural rules die, see IME §input
-                                                   rules); + declared
+                                                   editedRange) + declared
                                                    referencedInlineKeys; enum literals → key
-                                                   holders; DividerBackspaceRule deleted
-                                                   (void backspace → controller, IME §G1/G2)
+                                                   holders. ALL structural behavior is BlockDef
+                                                   policies (incl. CodeBlockEnter →
+                                                   SplitPolicy.onEnter: insertLineBreak) — all
+                                                   five structural rules + DividerBackspaceRule
+                                                   die; no rule-level interceptors (D13:
+                                                   the only interceptor seam is the deferred
+                                                   queue-level pre-commit hook). See IME
+                                                   §input rules
                 text_diff.dart                     KEPT (web non-delta fallback)
                 editor_controller.dart             REWRITTEN (~900 LOC, plain ChangeNotifier —
                                                    the TextEditingController inheritance dies;
@@ -335,8 +334,11 @@ do. `splitInheritsType`, `isHeading`, and `isListLike` (block_def.dart:19,21-22,
 citations remain valid as descriptions of the v2 mechanism being replaced) are **deleted**,
 decomposed into two named policies plus machinery that already exists:
 
-- **`split: SplitPolicy`** — what Enter does. `newBlockType: inherit | defaultType` (list
-  items inherit their type; headings and paragraphs produce the schema default) and
+- **`split: SplitPolicy`** — what Enter does. Three axes:
+  `onEnter: split | insertLineBreak` (code blocks insert a literal `\n` at the caret
+  instead of splitting — this absorbs v2's `CodeBlockEnterRule`, the last structural rule;
+  *amended 2026-06-12*), `newBlockType: inherit | defaultType` (list items inherit their
+  type; headings and paragraphs produce the schema default), and
   `onSplitEmpty: convertToDefault | none` (an empty list item + Enter converts to the
   default paragraph; others just split). This absorbs `splitInheritsType` and the
   Enter-related half of `isListLike`.
@@ -345,8 +347,7 @@ decomposed into two named policies plus machinery that already exists:
   (default — merge with previous, the paragraph behavior), `convertToDefault` (headings —
   absorbing `isHeading`'s only behavior consumer), `outdentOrConvert` (list items — outdent
   if nested, else convert to default; the behavior the controller's structural-backspace
-  path now implements directly — see IME §G1 and §input rules for how interceptor rules
-  relate).
+  path implements directly — see IME §G1 and §input rules).
 
 The other halves of `isListLike` were already covered elsewhere — now stated explicitly:
 the **nesting half** (indent/outdent eligibility) is `BlockPolicies`
@@ -355,9 +356,9 @@ half** (has a bullet/number) is simply `prefixBuilder != null`. `EditContext` lo
 `isListLikeFn` and gains policy lookups — `splitPolicyOf(type)`, `backspaceAtStartOf(type)`
 (see Operations). The standard schema declares: h1–h6 `backspaceAtStart: convertToDefault`;
 list, numbered, and task items `split: (inherit, convertToDefault-on-empty)` +
-`backspaceAtStart: outdentOrConvert`; paragraphs take the defaults (`(defaultType, none)` +
-`merge`). Both policies have total defaults, so the callout extension example in the API
-section gains no fields.
+`backspaceAtStart: outdentOrConvert`; code blocks `split: (onEnter: insertLineBreak)`;
+paragraphs take the defaults (`(split, defaultType, none)` + `merge`). Both policies have
+total defaults, so the callout extension example in the API section gains no fields.
 
 ### Selection (new, ~140 LOC)
 
@@ -695,6 +696,22 @@ citations describe the v2 code the id-native rewrite replaces):
    controller places the post-paste caret at the end of the last pasted block by an id it
    already holds (G12), with no result plumbing and no recomputed indices.
 
+**Why `PasteBlocks` stays a composite op (recorded 2026-06-12, against the "compose it from
+SplitBlock + InsertBlocks + MergeBlocks" review finding):** three reasons, each individually
+sufficient. (1) *The primitives compose to the wrong tree*: `MergeBlocks` **promotes** the
+merging block's children to siblings (correct for backspace-merge, test-asserted), while
+paste's head edge **adopts** the first pasted block's children under the merged head
+(correct for pasting nested content into a paragraph — nesting survives); composing paste
+from `MergeBlocks` would need a mode flag on a shared primitive, injecting paste policy
+into an op every other path uses. (2) *Edge decisions are apply-time-dependent*: "is the
+target empty" and the void-edge checks must be evaluated against the document the op
+actually receives, not at builder time — they are op behavior consulted via `EditContext`
+(the sanctioned channel; the purity rule bans *stored constructor configuration*, which
+`PasteBlocks` carries none of). (3) *There is no segment-splicing primitive*: styled
+single-block paste has no primitive expression without inventing one, a larger vocabulary
+change than the composite. The chain-insert mechanics are shared code with `InsertBlocks`
+(one private helper), so the duplication risk the v2 defects grew from is gone.
+
 Gauntlet tests (with the clipboard pipeline's unit tests): paste 3+ blocks into a **nested
 list item that has children**; paste markdown whose **first/last block is an image** into
 mid-paragraph — both must produce siblings at the item's depth with no void-block text
@@ -899,15 +916,23 @@ normalization in Operations).
   last block; any delta touching the elided interior is classified as a whole-selection
   replacement and mapped to the model selection directly. Payloads stay bounded; the
   quill-style whole-document failure mode stays structurally impossible.
+  **Why the elided form keeps the first/last block text instead of collapsing to the void
+  `~` form (recorded 2026-06-12, against the "just use the void buffer" review question):**
+  type-over context. The dominant edit against a capped selection is select-all → type, and
+  the engine's autocapitalization/suggestion context at the selection start is the first
+  block's pre-selection text; under a bare `~` the preceding context is the `". "` sentinel —
+  a sentence end — so every type-over would be spuriously capitalized. The edge text also
+  serves engine-side selection-edge adjustments and gives Look Up/share a real slice.
+  Verification that this rationale holds on-device is a day-9 gate row (select-all →
+  type-over, no spurious capital).
 - All incoming delta offsets are shifted −2 and then mapped block-locally (binary search over
   the `\n` joints for the multi-block case, ~40 LOC).
 
 **G1 (backspace at offset 0 of the first block):** the IME cannot report it; with the
 sentinel it arrives as a deletion intersecting buffer range `[0,2)`. Mapped: "structural
-backspace at block start" → the controller's structural-backspace path consults any
-registered structural-interceptor rule first (the escape hatch for exotic custom behaviors —
-see §input rules) and, when none claims it, **implements the block type's declared
-`backspaceAtStart` policy directly**: `outdentOrConvert` (list items — outdent if nested,
+backspace at block start" → the controller's structural-backspace path **implements the
+block type's declared `backspaceAtStart` policy directly** (policies are the only
+structural mechanism — see §input rules): `outdentOrConvert` (list items — outdent if nested,
 else convert to default), `convertToDefault` (headings), `merge` (the default; first
 paragraph of doc → no-op, there is nothing to merge into). Then
 re-serialize and push. For a **plain backspace** the composition is inactive when the
@@ -1176,23 +1201,21 @@ therefore **split by kind** (~1 day across days 1–2 / 5–7, re-booked):
   touches each rule. They run on the post-batch path: immediately when composing is empty,
   or at latch-fire with the latch's recorded `editedRange` (including the `NonTextUpdate`
   trigger, which now works because no pending transaction is needed).
-- **Structural interceptors** (v2: HeadingBackspace, EmptyListItem, ListItemBackspace,
-  NestedBackspace, CodeBlockEnter) *replace* pending ops — their returned transactions omit
-  `pending.operations`, which a post-state contract cannot express (it cannot un-apply a
-  split/merge). The contract stays **pre-application**, consulted from the controller's
-  structural split/merge paths — consistent with the G1/G2 ownership move that already
-  routes structural backspace through the controller — but under the behavior-policy
-  amendment (Document §BlockDef) it is the **escape hatch, not the standard mechanism**.
-  The four standard v2 rules' behaviors are now *declared* by BlockDef policies and
-  implemented directly by the controller paths (HeadingBackspace →
+- **Structural behavior is policies all the way down — there is no rule-level interceptor
+  contract** *(amended 2026-06-12: the behavior-policy amendment applied one move further)*.
+  All five v2 structural rules' behaviors are *declared* by BlockDef policies and
+  implemented directly by the controller's split/merge paths: HeadingBackspace →
   `backspaceAtStart: convertToDefault`; ListItemBackspace/NestedBackspace →
-  `backspaceAtStart: outdentOrConvert`; EmptyListItem → `onSplitEmpty: convertToDefault`),
-  so those four rules are **deleted** alongside `DividerBackspaceRule`. Consultation order,
-  stated plainly: the controller paths consult registered interceptors *first* and fall
-  through to the policy when none claims the edit — that is the pre-application framing the
-  kept contract already supports (interceptors intercept; the policy is the standard
-  behavior they intercept). `CodeBlockEnterRule` — genuinely exotic, expressible by no
-  enumerated policy value — is the contract's remaining shipped consumer.
+  `backspaceAtStart: outdentOrConvert`; EmptyListItem → `onSplitEmpty: convertToDefault`;
+  CodeBlockEnter → `SplitPolicy.onEnter: insertLineBreak` (Enter inserts a literal `\n` at
+  the caret instead of splitting — the same kind of enumerable fact as `onSplitEmpty`,
+  consulted at the same place in the Enter path). All five rules are **deleted** alongside
+  `DividerBackspaceRule`, the controller paths simply read the policies (no consultation
+  order to specify), and `input_rule.dart` carries exactly one contract: post-state
+  `tryTransform`. This also restores consistency with D13, which decides interceptors are
+  NOT built at launch — the only interceptor story anywhere in the system is the deferred
+  pre-commit seam on the single-writer queue, for behavior no enumerated policy value can
+  express.
 
 **Connection lifecycle (`connectionClosed`):** the platform can close the connection out from
 under us — verified: the web engine sends it on DOM blur, and iOS fires it on first-responder
@@ -2016,7 +2039,7 @@ project).
 | `model/document.dart` (423) | kept | drop generics + the 4 global-offset members; + `idToFlatIndex` cache; `_allBlocks` + the map become **lazy `late final`s** (intermediate docs in op chains pay nothing — see Document §caches); tree ops, flatten, extractRange, id gen untouched |
 | `editor/edit_operation.dart` (812) | **semantics kept, addressing rewritten** | behavioral semantics and tests survive (split-metadata threading, merge rules, void-edge no-merge, indent gates); the addressing and apply signature are **rewritten id-native** — `blockId`-addressed ops, `Document? apply(doc, EditContext ctx)`, resolve-at-apply via `idToFlatIndex` — absorbing the generic `apply<B>`/`as B`/`_recastBlock<B>` collapse into the same days-1–2 pass; `SplitBlock` + `newBlockMetadata` via `EditContext` (the taskItem enum hardcode at :206 dies with D7); **`PasteBlocks` re-specced** (id-chained sibling insertion replacing the root-list/flat-index paths at :492-518; void-edge no-merge; the tail-id result field disappears — pasted ids are caller data — ~0.5 day on the parallel-track clipboard item, see Operations §PasteBlocks); **offset bounds guards on InsertText/DeleteText/ToggleStyle/SplitBlock + DeleteRange lower bound** (defense in depth — reject, not throw); **`RemoveBlock` last-block fallback** (swap in `Document.empty`'s paragraph — G9); **`IndentBlock`/`OutdentBlock` gates via the shared `ctx.canIndent` predicate, rejection aborts the batch** (G13); + NEW `MoveBlock` (~60) |
 | `editor/undo_manager.dart` (108) | kept | snapshot type `TextSelection` → `DocSelection` (composing never snapshotted/restored); + composition-scoped grouping (~20) |
-| `editor/input_rule.dart` (550) | kept, **contract-split** (NOT a mechanical sweep — the kept v2 interception contract cannot be driven by the G3 latch, see IME §input rules): insert-pattern rules → post-state `tryTransform(docAfter, blockId, editedRange, schema)` with block-local `selectionAfter`; structural interceptors stay pre-application as the **escape hatch** — consulted first from the controller's split/merge paths, falling through to the BlockDef `split`/`backspaceAtStart` policies that now declare the standard behaviors (see IME §input rules): the four standard structural rules (HeadingBackspace, EmptyListItem, ListItemBackspace, NestedBackspace) are **deleted** into those policies, leaving `CodeBlockEnterRule` as the contract's shipped consumer; + declared `referencedInlineKeys`; enum literals → key-holder consts; `CodeBlockEnterRule` label-string match → real key check; `DividerBackspaceRule` **deleted** (void backspace owned by the controller, see IME §G2). **Re-booked as ~1 day across days 1–2 / 5–7** |
+| `editor/input_rule.dart` (550) | kept with **one contract** (the v2 pre-application interception contract cannot be driven by the G3 latch, see IME §input rules): insert-pattern rules → post-state `tryTransform(docAfter, blockId, editedRange, schema)` with block-local `selectionAfter`; + declared `referencedInlineKeys`; enum literals → key-holder consts. ALL FIVE structural rules are **deleted** into BlockDef policies (HeadingBackspace → `backspaceAtStart: convertToDefault`; ListItemBackspace/NestedBackspace → `outdentOrConvert`; EmptyListItem → `onSplitEmpty: convertToDefault`; CodeBlockEnter → `SplitPolicy.onEnter: insertLineBreak`), as is `DividerBackspaceRule` (void backspace owned by the controller, see IME §G2). No rule-level interceptor contract ships (D13 — the only interceptor seam is the deferred queue-level pre-commit hook) |
 | `editor/transaction.dart` (34) | kept, re-typed | `selectionAfter: TextSelection?` → `(String blockId, int offset)?` block-local caret; the controller resolves it to a `DocPosition` at commit; generic `apply<B>` collapses. Package-private in v3 (surface hygiene — a transaction is the committed batch record, with no indices to go stale) |
 | `editor/text_diff.dart` (78) | kept | reused once: web non-delta IME fallback frontend (squiggle shifting is now op-driven) |
 | `codec/*` (901) | kept, **de-genericized** | r1's "unchanged" was false: `MarkdownCodec<B extends Object>` is generic over `EditorSchema<B,Object,Object>`, has a `BlockType`-typed `standard()` factory, and compares directly against `BlockType.numberedList` — none of it compiles once the enums die. Folded into the days 1–2 sweep (~1–2 h mechanical); markdown remains the canonical clipboard format (open Q in D-doc, presumed yes) |
@@ -2115,11 +2138,11 @@ upstream of the never-cut touch block, with R10's mitigations voided in exactly 
 
 | Days | Milestone | Gauntlet coverage |
 |---|---|---|
-| 1–2 | **Rewrite ops id-native** (`blockId` addressing + `Document? apply(doc, EditContext ctx)` + resolve-at-apply, absorbing the ops generic-collapse; offset bounds guards; `RemoveBlock` last-block fallback; op-level indent/outdent gates via `ctx.canIndent`); de-genericize model/schema **and rules/transaction/codec** (the booked sweep: `selectionAfter` re-typing to `(blockId, offset)`, key-holder pass incl. inline keys, `CodeBlockEnterRule` key check, `DividerBackspaceRule` deletion, `newBlockMetadata` + **declared `metadataKeys`** + `voidBackspace` on BlockDef, **the `split`/`backspaceAtStart` policies replacing the `isListLike`/`isHeading`/`splitInheritsType` booleans (+ deleting their void asserts)**, **`prefixBuilder` re-signed to `(TextBlock, GutterContext, TextStyle)`**, **void/prefixBuilder constructor-assert inversion**, generic-collapse in `MarkdownCodec`); **input-rule contract split, part 1** (post-state `tryTransform` signatures + `referencedInlineKeys`); key holders; `validate()` (full assertion list); `idToFlatIndex` (+ both `Document` caches as **lazy `late final`s**); read-only lazy render of the **gauntlet fixture document** (every launch block kind incl. two images, a divider, 3-deep nesting, spacing, links + a 200-block lazy tail — see `v3-build-strategy.md`; exotics live in the skeleton, precluding v2's retrofit scar) (sliver + **public** default text component **rendering a real RichText child + link-span `TapGestureRecognizer`s with State-owned lifecycle** + registry) — **text reading semantics + heading flags + per-link tappable semantics land here for free**; test: paragraph-with-link semantics tree has a child node with `SemanticsAction.tap` | GATE-K, GATE-L skeleton, D4 text semantics, D3 link activation |
+| 1–2 | **Rewrite ops id-native** (`blockId` addressing + `Document? apply(doc, EditContext ctx)` + resolve-at-apply, absorbing the ops generic-collapse; offset bounds guards; `RemoveBlock` last-block fallback; op-level indent/outdent gates via `ctx.canIndent`); de-genericize model/schema **and rules/transaction/codec** (the booked sweep: `selectionAfter` re-typing to `(blockId, offset)`, key-holder pass incl. inline keys, `CodeBlockEnterRule` → `SplitPolicy.onEnter: insertLineBreak`, `DividerBackspaceRule` deletion, `newBlockMetadata` + **declared `metadataKeys`** + `voidBackspace` on BlockDef, **the `split`/`backspaceAtStart` policies replacing the `isListLike`/`isHeading`/`splitInheritsType` booleans (+ deleting their void asserts)**, **`prefixBuilder` re-signed to `(TextBlock, GutterContext, TextStyle)`**, **void/prefixBuilder constructor-assert inversion**, generic-collapse in `MarkdownCodec`); **input-rule contract split, part 1** (post-state `tryTransform` signatures + `referencedInlineKeys`); key holders; `validate()` (full assertion list); `idToFlatIndex` (+ both `Document` caches as **lazy `late final`s**); read-only lazy render of the **gauntlet fixture document** (every launch block kind incl. two images, a divider, 3-deep nesting, spacing, links + a 200-block lazy tail — see `v3-build-strategy.md`; exotics live in the skeleton, precluding v2's retrofit scar) (sliver + **public** default text component **rendering a real RichText child + link-span `TapGestureRecognizer`s with State-owned lifecycle** + registry) — **text reading semantics + heading flags + per-link tappable semantics land here for free**; test: paragraph-with-link semantics tree has a child node with `SemanticsAction.tap` | GATE-K, GATE-L skeleton, D4 text semantics, D3 link activation |
 | 3–4 | Geometry contract over the child RenderParagraph (incl. midpoint void hit rule); tap-to-caret; caret painting; focus (**incl. the public surface: optional `focusNode`, `hasFocus`/`requestFocus`/`clearFocus`**); controller skeleton (ops/undo wired, single-writer queue, batch loop + `EditContext` supply + missing-id rejection + its unit tests, `setSelection` void normalization **+ offset clamping + gone-id rejection**, **`setDocument` + `canUndo`/`canRedo`** (~quarter day, thin wrappers), **group-indent + outdent all-or-nothing gates via the shared `canIndent` predicate + Tab/Shift-Tab tree-shape identity test + two-paragraphs-after-list-item test + mixed-depth Shift-Tab test + op-gate test (`apply([IndentBlock(firstSibling), IndentBlock(next)])` rejected, tree unchanged)**) | G13 invariant tests |
-| 5–7 | **ImeService delta path**: `". "` sentinel, shadow buffer (text+selection+composing) + stale-delta guard + **post-terminate echo quarantine**, typing/backspace/Enter → Insert/Delete/Split/Merge, **G1 composite-deletion decomposition + composing guard (composite-while-composing fixture: `deleteSurroundingText`-shaped delta, post-apply composing non-empty → routed through `terminateComposition`, quarantine armed, no assert)**; `terminateComposition` choke point (+ **Android re-attach for every reason with a live connection**) + `connectionClosed`; **structural-while-composing divergence rule** (+ cross-block composing type-over trace test); composing-underline pass + composing-rect reporting; **input-rule contract split, part 2** (latch with recorded editedRange, post-state run path, the controller split/merge paths implementing the `split`/`backspaceAtStart` policies with the interceptor escape hatch consulted first); composition-scoped undo (+ kana-undo trace test); **same-block tap-then-type trace test** ("hello" → tap before 'h' → 'x' → "xhello"). *(Parallel track: mouse_interactor, then the touch-interactor IME-independent core, then the G12 clipboard pipeline.)* | G1, G3, G7, G10 |
+| 5–7 | **ImeService delta path**: `". "` sentinel, shadow buffer (text+selection+composing) + stale-delta guard + **post-terminate echo quarantine**, typing/backspace/Enter → Insert/Delete/Split/Merge, **G1 composite-deletion decomposition + composing guard (composite-while-composing fixture: `deleteSurroundingText`-shaped delta, post-apply composing non-empty → routed through `terminateComposition`, quarantine armed, no assert)**; `terminateComposition` choke point (+ **Android re-attach for every reason with a live connection**) + `connectionClosed`; **structural-while-composing divergence rule** (+ cross-block composing type-over trace test); composing-underline pass + composing-rect reporting; **input-rule run path** (latch with recorded editedRange, post-state run path, the controller split/merge paths implementing the `split` (incl. `onEnter`) /`backspaceAtStart` policies); composition-scoped undo (+ kana-undo trace test); **same-block tap-then-type trace test** ("hello" → tap before 'h' → 'x' → "xhello"). *(Parallel track: mouse_interactor, then the touch-interactor IME-independent core, then the G12 clipboard pipeline.)* | G1, G3, G7, G10 |
 | 8 | **Web non-delta diff fallback**: diff frontend (`text_diff.dart`) over the same shadow-buffer + resolve-at-apply core through the same choke point, **incl. the composing mapping** (`TextEditingValue.composing` → ComposingState, −2 shift, block-local; composing-only updates = NonTextUpdate analogue, acknowledged into the shadow). **Exit criterion: Safari smoke test green INCLUDING the web CJK trace — Safari Japanese: compose, convert via candidate, commit, then a "# " rule fire on commit.** | R1/R7 mitigation real, G3-on-web |
-| 9 | **Hard gate: "typing works on iOS + Android + web (web via the day-8 diff fallback)"** — pass criteria include the full keyboard matrix (Gboard/Samsung/SwiftKey/**Korean Hangul**/iOS Japanese/**Spanish + European dead keys incl. the iOS accent long-press popup — the v2 release scar; short-lived composing regions with non-CJK commit patterns**), the **undo-mid-Hangul immediate-recommit (quarantine) trace**, the **tap-to-another-block-mid-Hangul-then-type trace (fresh syllable, not held jamo — the all-reasons re-attach)**, and the tap-then-type trace. Buffer/fix day. **Pre-agreed overrun split (displacing, see the swap rule above the table):** if days 5–7 ran over, day 9 gates iOS+Android delta typing only; the web fallback moves to day 10 (own gate there), mouse build/integration moves to day 11 with cut-line item 5 pre-authorized, and link hover defers per the swap rule — never stacked onto day 10. If the gate is red past day 11, the cut line executes immediately (items 1–4 cut up front) and the freed days fund the IME. Device drip starts. | go/no-go |
+| 9 | **Hard gate: "typing works on iOS + Android + web (web via the day-8 diff fallback)"** — pass criteria include the full keyboard matrix (Gboard/Samsung/SwiftKey/**Korean Hangul**/iOS Japanese/**Spanish + European dead keys incl. the iOS accent long-press popup — the v2 release scar; short-lived composing regions with non-CJK commit patterns**), the **undo-mid-Hangul immediate-recommit (quarantine) trace**, the **tap-to-another-block-mid-Hangul-then-type trace (fresh syllable, not held jamo — the all-reasons re-attach)**, the tap-then-type trace, and the **capped-selection type-over trace (select-all on a >32-block doc → type a letter → no spurious capitalization — validates the elided window's type-over-context rationale, §buffer serialization)**. Buffer/fix day. **Pre-agreed overrun split (displacing, see the swap rule above the table):** if days 5–7 ran over, day 9 gates iOS+Android delta typing only; the web fallback moves to day 10 (own gate there), mouse build/integration moves to day 11 with cut-line item 5 pre-authorized, and link hover defers per the swap rule — never stacked onto day 10. If the gate is red past day 11, the cut line executes immediately (items 1–4 cut up front) and the freed days fund the IME. Device drip starts. | go/no-go |
 | 10 | Hardware keys (incl. the **composing gate over ALL editing/navigation handlers, whitelist = Cmd/Ctrl+Z**, **`MoveBlock` op + Alt+↑/↓** — D10 coverage); mouse-interactor **integration** (or build, if the parallel track was abandoned — and if the day-9 swap fired, this moves to day 11 per the displacement rule): drag, shift/double/triple click + `expandBase` (**+ its invalidation: stale-anchor test — triple-tap, queued-delta shortens block, shift-click → clamped, no OOB**), per-block highlight painting, shared post-frame autoscroll ticker **generalized to every ScrollNotification while a drag is active** (+ wheel-scroll-two-viewports-release test); up- and down-drag-across-image widget tests; **ordinal-renumber rebuild test**. (Link hover is day 14 / item-7 candidate per the swap rule; link activation shipped days 1–2 on the span recognizers) | G5, G6, G13 |
 | 11–13 | Mobile touch — **device integration of the parallel-track core, or first construction if it was abandoned**: long-press, handles (**viewport-predicate visibility, `HitTestBehavior.opaque` exclusivity + its two widget tests, null-geometry drag refusal**), magnifier, **pointer-route drag routing (`pointerRouter.addRoute`)**, **content-arena recognizers + their three widget tests (long-press-then-drift does not scroll; long-press-drag extends by word; plain touch drag scrolls) + the pinned `dragDevices` ScrollBehavior**, **grab-offset compensation**, handle autoscroll; **fallback selection toolbar (`ContextMenuController` + `AdaptiveTextSelectionToolbar`, controller-routed copy/cut/paste — never-cut; shares the handle-visibility anchor/offscreen tick)**; day 13: iOS **floating cursor** (within-block + edge handoff). Three days, not two — this is super_editor's 4.4k-LOC surface cut to our subset, and it sits above the cut line | G11 |
 | 14 | Block image + divider components; void selection + **void-endpoint range normalization + all-void-document delete test + click-image-then-type test**; structural backspace around voids (`voidBackspace` policies); image delete caret rules (incl. the last-block → empty-paragraph fallback); **image alt + checkbox toggle semantics + the prefix-tap surface (gutter rect registration, `onPrefixTap` default toggle, caret/IME suppression; widget test: tap checkbox → checked flips, selection unchanged, keyboard not summoned)**; **link hover cursor** (if the parallel track ran — else first item-7 cut candidate); clipboard **integration** (the G12 pipeline incl. the re-specced `PasteBlocks` + its nested-target and void-edge tests arrives from the parallel track; built here only if the track was abandoned) — toolbar paste buttons gain markdown fidelity | G2, G9, G12 |
@@ -2220,8 +2243,8 @@ and web.
 - **G1 — Backspace at offset 0 of the first block (mobile IME).** The IME cannot report a
   deletion before the buffer start; with the `". "` sentinel it arrives as a deletion
   intersecting `[0,2)` and must become a structural backspace per the type's declared
-  `backspaceAtStart` policy — `outdentOrConvert`/`convertToDefault`/`merge` — with
-  registered interceptor rules consulted first as the escape hatch. Includes the composite variants: an OEM delete-word/delete-to-line-start
+  `backspaceAtStart` policy — `outdentOrConvert`/`convertToDefault`/`merge`.
+  Includes the composite variants: an OEM delete-word/delete-to-line-start
   spanning sentinel AND real text must be decomposed (text deletion + structural
   consultation, one transaction), and a `deleteSurroundingText`-shaped deletion that
   preserves a live composing region must route its final push through

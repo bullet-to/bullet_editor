@@ -330,6 +330,7 @@ abstract final class Blocks {
     return BlockDef(
       label: 'Code Block',
       policies: const BlockPolicies(canBeChild: false, canHaveChildren: false),
+      split: SplitPolicy.lineBreak,
       spacingBefore: 0.5,
       spacingAfter: 0.5,
       metadataKeys: const {CodeBlockKeys.language},
@@ -355,7 +356,6 @@ abstract final class Blocks {
           // for multi-line fenced content.
         ),
       },
-      inputRules: const [CodeBlockEnterRule()],
     );
   }
 
