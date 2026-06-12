@@ -545,7 +545,10 @@ class ImeService extends ChangeNotifier
   /// latch explicitly instead — [_filterStaleComposing].
   ///
   /// Lifecycle: armed by the dead-key rewrite ([updateEditingValue]'s
-  /// rewrite block); survives every push INCLUDING terminate pushes —
+  /// rewrite block) and by the passive reconcile push
+  /// ([_absorbWhileDiverged] — the same in-flight protection for the other
+  /// push that replaces a mid-composition engine window, armed with the
+  /// absorbed engine range); survives every push INCLUDING terminate pushes —
   /// `setEditingState` cannot reset the browser-side latch, so the refusal
   /// must outlive anything we send. Disarmed by the first snapshot proving
   /// the engine latch dead or re-latched: one carrying no composing region
@@ -634,6 +637,24 @@ class ImeService extends ChangeNotifier
   int? _commitKeyDeferredAtMs;
 
   bool get isAttached => _connection != null;
+
+  /// Whether the ENGINE side still owns a live composition even though
+  /// `controller.composing` may be null — the widget's hardware-key
+  /// composing gate ORs this into its `controller.composing != null` check.
+  ///
+  /// The two can diverge on the diff frontend: a composition whose FIRST
+  /// snapshot is already unmappable (a composing region spanning a `\n`)
+  /// arms the deferred reconciliation ([_passiveDivergence]) without ever
+  /// having installed a [ComposingState] — there is no mapped region to
+  /// install. Gating on the model state alone would leave editing keys
+  /// reaching the document mid-browser-composition: external-edit
+  /// terminate → mid-composition push — exactly the corruption class the
+  /// gate exists to prevent. The shadow's composing region is included
+  /// alongside the passive flag because it is the engine's own report
+  /// (acknowledged one-way during the passive window) and outlives the
+  /// flag by nothing — both clear on the composition-ending snapshot, on
+  /// every terminate, and on detach.
+  bool get engineComposing => _passiveDivergence || _shadowComposing;
 
   // --- Inspector / debug surface (pane 3) ---
 
@@ -929,6 +950,23 @@ class ImeService extends ChangeNotifier
     journal.record('commitKeySuppressionArmed', () => const {});
   }
 
+  /// Disarms the one-shot without consuming it — the scoping half of the
+  /// WebKit compensation (ProseMirror limits the whole mechanism to
+  /// Safari; we cannot user-agent sniff, so the arm is scoped by traffic
+  /// instead). The Safari ordering the arm exists for has NOTHING between
+  /// the arming snapshot and the commit keydown (the captured 29 ms gap),
+  /// so any intervening event proves the arm stale: a subsequently
+  /// ACCEPTED snapshot (a click-commit's selection echo, a punctuation
+  /// auto-commit's follow-up) or a non-IME edit/selection change (the
+  /// tap itself). Without this, every engine-side composition end — click
+  /// commits, auto-commits, Escape cancels — would swallow the user's
+  /// next genuine Enter for 500 ms.
+  void _disarmCommitKeySuppression(String reason) {
+    if (_commitKeySuppressionArmedAtMs == null) return;
+    _commitKeySuppressionArmedAtMs = null;
+    journal.record('commitKeySuppressionDisarmed', () => {'reason': reason});
+  }
+
   // --- Non-IME changes (the no-echo clauses (a) and (b)) ---
 
   /// Registered as `controller.imeExternalChangeHandler`: any non-IME edit
@@ -943,6 +981,14 @@ class ImeService extends ChangeNotifier
       if (_wantsConnection) attach();
       return;
     }
+    // Any non-IME edit or selection change disarms the commit-key one-shot:
+    // the arm models "the commit keydown is the very next event behind the
+    // arming snapshot" (Safari's compositionend → 29 ms → Enter, nothing
+    // between), so a user act landing first proves a near-future Enter is
+    // the user's own — see [_disarmCommitKeySuppression]. The terminate
+    // branch below clears it too; disarming here first keeps one journaled
+    // decision for both paths.
+    _disarmCommitKeySuppression('externalChange');
     if (_shadowComposing || controller.composing != null) {
       terminateComposition(reason);
       return;
@@ -1143,6 +1189,14 @@ class ImeService extends ChangeNotifier
     // BEFORE _processBatch so a push the batch itself triggers (rule fire,
     // recovery, terminate) opens its own fresh window.
     _previousShadowText = null;
+    // An accepted snapshot also disarms a pending commit-key one-shot: the
+    // arm covers only a keydown already in flight DIRECTLY behind the
+    // arming snapshot (Safari's compositionend → Enter gap has nothing in
+    // between), so by the time a click-commit's selection echo or an
+    // auto-commit's follow-up lands, a near-future Enter is the user's own
+    // and must split. Runs before the arm below, so the arming snapshot
+    // never disarms itself.
+    _disarmCommitKeySuppression('subsequentSnapshot');
     if (delta == null) return; // pure echo of our own push
     debugLastDeltas = [delta];
     // An engine snapshot ending a live shadow composition is compositionend
@@ -1199,6 +1253,28 @@ class ImeService extends ChangeNotifier
   /// over, and pushing is safe again. [composing] is the caller's filtered
   /// region (sanitized + stale-latch-refused), so the liveness test and
   /// the shadow agree with the normal path's bookkeeping.
+  ///
+  /// In-flight protection on the reconcile push: it replaces a window the
+  /// engine held MID-COMPOSITION, so — like the dead-key rewrite's resync
+  /// — late snapshots can still arrive decorated with the absorbed
+  /// composing range (the engine's bookkeeping racing the push). The push
+  /// arms [_staleComposingLatch] with that range: the engine reported the
+  /// composition ENDED (that is this branch's trigger), so a later
+  /// decoration at those numbers is a dead latch by construction, and the
+  /// latch's own lifecycle (disarm on no-region / different-range /
+  /// fresh-same-range) releases every genuinely live follow-up. The
+  /// in-flight text itself is the [_previousShadowText] drop's territory,
+  /// exactly as after any other push.
+  ///
+  /// Web caveat ([_recoverAuthoritative]'s day-15/18 note, extended here
+  /// explicitly): a deliberate TERMINATE during the passive window (undo,
+  /// external edit, detach) still pushes while the browser owns its live
+  /// composition — `setEditingState` cannot make a browser abandon a DOM
+  /// composition, so the engine's bookkeeping can straddle the new text
+  /// and in-flight snapshots can carry a GENUINELY live region the latch
+  /// must not strip (the user's composition continues engine-side). That
+  /// push is the quarantine's and the day-15/18 web polish pass's
+  /// territory, deliberately not latch-hardened here.
   void _absorbWhileDiverged(
     TextEditingValue value,
     TextRange composing, {
@@ -1226,15 +1302,39 @@ class ImeService extends ChangeNotifier
     // reconcile: shadow acknowledged composing-free so the authoritative
     // push is legal as a PLAIN push, never a terminate.
     _passiveDivergence = false;
+    // The engine window being discarded — captured before the shadow is
+    // overwritten: its composing range is the absorbed region the journal
+    // and the in-flight refusal below key on.
+    final absorbedComposing = _shadow?.composing ?? TextRange.empty;
     if (_shadowComposing) _armCommitKeySuppression();
-    journal.record('passiveReconcile', () => const {});
     controller.imeSetComposing(null);
     _shadow = TextEditingValue(
       text: value.text,
       selection: value.selection,
       composing: TextRange.empty,
     );
-    _pushAuthoritativeWindow();
+    final window = _serialize();
+    // Discarded vs pushed, on record: the absorbed engine text + composing
+    // lose to the authoritative window — a live capture of a passive
+    // window must show exactly what the reconcile threw away.
+    journal.record(
+      'passiveReconcile',
+      () => {
+        'discardedText': value.text,
+        'discardedComposing': ImeJournal.describeRange(absorbedComposing),
+        'pushedText': window.text,
+        'pushedSelection': [
+          window.selection.baseOffset,
+          window.selection.extentOffset,
+        ],
+      },
+    );
+    // The in-flight-snapshot hardening (see the doc comment): the absorbed
+    // range is a dead engine latch — refuse late decorations of it.
+    if (absorbedComposing.isValid && !absorbedComposing.isCollapsed) {
+      _staleComposingLatch = absorbedComposing;
+    }
+    _push(window.toValue(), window);
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1403,6 +1503,22 @@ class ImeService extends ChangeNotifier
   ///   range's end): treated as no composition, latch kept armed for the
   ///   next snapshot. The flow therefore converges whether or not the
   ///   compositionend corrective ever arrives.
+  ///
+  /// Known false positive of the same-range freshness test (adjudicated,
+  /// accepted): a plain character typed with the caret IMMEDIATELY BEFORE
+  /// the dead range while the latch is armed produces a snapshot that is
+  /// byte-for-byte the live-compositionupdate shape — text changed (diff
+  /// non-null) and the insert shifts the caret to exactly `composing.end`
+  /// — so the latch disarms live and the dead range re-arms ComposingState
+  /// over the typed character; the NEXT keystroke then satisfies
+  /// [_rewriteDeadKeyCommit]'s guards (insert at the live region's end,
+  /// region unchanged from the shadow's) and replaces the typed character
+  /// (the cascade). The shape is genuinely ambiguous with a re-latched
+  /// dead key at the same numbers (the honored fixture), and suppressing
+  /// it would eat real compositions — so the heuristic stands, and every
+  /// disarm is journaled (`staleComposingLatchDisarmed`, reason `fresh` /
+  /// `corrective` / `differentRange`) so a live capture of the cascade
+  /// shows the decision that opened it.
   TextRange _filterStaleComposing(
     TextRange composing,
     TextDiff? diff,
@@ -1411,11 +1527,14 @@ class ImeService extends ChangeNotifier
     final latch = _staleComposingLatch;
     if (latch == null) return composing;
     if (!composing.isValid || composing.isCollapsed) {
-      _staleComposingLatch = null;
+      _disarmStaleComposingLatch('corrective');
       return composing;
     }
     if (composing != latch) {
-      _staleComposingLatch = null;
+      _disarmStaleComposingLatch(
+        'differentRange',
+        range: ImeJournal.describeRange(composing),
+      );
       return composing;
     }
     final fresh =
@@ -1423,10 +1542,21 @@ class ImeService extends ChangeNotifier
         selection.isValid &&
         selection.extentOffset == composing.end;
     if (fresh) {
-      _staleComposingLatch = null;
+      _disarmStaleComposingLatch('fresh');
       return composing;
     }
     return TextRange.empty;
+  }
+
+  /// Disarms [_staleComposingLatch], journaling WHY (the doc comment above:
+  /// the `fresh` disarm is a known-ambiguous heuristic, and a capture of
+  /// its false-positive cascade needs the decision on record).
+  void _disarmStaleComposingLatch(String reason, {List<int>? range}) {
+    _staleComposingLatch = null;
+    journal.record(
+      'staleComposingLatchDisarmed',
+      () => {'reason': reason, 'range': ?range},
+    );
   }
 
   /// Engine-supplied composing ranges are sanitized before they enter the

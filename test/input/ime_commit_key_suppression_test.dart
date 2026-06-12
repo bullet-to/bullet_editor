@@ -203,6 +203,55 @@ void main() {
       expect(journalKinds(), isNot(contains('commitKeySuppressionArmed')));
     });
 
+    test('a subsequently ACCEPTED snapshot disarms (the click-commit / '
+        'punctuation auto-commit scope): the arm only covers a keydown '
+        'already in flight directly behind the arming snapshot', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      // The composition ends engine-side (a click-commit — no keydown in
+      // flight) ...
+      sendValue('. か', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      sendValue('. か', cursor: 3);
+      expect(service.debugCommitKeySuppressionArmed, isTrue);
+
+      // ... and the click's own selectionchange snapshot lands: an
+      // accepted snapshot proves other traffic intervened, so the arm
+      // cannot be Safari's compositionend→keydown gap (nothing intervenes
+      // there) — the user's near-future Enter is genuine.
+      sendValue('. か', cursor: 2);
+
+      expect(service.debugCommitKeySuppressionArmed, isFalse);
+      nowMs += 29;
+      expect(service.consumeCommitKeySuppression(), isFalse);
+      expect(journalKinds(), contains('commitKeySuppressionDisarmed'));
+    });
+
+    test('the arming snapshot does NOT disarm itself — the original Safari '
+        'capture (arm → 29 ms → Enter, nothing between) stays suppressed', () {
+      build([para('a', '')], selection: caret('a', 0));
+
+      replayImeJournal(service, parseImeJournalDump(captureTail));
+
+      expect(service.debugCommitKeySuppressionArmed, isTrue);
+      nowMs += 29;
+      expect(service.consumeCommitKeySuppression(), isTrue);
+    });
+
+    test('an external (non-IME) selection change disarms: by the time a '
+        'tap-then-Enter sequence reaches the consult, the arm is gone', () {
+      build([para('a', '')], selection: caret('a', 0));
+      replayImeJournal(service, parseImeJournalDump(captureTail));
+      expect(service.debugCommitKeySuppressionArmed, isTrue);
+
+      // The user taps elsewhere — clause (b)'s non-IME selection change.
+      controller.setSelection(caret('a', 1));
+
+      expect(service.debugCommitKeySuppressionArmed, isFalse);
+      nowMs += 29;
+      expect(service.consumeCommitKeySuppression(), isFalse);
+      expect(journalKinds(), contains('commitKeySuppressionDisarmed'));
+    });
+
     test('the delta frontend never arms (desktop: the committing keydown '
         'precedes the composing-clear; the composing gate owns it)', () {
       build(

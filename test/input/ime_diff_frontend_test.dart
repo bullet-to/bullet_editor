@@ -61,6 +61,16 @@ void main() {
   FakeImeConnection connection() => connections.last;
   TextEditingValue shadow() => service.currentTextEditingValue!;
 
+  /// The most recent `staleComposingLatchDisarmed` journal payload — the
+  /// disarm-decision record a live capture keys on (fresh vs corrective vs
+  /// different-range); null when no disarm was journaled.
+  Map<String, Object?>? lastLatchDisarm() {
+    for (final e in service.journal.events.reversed) {
+      if (e.kind == 'staleComposingLatchDisarmed') return e.payload;
+    }
+    return null;
+  }
+
   /// The engine's full-value callback — what a web engine sends for every
   /// DOM input/compositionupdate/selectionchange.
   void sendValue(
@@ -987,6 +997,14 @@ void main() {
         const ComposingState(blockId: 'a', range: TextRange(start: 1, end: 2)),
         reason: 'the fresh composition composes — the refusal must not eat it',
       );
+      expect(
+        lastLatchDisarm(),
+        {
+          'reason': 'differentRange',
+          'range': [3, 4],
+        },
+        reason: 'the disarm decision is journaled for live captures',
+      );
 
       // The new composition commits through the same append-shaped rewrite.
       sendValue(
@@ -1033,6 +1051,14 @@ void main() {
         const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
         reason: 'same numbers, genuinely fresh — must compose, not suppress',
       );
+      expect(
+        lastLatchDisarm(),
+        {'reason': 'fresh'},
+        reason:
+            'the ambiguous same-range disarm is journaled (see '
+            '_filterStaleComposing: this shape is indistinguishable from a '
+            'plain char typed just before the dead range)',
+      );
 
       // The new composition commits (the append shape again).
       sendValue(
@@ -1063,6 +1089,11 @@ void main() {
       expect(controller.document.blockById('a')!.plainText, 'é');
       expect(controller.composing, isNull);
       expect(connection().pushed.length, pushesBefore, reason: 'silent');
+      expect(
+        lastLatchDisarm(),
+        {'reason': 'corrective'},
+        reason: 'the disarm decision is journaled for live captures',
+      );
 
       // Plain typing continues clean.
       sendValue('. éx', cursor: 4);
@@ -1289,6 +1320,74 @@ void main() {
         service.debugLastTerminateReason,
         isNull,
         reason: 'a reconciliation push, not a termination',
+      );
+    });
+
+    test('the passive reconcile is journaled with what was discarded vs '
+        'pushed, and the push is protected against in-flight snapshots '
+        'still decorated with the absorbed engine composing range: refused '
+        'via the stale-composing latch, dropped as the pre-push race — '
+        'never applied, never re-arming the underline', () {
+      build([para('a', 'one')], selection: caret('a', 3));
+      sendValue(
+        '. oneか',
+        cursor: 6,
+        composing: const TextRange(start: 5, end: 6),
+      );
+      // Arm the deferred divergence, then let the composition end.
+      sendValue(
+        '. oneか\nx',
+        cursor: 8,
+        composing: const TextRange(start: 5, end: 8),
+      );
+      sendValue(
+        '. oneか\nxや',
+        cursor: 9,
+        composing: const TextRange(start: 5, end: 9),
+      );
+      sendValue('. oneか\nxや', cursor: 9); // live→empty: the reconcile push
+
+      // Finding the discard in a live capture requires the payload: the
+      // absorbed engine window vs the authoritative one that replaced it.
+      final reconcile = service.journal.events.lastWhere(
+        (e) => e.kind == 'passiveReconcile',
+      );
+      expect(reconcile.payload['discardedText'], '. oneか\nxや');
+      expect(reconcile.payload['discardedComposing'], [5, 9]);
+      expect(reconcile.payload['pushedText'], '. x');
+      expect(reconcile.payload['pushedSelection'], [3, 3]);
+
+      // The reconcile push replaced a mid-composition engine window, so it
+      // arms the same in-flight protection the dead-key rewrite gets: the
+      // absorbed range is a dead engine latch until proven otherwise.
+      expect(
+        service.debugStaleComposingLatch,
+        const TextRange(start: 5, end: 9),
+      );
+      final blocksBefore = [
+        for (final b in controller.document.allBlocks) b.plainText,
+      ];
+
+      // A late snapshot computed against the replaced engine buffer, still
+      // decorated with the absorbed range (the engine's composition
+      // bookkeeping raced the push): the latch strips the dead region, and
+      // the stripped snapshot is the pre-push race shape exactly.
+      sendValue(
+        '. oneか\nxや',
+        cursor: 5,
+        composing: const TextRange(start: 5, end: 9),
+      );
+
+      expect(service.debugLastDropReason, 'staleSnapshot');
+      expect(
+        [for (final b in controller.document.allBlocks) b.plainText],
+        blocksBefore,
+        reason: 'the stale decorated snapshot must never be applied',
+      );
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'the dead range must not re-arm the underline',
       );
     });
 

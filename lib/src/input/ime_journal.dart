@@ -48,6 +48,11 @@ class ImeJournalEvent {
 ///   no text change).
 /// - `composingSanitized` / `staleComposingSuppressed` — the composing
 ///   region filters changed what the synthesis sees.
+/// - `staleComposingLatchDisarmed` — the stale-composing refusal released
+///   its latch, with the reason (`corrective` / `differentRange` /
+///   `fresh`); the `fresh` disarm is a known-ambiguous heuristic
+///   (`_filterStaleComposing`), so a capture of its false-positive cascade
+///   needs the decision on record.
 /// - `composingSelectionAdopted` — batch-end reconciliation honored an
 ///   engine selection lying within the composing region instead of
 ///   terminating (WebKit's transient marked-text-selected report).
@@ -63,11 +68,17 @@ class ImeJournalEvent {
 /// - `performAction` / `performSelector` / `selectorUnhandled` — the
 ///   engine's non-delta callbacks.
 /// - `commitKeySuppressionArmed` / `commitKeySuppressionSkipped` /
-///   `commitKeySuppressionConsumed` / `commitKeySuppressionExpired` — the
-///   Safari post-compositionend commit-Enter one-shot's decisions: armed
-///   when an engine snapshot ends a live composition, skipped when a
-///   gate-deferred Enter proved the keydown-first ordering, consumed (or
-///   expired) by the widget's Enter consult.
+///   `commitKeySuppressionConsumed` / `commitKeySuppressionExpired` /
+///   `commitKeySuppressionDisarmed` — the Safari post-compositionend
+///   commit-key one-shot's decisions: armed when an engine snapshot ends a
+///   live composition, skipped when a gate-deferred Enter proved the
+///   keydown-first ordering, consumed (or expired) by the widget's
+///   Enter/Escape consult, disarmed (with the reason) when a subsequently
+///   accepted snapshot or a non-IME change proved the arm stale.
+/// - `passiveReconcile` — the deferred reconciliation's one authoritative
+///   push: what the absorbed engine window held (`discardedText` /
+///   `discardedComposing`) vs the authoritative window that replaced it
+///   (`pushedText` / `pushedSelection`).
 /// - `key` — a hardware key event seen by the editor widget (kind, logical
 ///   key label, character, whether the composing gate deferred it, which
 ///   handler consumed it or `ignored` — `commitEnterSuppressed` names a

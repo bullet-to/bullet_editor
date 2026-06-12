@@ -789,6 +789,50 @@ void main() {
       );
     });
 
+    testWidgets('an ambient text-scale change re-sends setStyle with the '
+        'rescaled metrics — the hidden input must not keep stale metrics '
+        'across MediaQuery changes (didChangeDependencies → coalesced '
+        'geometry report)', (tester) async {
+      controller = EditorController(
+        document: Document([para('a', 'hi')]),
+        schema: EditorSchema.standard(),
+        undoGrouping: (previous, current) => false,
+      );
+      Widget app(double scale) => MaterialApp(
+        home: Scaffold(
+          body: MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: BulletEditor(
+              controller: controller,
+              autofocus: true,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF000000),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(app(1.0));
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await tester.pump();
+      await tester.pump(); // the post-frame report carries the style
+      expect(lastSetStyle(tester)['fontSize'], 16.0);
+      tester.testTextInput.log.clear();
+
+      // The ambient scale changes — no widget field changed, so only a
+      // dependency-driven re-report can refresh the engine's DOM font, and
+      // a stale font puts WebKit's native marked-text underline mid-glyph.
+      await tester.pumpWidget(app(2.0));
+      await tester.pump(); // the scheduled post-frame report
+
+      expect(
+        lastSetStyle(tester)['fontSize'],
+        32.0,
+        reason: 'the hidden input must re-style with the rescaled metrics',
+      );
+    });
+
     testWidgets('an unchanged style is not re-sent on every geometry '
         'report — setStyle is cached per connection', (tester) async {
       await pumpEditor(tester, [para('a', 'hi')], autofocus: false);
@@ -993,6 +1037,83 @@ void main() {
       expect(diffService.isAttached, isTrue);
     });
 
+    testWidgets('the composing gate stays closed when the FIRST snapshot of '
+        'a browser composition is unmappable (passive divergence with no '
+        'ComposingState): editing keys defer to the IME — no model edit, no '
+        'terminate, no push', (tester) async {
+      await pumpEditor(tester, [
+        para('a', 'one'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 3)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // The composition's FIRST snapshot carries a composing region
+      // spanning a \n (unmappable into one block): the defer branch arms
+      // passive divergence, but no ComposingState was ever installed — the
+      // widget gate must key on the service-side condition, not only on
+      // controller.composing.
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. one\nx',
+          selection: TextSelection.collapsed(offset: 7),
+          composing: TextRange(start: 5, end: 7),
+        ),
+      );
+      await tester.pump();
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'the unmappable region never installed a ComposingState',
+      );
+      final blocksBefore = [
+        for (final b in controller.document.allBlocks) b.plainText,
+      ];
+      final pushesBefore = tester.testTextInput.log
+          .where((c) => c.method == 'TextInput.setEditingState')
+          .length;
+      ime.journal.clear();
+
+      // An editing key mid-browser-composition: it must defer to the IME —
+      // handled here it edits the model, external-edit terminates, and
+      // pushes mid-composition (the corruption class the gate prevents).
+      await simulateKeyDownEvent(LogicalKeyboardKey.backspace);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+
+      expect(
+        [for (final b in controller.document.allBlocks) b.plainText],
+        blocksBefore,
+        reason: 'no model edit while the browser owns the composition',
+      );
+      expect(ime.debugLastTerminateReason, isNull);
+      expect(
+        tester.testTextInput.log
+            .where((c) => c.method == 'TextInput.setEditingState')
+            .length,
+        pushesBefore,
+        reason: 'no push of any kind mid-browser-composition',
+      );
+      final downs = [
+        for (final e in ime.journal.events)
+          if (e.kind == 'key' && e.payload['kind'] == 'down')
+            (e.payload['key'], e.payload['deferred']),
+      ];
+      expect(downs, [('Backspace', true)]);
+
+      // The composition-ending snapshot reconciles; the gate reopens.
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. one\nx',
+          selection: TextSelection.collapsed(offset: 7),
+        ),
+      );
+      await tester.pump();
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+    });
+
     testWidgets('a no-op imeFrontend change (null → the explicit platform '
         'default) keeps the live service and connection — effective '
         'frontends are compared, not raw nullables', (tester) async {
@@ -1088,6 +1209,112 @@ void main() {
       await tester.pump();
       expect(controller.document.allBlocks, hasLength(2));
       expect(controller.document.allBlocks.first.plainText, '日本語');
+    });
+
+    testWidgets('a click-commit does not poison the next Enter: the commit '
+        "snapshot arms, but the click's follow-up snapshot disarms — an "
+        'Enter within the window is a genuine split', (tester) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Compose か, then the user clicks elsewhere in the marked text:
+      // the browser commits the composition — compositionend reflected as
+      // the composing-clear snapshot (this arms; no keydown follows a
+      // click) ...
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 3),
+          composing: TextRange(start: 2, end: 3),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 3),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+
+      // ... followed by the click's own selectionchange snapshot — an
+      // ACCEPTED snapshot proves other traffic landed behind the arm, so
+      // it disarms (the Safari Enter-commit capture has NOTHING between
+      // the arming snapshot and the keydown).
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 2),
+        ),
+      );
+      await tester.pump();
+
+      // The user's Enter right after the click-commit is genuine.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(
+        controller.document.allBlocks,
+        hasLength(2),
+        reason: 'a genuine Enter after a click-commit must split',
+      );
+    });
+
+    testWidgets("Escape consumes the one-shot too (ProseMirror's other "
+        'suppressed key): an Escape-cancel ends the composition '
+        'engine-side, the Escape keydown behind it spends the arm, and the '
+        'next Enter splits', (tester) async {
+      await pumpEditor(tester, [
+        para('a', ''),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 0)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Compose か, then Escape cancels: WebKit reflects compositionend
+      // BEFORE the keydown — the marked text is removed and composing
+      // clears (this snapshot arms the one-shot) ...
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. か',
+          selection: TextSelection.collapsed(offset: 3),
+          composing: TextRange(start: 2, end: 3),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. ',
+          selection: TextSelection.collapsed(offset: 2),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+      expect(controller.document.blockById('a')!.plainText, '');
+
+      // ... and the Escape keydown arrives behind the snapshot: nothing
+      // here handles Escape (it stays ignored), but it IS the keydown of
+      // the key that ended the composition, so it spends the one-shot.
+      await simulateKeyDownEvent(LogicalKeyboardKey.escape);
+      await simulateKeyUpEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+
+      // The user's next Enter is genuine.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.enter), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(
+        controller.document.allBlocks,
+        hasLength(2),
+        reason: 'the Escape already consumed the arm — Enter must split',
+      );
     });
 
     testWidgets("Chrome's ordering (commit keydown deferred by the gate "

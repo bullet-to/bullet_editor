@@ -191,6 +191,20 @@ class BulletEditorState extends State<BulletEditor> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The hidden input's metrics (TextInput.setStyle) resolve through
+    // ambient dependencies — MediaQuery's text scaler, DefaultTextStyle,
+    // Directionality (the geometry reporter's lookups read them off this
+    // context) — so a dependency change must re-report, or the engine's
+    // DOM font goes stale and WebKit's native marked-text underline lands
+    // mid-glyph again. Cheap by construction: the report is post-frame
+    // coalesced and setStyle is cached against the resolved style, so an
+    // unchanged resolution stays silent.
+    imeService.scheduleGeometryReport();
+  }
+
+  @override
   void didUpdateWidget(BulletEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
     // The connection tracks readOnly as well as focus: flipping readOnly on
@@ -357,7 +371,15 @@ class BulletEditorState extends State<BulletEditor> {
     // the candidate menu push the cursor through the document). Returning
     // ignored lets the platform IME consume the key and report the
     // resulting edit as a delta/snapshot.
-    if (controller.composing != null) {
+    //
+    // The gate keys on the MODEL's composing state OR the service's
+    // engine-side condition ([ImeService.engineComposing]): on the diff
+    // frontend a composition whose FIRST snapshot is unmappable arms the
+    // passive-divergence window without ever installing a ComposingState
+    // — the browser genuinely still composes, and an editing key reaching
+    // the model there would external-edit terminate → mid-composition
+    // push, the corruption class this gate exists to prevent.
+    if (controller.composing != null || imeService.engineComposing) {
       if (event.logicalKey == LogicalKeyboardKey.enter ||
           event.logicalKey == LogicalKeyboardKey.numpadEnter) {
         // A gate-deferred Enter is noted with the service: it proves the
@@ -382,9 +404,7 @@ class BulletEditorState extends State<BulletEditor> {
         // gate above. The service's one-shot suppression (ProseMirror's
         // `compositionEndedAt` precedent) identifies it: swallow it
         // handled, no newline; the next Enter is genuine (the consult
-        // disarmed it). Escape — ProseMirror's other suppressed key — is
-        // deliberately not consulted: nothing here handles Escape today, so
-        // it falls through ignored either way.
+        // disarmed it).
         if (imeService.consumeCommitKeySuppression()) {
           return (KeyEventResult.handled, 'commitEnterSuppressed', false, null);
         }
@@ -393,6 +413,19 @@ class BulletEditorState extends State<BulletEditor> {
           'insertNewline',
           false,
           controller.insertNewline,
+        );
+      case LogicalKeyboardKey.escape:
+        // ProseMirror's other suppressed key: an Escape arriving inside
+        // the window is the keydown of the CANCEL that ended the
+        // composition (WebKit's compositionend-before-keydown ordering),
+        // and it must spend the one-shot so the user's next Enter splits.
+        // Nothing here handles Escape, so it stays ignored either way —
+        // only the arm is consumed (the consult journals the decision).
+        return (
+          KeyEventResult.ignored,
+          'ignored',
+          false,
+          imeService.consumeCommitKeySuppression,
         );
       case LogicalKeyboardKey.backspace:
         return (

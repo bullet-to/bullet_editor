@@ -931,7 +931,17 @@ inserting `\n` becomes `SplitBlock` at the mapped position.
   applying a composing batch containing structural ops, **re-serialize the window and compare to
   the post-apply shadow** (machinery the no-echo invariant already has). Equal — the
   merge-via-replacement case: keep `ComposingState` (remapped block-locally into the merged block)
-  and send nothing. Divergent — the G10 split, where the window moves to the new block: route
+  and send nothing. **Equal text with a shadow selection that diverges from the applied model
+  selection but lies WITHIN the composing region — adopt, don't terminate** (the adoption
+  exception; WebKit provenance: Safari transiently reports the marked text as *selected* — the
+  first composing snapshot of a romaji keystroke carries `selection == composing`, a non-collapsed
+  range the applied insertion's collapsed caret can never match): the engine's selection is
+  honored verbatim into the model, mapped block-locally with its range shape preserved (composing
+  is selection-adjacent state with no collapsed-while-composing invariant), and the composition is
+  kept — terminating there is the #1641 corruption by our own hand. The exception lives in the
+  shared batch-end reconciliation, so both frontends honor it; a selection *outside* the composing
+  region stays the divergence this rule does not cover. Divergent — the G10 split, where the
+  window moves to the new block: route
   through `terminateComposition('structuralDelta')`. Trace test (day 5–7 suite): select across two
   blocks, type "ki" via composing replacement deltas → merged block ends with き composing, one
   undo entry.
@@ -1112,9 +1122,12 @@ acknowledge into the shadow only, and the snapshot that ends the composition (co
 live→empty) runs the one authoritative convergence push — after the composition is over, when
 pushing is safe. Deliberate terminations are unchanged and may still push mid-composition: undo
 (G7), `setDocument`/external app edits, non-IME selection moves (tap-to-another-block),
-detach/`connectionClosed` — user/app acts, not snapshot reactions. The delta frontend is
-untouched: its ordering guarantees differ and its structural-while-composing divergence rule
-stays as specified above.
+detach/`connectionClosed` — user/app acts, not snapshot reactions. The delta frontend keeps its
+ordering guarantees and its structural-while-composing divergence rule as specified above, with
+one deliberate shared change: the divergence rule's within-composing selection-adoption exception
+(the WebKit marked-text-selected shape) lives in the shared batch-end reconciliation, so a delta
+batch carrying a range selection inside its composing region survives identically on the delta
+frontend — adopted, not terminated.
 
 Hardware keyboard (`keyboard_service.dart`): `Shortcuts`/`Actions` for arrows (incl. cross-block
 caret movement via geometry-x affinity — landing on a void normalizes to its `[0,1)` atomic
