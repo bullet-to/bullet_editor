@@ -24,7 +24,12 @@ TextDiff? diffTexts(String oldText, String newText, {int? cursorOffset}) {
 
   // Try cursor-anchored diff first.
   if (cursorOffset != null) {
-    final anchored = _cursorAnchored(oldText, newText, cursorOffset, lengthDelta);
+    final anchored = _cursorAnchored(
+      oldText,
+      newText,
+      cursorOffset,
+      lengthDelta,
+    );
     if (anchored != null) return anchored;
   }
 
@@ -34,7 +39,10 @@ TextDiff? diffTexts(String oldText, String newText, {int? cursorOffset}) {
 
 /// Cursor-anchored: the cursor tells us exactly where the edit happened.
 TextDiff? _cursorAnchored(
-  String oldText, String newText, int cursor, int lengthDelta,
+  String oldText,
+  String newText,
+  int cursor,
+  int lengthDelta,
 ) {
   if (lengthDelta > 0) {
     final start = cursor - lengthDelta;
@@ -47,8 +55,12 @@ TextDiff? _cursorAnchored(
   if (lengthDelta < 0) {
     final deleteLen = -lengthDelta;
     if (cursor + deleteLen > oldText.length) return null;
-    if (newText.substring(0, cursor) != oldText.substring(0, cursor)) return null;
-    if (newText.substring(cursor) != oldText.substring(cursor + deleteLen)) return null;
+    if (newText.substring(0, cursor) != oldText.substring(0, cursor)) {
+      return null;
+    }
+    if (newText.substring(cursor) != oldText.substring(cursor + deleteLen)) {
+      return null;
+    }
     return TextDiff(cursor, deleteLen, '');
   }
 
@@ -58,7 +70,9 @@ TextDiff? _cursorAnchored(
 /// Prefix/suffix: find common prefix and suffix, the middle changed.
 TextDiff _prefixSuffix(String oldText, String newText) {
   var prefixLen = 0;
-  final minLen = oldText.length < newText.length ? oldText.length : newText.length;
+  final minLen = oldText.length < newText.length
+      ? oldText.length
+      : newText.length;
   while (prefixLen < minLen && oldText[prefixLen] == newText[prefixLen]) {
     prefixLen++;
   }
@@ -70,9 +84,27 @@ TextDiff _prefixSuffix(String oldText, String newText) {
     suffixLen++;
   }
 
+  // Surrogate-pair safety: the scans above compare UTF-16 code units, so a
+  // replacement sharing one half of a pair (😀 U+D83D,U+DE00 → 😁
+  // U+D83D,U+DE01 shares the high surrogate) would otherwise yield a
+  // half-pair diff and hand mid-pair offsets downstream. Widen the
+  // boundaries outward to surrogate boundaries — the diff stays valid, just
+  // whole-pair. The matched prefix/suffix is identical in both texts, so
+  // checking oldText alone suffices.
+  while (prefixLen > 0 && _isHighSurrogate(oldText.codeUnitAt(prefixLen - 1))) {
+    prefixLen--;
+  }
+  while (suffixLen > 0 &&
+      _isLowSurrogate(oldText.codeUnitAt(oldText.length - suffixLen))) {
+    suffixLen--;
+  }
+
   return TextDiff(
     prefixLen,
     oldText.length - prefixLen - suffixLen,
     newText.substring(prefixLen, newText.length - suffixLen),
   );
 }
+
+bool _isHighSurrogate(int codeUnit) => (codeUnit & 0xFC00) == 0xD800;
+bool _isLowSurrogate(int codeUnit) => (codeUnit & 0xFC00) == 0xDC00;

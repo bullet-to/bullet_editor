@@ -830,18 +830,50 @@ void main() {
         expect(service.debugQuarantineArmed, isFalse, reason: 'one batch');
       });
 
-      test('the quarantine covers exactly ONE batch — a genuine retype in a '
-          'later batch lands', () {
+      test('the quarantine covers exactly ONE text-bearing batch — a genuine '
+          'retype in a later batch lands', () {
         build([para('a', '')], selection: caret('a', 0));
         sendInsertion('녕', composing: const TextRange(start: 2, end: 3));
         controller.undo();
 
-        // First batch after the push: an unrelated update disarms.
-        sendNonTextUpdate();
-        // Second batch: the same text at the same position is a real retype.
-        sendInsertion('녕', at: 2);
+        // First TEXT-bearing batch after the push: an unrelated edit
+        // disarms (a NonTextUpdate-only batch would not — see below).
+        sendInsertion('x', at: 2);
+        // Second batch: the same text at the quarantined position is a
+        // real retype.
+        sendInsertion('녕', at: 3);
 
-        expect(controller.document.blockById('a')!.plainText, '녕');
+        expect(controller.document.blockById('a')!.plainText, 'x녕');
+      });
+
+      test('a NonTextUpdate-only batch is pushless selection noise, not the '
+          'user retyping: it does NOT consume the quarantine, and the '
+          'held-syllable recommit arriving after it is still dropped', () {
+        build([para('a', 'ab')], selection: caret('a', 2));
+        sendInsertion('녕', composing: const TextRange(start: 4, end: 5));
+
+        controller.undo(); // terminate('undo'); quarantine = ('녕', 4)
+        expect(service.debugQuarantine, (text: '녕', offset: 4));
+
+        // Two selection-only batches (one DOM selectionchange = one batch
+        // on web) land between the terminate push and the echo.
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 3));
+        sendNonTextUpdate(selection: const TextSelection.collapsed(offset: 4));
+        expect(
+          service.debugQuarantineArmed,
+          isTrue,
+          reason: 'the one-batch budget is for text-bearing batches only',
+        );
+
+        sendInsertion('녕', at: 4);
+
+        expect(
+          controller.document.blockById('a')!.plainText,
+          'ab',
+          reason: 'the recommit is the echo the quarantine exists for',
+        );
+        expect(service.debugLastDropReason, 'echoQuarantine');
+        expect(service.debugQuarantineArmed, isFalse, reason: 'consumed');
       });
 
       test('an intervening non-IME push disarms the quarantine: a matching '
@@ -1156,6 +1188,44 @@ void main() {
         expect(controller.document.blockById('b')!.plainText, 'two');
       });
 
+      test('a delta whose selection is a RANGE inside the composing region '
+          'survives (the WebKit transient through the shared _finishBatch — '
+          'the delta frontend benefits identically)', () {
+        build([para('a', '')], selection: caret('a', 0));
+        final pushesBefore = connection().pushed.length;
+
+        // The diff frontend's captured Safari shape, synthesized here as a
+        // raw delta: insertion with selection == composing, non-collapsed.
+        sendDeltas([
+          const TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: 'n',
+            insertionOffset: 2,
+            selection: TextSelection(baseOffset: 2, extentOffset: 3),
+            composing: TextRange(start: 2, end: 3),
+          ),
+        ]);
+
+        expect(controller.document.blockById('a')!.plainText, 'n');
+        expect(service.debugLastTerminateReason, isNull);
+        expect(
+          controller.composing,
+          const ComposingState(
+            blockId: 'a',
+            range: TextRange(start: 0, end: 1),
+          ),
+        );
+        expect(connection().pushed.length, pushesBefore, reason: 'no echo');
+        expect(
+          controller.selection,
+          DocSelection(
+            base: const DocPosition('a', 0),
+            extent: const DocPosition('a', 1),
+          ),
+          reason: 'the engine selection is adopted into the model',
+        );
+      });
+
       test('type-over of a selection spanning a void: one replacement delta '
           'removes the swept void and merges the text endpoints', () {
         build([
@@ -1417,6 +1487,10 @@ void main() {
 class FakeImeConnection implements ImeConnection {
   final List<TextEditingValue> pushed = [];
   final List<String> geometryCalls = [];
+
+  /// Recorded `setStyle` payloads (the hidden-input metrics channel — the
+  /// Safari double-underline fix).
+  final List<Map<String, Object?>> styles = [];
   bool shown = false;
   bool isClosed = false;
   bool closedReceived = false;
@@ -1442,6 +1516,21 @@ class FakeImeConnection implements ImeConnection {
 
   @override
   void setCaretRect(Rect rect) => geometryCalls.add('setCaretRect');
+
+  @override
+  void setStyle({
+    required String? fontFamily,
+    required double? fontSize,
+    required FontWeight? fontWeight,
+    required TextDirection textDirection,
+    required TextAlign textAlign,
+  }) => styles.add({
+    'fontFamily': fontFamily,
+    'fontSize': fontSize,
+    'fontWeight': fontWeight,
+    'textDirection': textDirection,
+    'textAlign': textAlign,
+  });
 
   @override
   void close() => isClosed = true;

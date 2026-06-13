@@ -931,7 +931,17 @@ inserting `\n` becomes `SplitBlock` at the mapped position.
   applying a composing batch containing structural ops, **re-serialize the window and compare to
   the post-apply shadow** (machinery the no-echo invariant already has). Equal — the
   merge-via-replacement case: keep `ComposingState` (remapped block-locally into the merged block)
-  and send nothing. Divergent — the G10 split, where the window moves to the new block: route
+  and send nothing. **Equal text with a shadow selection that diverges from the applied model
+  selection but lies WITHIN the composing region — adopt, don't terminate** (the adoption
+  exception; WebKit provenance: Safari transiently reports the marked text as *selected* — the
+  first composing snapshot of a romaji keystroke carries `selection == composing`, a non-collapsed
+  range the applied insertion's collapsed caret can never match): the engine's selection is
+  honored verbatim into the model, mapped block-locally with its range shape preserved (composing
+  is selection-adjacent state with no collapsed-while-composing invariant), and the composition is
+  kept — terminating there is the #1641 corruption by our own hand. The exception lives in the
+  shared batch-end reconciliation, so both frontends honor it; a selection *outside* the composing
+  region stays the divergence this rule does not cover. Divergent — the G10 split, where the
+  window moves to the new block: route
   through `terminateComposition('structuralDelta')`. Trace test (day 5–7 suite): select across two
   blocks, type "ki" via composing replacement deltas → merged block ends with き composing, one
   undo entry.
@@ -1099,12 +1109,57 @@ same trace joins the day 19–20 gauntlet script. It is flippable per-platform �
 mitigation for Android OEM delta breakage (a mitigation that only works because the fallback is a
 composing-complete peer).
 
+**Passive-while-composing (day-8 checkpoint consolidation, branch `v3/day-8-web-fallback`):**
+while the engine reports a live composition the diff frontend is a one-way observer — the web
+engine cannot re-mark text, so ANY mid-composition `setEditingState` (a snapshot-reactive
+`terminateComposition('structuralDelta')` push included) destroys the browser's marked region
+while the IME's internal buffer continues (the captured `nににhにほ…` accumulation; v2 was immune
+by construction — it never synced to the platform during composition). Snapshot shapes the delta
+frontend's divergence rule would terminate are ABSORBED instead: text and selection apply one-way
+into the model and the composition is kept; a genuinely unmappable shape (composing across blocks
+— should be impossible from a browser, guarded anyway) DEFERS reconciliation: later snapshots
+acknowledge into the shadow only, and the snapshot that ends the composition (composing
+live→empty) runs the one authoritative convergence push — after the composition is over, when
+pushing is safe; the absorbed composing region being REPLACED by one with a different start (a new
+compositionstart re-latched the engine base) reconciles identically — the absorbed composition
+objectively ended, and staying passive absorbs the user's next composition into the void (the
+captured Chrome blur cascade). **Composing state is only ever BORN from a text-changing snapshot:**
+every genuine compositionstart/update inserts or replaces (a dead key inserts its `´`), while the
+engine's composition latch (`composition_aware_mixin`, reset only by compositionstart/end DOM
+events) survives blur/`connectionClosed`/re-attach and keeps decorating text-unchanged snapshots
+with the dead range (two captured Chrome journals: the blur-return re-arm over an unchanged
+window; the same dead range carried onto a different block's freshly pushed window) — so with
+shadow composing empty, a composing decoration on a no-text-change snapshot is filtered to empty
+(journaled `composingBirthSuppressed`), and composing-only updates during a live composition (the
+NonTextUpdate analogue, CJK candidate navigation) pass untouched. **A text-unchanged snapshot's
+selection starting inside the sentinel zone is likewise never honored:** every pushed window
+carries a selection at or beyond the sentinel length and the hidden editable is unclickable, so a
+sub-sentinel selection start on the no-diff path — the one place the engine selection drives the
+model — is browser bookkeeping (the captured Safari blur reset — compositionend plus a DOM
+selection parked at zero); the selection component is ignored (journaled
+`sentinelSelectionSuppressed`) while the composing transitions process normally, and one plain
+push re-teaches the engine the preserved caret (text-CHANGING snapshots are exempt: G1's
+sentinel-consuming edits genuinely carry sub-sentinel selections, and a text delta's selection
+never drives the model). `performAction('newline')` is
+likewise ignored while the engine owns a composition (shadow composing live or the passive window
+armed) — the deferred-Enter-reaching-the-DOM fallout; a genuine commit newline arrives as a `\n`
+delta/snapshot (G10). Deliberate terminations are unchanged and may still push mid-composition: undo
+(G7), `setDocument`/external app edits, non-IME selection moves (tap-to-another-block),
+detach/`connectionClosed` — user/app acts, not snapshot reactions. The delta frontend keeps its
+ordering guarantees and its structural-while-composing divergence rule as specified above, with
+one deliberate shared change: the divergence rule's within-composing selection-adoption exception
+(the WebKit marked-text-selected shape) lives in the shared batch-end reconciliation, so a delta
+batch carrying a range selection inside its composing region survives identically on the delta
+frontend — adopted, not terminated.
+
 Hardware keyboard (`keyboard_service.dart`): `Shortcuts`/`Actions` for arrows (incl. cross-block
 caret movement via geometry-x affinity — landing on a void normalizes to its `[0,1)` atomic
 selection via `setSelection`), Tab/Shift-Tab (G13), **Alt+↑/↓ → `MoveBlock`** (the D10
 keyboard-move coverage), Cmd/Ctrl+B/I/Z/V, Backspace/Delete on desktop where the IME doesn't own
 them. **The composing gate covers ALL of keyboard_service, not just Enter/Backspace —
-ignore-everything-while-composing with an explicit whitelist:** while `controller.composing` is
+ignore-everything-while-composing with an explicit whitelist** *(landed day 8, pulled forward
+into the editor widget's key dispatch as part of the passive-while-composing consolidation; day
+10's new bindings inherit it)*: while `controller.composing` is
 non-empty, every editing/navigation key handler (arrows, Home/End, Tab, Enter, Backspace, and any
 selection-modifying shortcut) returns `KeyEventResult.ignored` so the IME owns the keystroke. The
 whitelist of deliberate composition terminators — currently exactly Cmd/Ctrl+Z (undo deliberately
@@ -1894,7 +1949,7 @@ branch.
 | 5–7 | **ImeService delta path**: `". "` sentinel, shadow buffer (text+selection+composing) + stale-delta guard + **post-terminate echo quarantine**, typing/backspace/Enter → Insert/Delete/Split/Merge, **G1 composite-deletion decomposition + composing guard (composite-while-composing fixture: `deleteSurroundingText`-shaped delta, post-apply composing non-empty → routed through `terminateComposition`, quarantine armed, no assert)**; `terminateComposition` choke point (+ **Android re-attach for every reason with a live connection**) + `connectionClosed`; **structural-while-composing divergence rule** (+ cross-block composing type-over trace test); composing-underline pass + composing-rect reporting; **input-rule run path** (latch with recorded editedRange, post-state run path, the controller split/merge paths implementing the `split` (incl. `onEnter`) /`backspaceAtStart` policies); composition-scoped undo (+ kana-undo trace test); **same-block tap-then-type trace test** ("hello" → tap before 'h' → 'x' → "xhello"). *(Parallel track: mouse_interactor, then the touch-interactor IME-independent core, then the G12 clipboard pipeline.)* | G1, G3, G7, G10 |
 | 8 | **Web non-delta diff fallback**: diff frontend (`text_diff.dart`) over the same shadow-buffer + resolve-at-apply core through the same choke point, **incl. the composing mapping** (`TextEditingValue.composing` → ComposingState, −2 shift, block-local; composing-only updates = NonTextUpdate analogue, acknowledged into the shadow). **Exit criterion: Safari smoke test green INCLUDING the web CJK trace — Safari Japanese: compose, convert via candidate, commit, then a "# " rule fire on commit.** | R1/R7 mitigation real, G3-on-web |
 | 9 | **Hard gate: "typing works on iOS + Android + web (web via the day-8 diff fallback)"** — pass criteria include the full keyboard matrix (Gboard/Samsung/SwiftKey/**Korean Hangul**/iOS Japanese/**Spanish + European dead keys incl. the iOS accent long-press popup — the v2 release scar; short-lived composing regions with non-CJK commit patterns**), the **undo-mid-Hangul immediate-recommit (quarantine) trace**, the **tap-to-another-block-mid-Hangul-then-type trace (fresh syllable, not held jamo — the all-reasons re-attach)**, the tap-then-type trace, and the **capped-selection type-over trace (select-all on a >32-block doc → type a letter → no spurious capitalization — validates the elided window's type-over-context rationale, §buffer serialization)**. Buffer/fix day. **Pre-agreed overrun split (displacing, see the swap rule above the table):** if days 5–7 ran over, day 9 gates iOS+Android delta typing only; the web fallback moves to day 10 (own gate there), mouse build/integration moves to day 11 with cut-line item 5 pre-authorized, and link hover defers per the swap rule — never stacked onto day 10. If the gate is red past day 11, the cut line executes immediately (items 1–4 cut up front) and the freed days fund the IME. Device drip starts. | go/no-go |
-| 10 | Hardware keys (incl. the **composing gate over ALL editing/navigation handlers, whitelist = Cmd/Ctrl+Z**, **`MoveBlock` op + Alt+↑/↓** — D10 coverage); mouse-interactor **integration** (or build, if the parallel track was abandoned — and if the day-9 swap fired, this moves to day 11 per the displacement rule): drag, shift/double/triple click + `expandBase` (**+ its invalidation: stale-anchor test — triple-tap, queued-delta shortens block, shift-click → clamped, no OOB**), per-block highlight painting, shared post-frame autoscroll ticker **generalized to every ScrollNotification while a drag is active** (+ wheel-scroll-two-viewports-release test); up- and down-drag-across-image widget tests; **ordinal-renumber rebuild test**. (Link hover is day 14 / item-7 candidate per the swap rule; link activation shipped days 1–2 on the span recognizers) | G5, G6, G13 |
+| 10 | Hardware keys (the **composing gate over ALL editing/navigation handlers, whitelist = Cmd/Ctrl+Z** *landed day 8 — pulled forward with the passive-while-composing consolidation; day 10 retains the full key MATRIX: ↑/↓ caret movement, Cmd+arrows, each new binding under the same gate*, **`MoveBlock` op + Alt+↑/↓** — D10 coverage); mouse-interactor **integration** (or build, if the parallel track was abandoned — and if the day-9 swap fired, this moves to day 11 per the displacement rule): drag, shift/double/triple click + `expandBase` (**+ its invalidation: stale-anchor test — triple-tap, queued-delta shortens block, shift-click → clamped, no OOB**), per-block highlight painting, shared post-frame autoscroll ticker **generalized to every ScrollNotification while a drag is active** (+ wheel-scroll-two-viewports-release test); up- and down-drag-across-image widget tests; **ordinal-renumber rebuild test**. (Link hover is day 14 / item-7 candidate per the swap rule; link activation shipped days 1–2 on the span recognizers) | G5, G6, G13 |
 | 11–13 | Mobile touch — **device integration of the parallel-track core, or first construction if it was abandoned**: long-press, handles (**viewport-predicate visibility, `HitTestBehavior.opaque` exclusivity + its two widget tests, null-geometry drag refusal**), magnifier, **pointer-route drag routing (`pointerRouter.addRoute`)**, **content-arena recognizers + their three widget tests (long-press-then-drift does not scroll; long-press-drag extends by word; plain touch drag scrolls) + the pinned `dragDevices` ScrollBehavior**, **grab-offset compensation**, handle autoscroll; **fallback selection toolbar (`ContextMenuController` + `AdaptiveTextSelectionToolbar`, controller-routed copy/cut/paste — never-cut; shares the handle-visibility anchor/offscreen tick)**; day 13: iOS **floating cursor** (within-block + edge handoff). Three days, not two — this is super_editor's 4.4k-LOC surface cut to our subset, and it sits above the cut line | G11 |
 | 14 | Block image + divider components; void selection + **void-endpoint range normalization + all-void-document delete test + click-image-then-type test**; structural backspace around voids (`voidBackspace` policies); image delete caret rules (incl. the last-block → empty-paragraph fallback); **image alt + checkbox toggle semantics + the prefix-tap surface (gutter rect registration, `onPrefixTap` default toggle, caret/IME suppression; widget test: tap checkbox → checked flips, selection unchanged, keyboard not summoned)**; **link hover cursor** (if the parallel track ran — else first item-7 cut candidate); clipboard **integration** (the G12 pipeline incl. the re-specced `PasteBlocks` + its nested-target and void-edge tests arrives from the parallel track; built here only if the track was abandoned) — toolbar paste buttons gain markdown fidelity | G2, G9, G12 |
 | 15 | **Device-matrix fix-and-verify buffer** (accumulated drip findings): G4 case-(3) ordering, **post-terminate echo quarantine on Samsung/Gboard Korean (undo + post-split recommit)**, **tap-away-mid-Hangul re-attach**, rotation geometry, select-all window cap, **Korean `\n`-mid-composition (G10)**, **cross-block composing type-over (merge keeps composition)**, **iOS Japanese candidate-bar anchoring during multi-segment conversion**, **iPad hardware keyboard + Japanese multi-segment clause: ←/→ segment navigation and candidate selection complete with composing intact until commit (the all-handler gate)**, **dead-key drip rows: Spanish/German on Gboard + iOS, and the web diff-fallback dead-key path (the v2 Safari fix's scenario, carried over)** | G3, G4, G7, G10, G15 |

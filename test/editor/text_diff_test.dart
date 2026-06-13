@@ -57,11 +57,7 @@ void main() {
 
     test('anchors deletion to cursor position', () {
       // "hello  world" → "hello world", cursor at 5
-      final diff = diffTexts(
-        'hello  world',
-        'hello world',
-        cursorOffset: 5,
-      );
+      final diff = diffTexts('hello  world', 'hello world', cursorOffset: 5);
       expect(diff, isNotNull);
       expect(diff!.start, 5);
       expect(diff.deletedLength, 1);
@@ -86,6 +82,31 @@ void main() {
       expect(diff, isNotNull);
       expect(diff!.start, 0);
       expect(diff.insertedText, 'hello ');
+    });
+  });
+
+  group('surrogate-pair safety (prefix/suffix widening)', () {
+    test('an emoji variant sharing the high surrogate diffs as the whole '
+        'pair, never a lone low surrogate', () {
+      // 😀 (U+D83D,U+DE00) → 😁 (U+D83D,U+DE01): the code-unit prefix scan
+      // eats the shared high surrogate; without widening the diff would be
+      // the low surrogate alone — mid-pair offsets downstream.
+      final diff = diffTexts('. 😀', '. 😁', cursorOffset: 4);
+      expect(diff, isNotNull);
+      expect(diff!.start, 2);
+      expect(diff.deletedLength, 2);
+      expect(diff.insertedText, '😁');
+    });
+
+    test('a shared low surrogate widens the suffix boundary too', () {
+      // 😀 (U+D83D,U+DE00) → 🈀 (U+D83C,U+DE00) share the LOW surrogate:
+      // the suffix scan keeps it and would otherwise leave a lone high
+      // surrogate as the replacement.
+      final diff = diffTexts('😀', '🈀');
+      expect(diff, isNotNull);
+      expect(diff!.start, 0);
+      expect(diff.deletedLength, 2);
+      expect(diff.insertedText, '🈀');
     });
   });
 }

@@ -232,7 +232,10 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
 /// The composing underline is painted by the framework — us — not the
 /// keyboard (G3 visibility: `EditableText` styles `value.composing` itself;
 /// without it CJK marked text looks committed and a deferred input rule is
-/// indistinguishable from a swallowed one).
+/// indistinguishable from a swallowed one). This holds on web too: the
+/// engine's hidden input reports a ~1px editable box (`ImeGeometryReporter`),
+/// so no browser-native marked-text decoration is visible there — this is
+/// the one underline on every platform.
 class _CaretPainter extends CustomPainter {
   _CaretPainter({
     required this.geometry,

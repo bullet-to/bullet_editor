@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:bullet_editor/bullet_editor.dart';
 // The gauntlet fixture is a dev/test artifact, deliberately not in the
@@ -6,6 +7,7 @@ import 'package:bullet_editor/bullet_editor.dart';
 // ignore: implementation_imports
 import 'package:bullet_editor/src/dev/gauntlet_document.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 /// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
 /// left, tabbed debug panes on the right.
@@ -49,7 +51,7 @@ class _InspectorScreenState extends State<InspectorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('bullet_editor inspector — v3 day 5-7'),
+        title: const Text('bullet_editor inspector — v3 day 8'),
         actions: [
           IconButton(
             tooltip: 'Undo',
@@ -93,11 +95,16 @@ class _InspectorScreenState extends State<InspectorScreen> {
           const VerticalDivider(width: 1),
           Expanded(
             flex: 2,
-            child: _InspectorPanes(
-              controller: _controller,
-              editorKey: _editorKey,
-              lastLinkTap: _lastLinkTap,
-              lastLinkTapBlockId: _lastLinkTapBlockId,
+            // SelectionArea: every pane's text is selectable/copyable —
+            // shadow buffers, journal lines, delta dumps paste straight
+            // into a bug report.
+            child: SelectionArea(
+              child: _InspectorPanes(
+                controller: _controller,
+                editorKey: _editorKey,
+                lastLinkTap: _lastLinkTap,
+                lastLinkTapBlockId: _lastLinkTapBlockId,
+              ),
             ),
           ),
         ],
@@ -122,7 +129,7 @@ class _InspectorPanes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(
         children: [
           const TabBar(
@@ -130,6 +137,7 @@ class _InspectorPanes extends StatelessWidget {
               Tab(text: 'Document tree'),
               Tab(text: 'Selection'),
               Tab(text: 'IME'),
+              Tab(text: 'Journal'),
             ],
           ),
           Expanded(
@@ -145,6 +153,7 @@ class _InspectorPanes extends StatelessWidget {
                   lastLinkTapBlockId: lastLinkTapBlockId,
                 ),
                 _ImePane(editorKey: editorKey),
+                _ImeJournalPane(editorKey: editorKey),
               ],
             ),
           ),
@@ -280,10 +289,12 @@ class _SelectionPane extends StatelessWidget {
   }
 }
 
-/// Pane 3 — the IME window (v3-build-strategy §dev harness): the shadow
-/// buffer as the engine sees it (sentinel visible), the last received delta
-/// batch, the last terminateComposition reason, and the quarantine state.
-/// This pane is why IME bugs get diagnosed in minutes instead of days.
+/// Pane 3 — the IME window (v3-build-strategy §dev harness): the active
+/// frontend (delta vs the day-8 web diff fallback), the shadow buffer as
+/// the engine sees it (sentinel visible), the last received/synthesized
+/// delta batch, the last value diff in web-fallback mode, the last
+/// terminateComposition reason, and the quarantine state. This pane is why
+/// IME bugs get diagnosed in minutes instead of days.
 class _ImePane extends StatelessWidget {
   const _ImePane({required this.editorKey});
 
@@ -308,12 +319,34 @@ class _ImePane extends StatelessWidget {
       builder: (context, _) {
         final shadow = ime.debugShadow;
         final deltas = ime.debugLastDeltas;
+        final isDiffFrontend = ime.frontend == ImeFrontend.nonDeltaDiff;
+        final diff = ime.debugLastDiff;
         return ListView(
           padding: const EdgeInsets.all(12),
           children: [
             Text('Connection', style: Theme.of(context).textTheme.titleSmall),
-            Text(ime.isAttached ? 'attached' : 'detached', style: mono),
+            Text(
+              '${ime.isAttached ? 'attached' : 'detached'}\n'
+              'frontend: ${ime.frontend.name}'
+              '${isDiffFrontend ? ' (web diff fallback)' : ' (delta model)'}',
+              style: mono,
+            ),
             const SizedBox(height: 12),
+            if (isDiffFrontend) ...[
+              Text(
+                'Last value diff (web fallback)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              Text(
+                diff == null
+                    ? '— (no text change: NonTextUpdate analogue or echo)'
+                    : 'start: ${diff.start}  '
+                          'deleted: ${diff.deletedLength}  '
+                          'inserted: ${visible(diff.insertedText)}',
+                style: mono,
+              ),
+              const SizedBox(height: 12),
+            ],
             Text(
               'Shadow buffer (as the engine sees it)',
               style: Theme.of(context).textTheme.titleSmall,
@@ -329,7 +362,9 @@ class _ImePane extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Last delta batch',
+              isDiffFrontend
+                  ? 'Last delta batch (synthesized from the value diff)'
+                  : 'Last delta batch',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             Text(
@@ -356,6 +391,89 @@ class _ImePane extends StatelessWidget {
               'selector:    ${ime.debugLastSelector ?? '—'}'
               '${ime.debugLastUnhandledSelector == null ? '' : '\nunhandled:   ${ime.debugLastUnhandledSelector} (day-10 matrix)'}',
               style: mono,
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Pane 4 — the IME journal (v3-build-strategy §record-and-replay): the
+/// interleaved engine + hardware-key event stream, most-recent-last, one
+/// dense line per event (`seq +ms kind: payload`). **Copy JSON** puts the
+/// full one-line-per-event capture on the clipboard — paste it into a chat
+/// or a test and replay it against `ImeService` with the fake connection
+/// (`test/input/ime_replay.dart`). This is how a misbehaving Safari IME
+/// session becomes a failing unit test in minutes.
+class _ImeJournalPane extends StatelessWidget {
+  const _ImeJournalPane({required this.editorKey});
+
+  final GlobalKey<BulletEditorState> editorKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final ime = editorKey.currentState?.imeService;
+    if (ime == null) return const Center(child: Text('—'));
+    final journal = ime.journal;
+
+    final mono = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(fontFamily: 'Menlo', fontSize: 11);
+
+    return ListenableBuilder(
+      listenable: journal,
+      builder: (context, _) {
+        final events = journal.events;
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Row(
+                children: [
+                  Text(
+                    '${events.length} events'
+                    '${journal.enabled ? '' : ' (disabled: release build)'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: events.isEmpty
+                        ? null
+                        : () => Clipboard.setData(
+                            ClipboardData(text: journal.dump()),
+                          ),
+                    child: const Text('Copy JSON'),
+                  ),
+                  TextButton(
+                    onPressed: events.isEmpty ? null : journal.clear,
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              // reverse + reversed items: most-recent-last with the view
+              // pinned to the newest event as the stream grows.
+              child: ListView.builder(
+                reverse: true,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                itemCount: events.length,
+                itemBuilder: (context, index) {
+                  final e = events[events.length - 1 - index];
+                  return Text(
+                    '${e.seq} +${e.elapsedMs}ms ${e.kind}: '
+                    '${jsonEncode(e.payload)}',
+                    style: mono,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  );
+                },
+              ),
             ),
           ],
         );
