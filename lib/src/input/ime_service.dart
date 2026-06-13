@@ -1093,6 +1093,17 @@ class ImeService extends ChangeNotifier
   /// equal to the shadow in all three of text + selection + composing is
   /// the engine echoing our own push: acknowledged silently.
   ///
+  /// A TEXT-UNCHANGED snapshot whose selection STARTS inside the sentinel
+  /// zone never moves the model caret (the sub-sentinel selection
+  /// invariant — the suppression block below and
+  /// [_restoreSentinelSuppressedSelection]): every pushed window's
+  /// selection sits at or beyond the sentinel length, so such a selection
+  /// is browser bookkeeping (the captured Safari blur reset to `[0,0]`),
+  /// ignored while the composing transitions process normally.
+  /// Text-CHANGING snapshots are exempt: G1's sentinel-consuming edits
+  /// genuinely carry sub-sentinel selections, and a text delta's selection
+  /// never drives the model anyway.
+  ///
   /// The delta frontend declares enableDeltaModel and never receives text
   /// through this callback; it stays a no-op there.
   @override
@@ -1148,6 +1159,64 @@ class ImeService extends ChangeNotifier
     }
     final composing = _suppressComposingBirth(unlatched, diff);
     final composingLive = composing.isValid && !composing.isCollapsed;
+    // The sub-sentinel selection invariant (the captured Safari blur
+    // session: compose に, blur to the URL bar — Safari fires
+    // compositionend AND resets the DOM selection to zero, arriving as
+    // `{". に", sel:[0,0], composing:null}` over unchanged text): a
+    // snapshot selection whose START lies inside the sentinel zone
+    // `[0, sentinel.length)` cannot be a user action. Every window we push
+    // carries a selection at or beyond the sentinel length
+    // ([serializeImeWindow] — even the empty-document window collapses AT
+    // it), and the editable is a hidden 1px sliver nothing can click, so a
+    // sub-sentinel selection start is browser bookkeeping, never input.
+    // Honored, the NonTextUpdate mapping clamped it to the block start —
+    // the model caret jumped at blur and the follow-up push taught Safari
+    // the clamped caret, stuck there on return. So the selection COMPONENT
+    // is ignored: the snapshot proceeds carrying the shadow's own
+    // selection, the model caret stays put, and everything else (the text
+    // diff, the composing transitions — including the live→empty clear
+    // that disarms the composition, and its commit-key arm) processes
+    // exactly as before. A RANGE whose start is in-zone but extent beyond
+    // (`[0,3]`) is the same artifact family: no pushed window ever anchors
+    // inside the sentinel, and honoring a clamped half would fabricate a
+    // selection the user never made. The DOM-side fallout — the browser's
+    // caret genuinely moved — is [_restoreSentinelSuppressedSelection]'s
+    // territory. The composing filters above deliberately see the RAW
+    // selection (the stale-latch freshness test must read the snapshot the
+    // engine actually sent, and an artifact selection is exactly what
+    // keeps it un-fresh).
+    //
+    // Scoped to TEXT-UNCHANGED snapshots, deliberately: G1's
+    // sentinel-consuming edits are GENUINE text-changing shapes with
+    // sub-sentinel selections — backspace at block start deletes the
+    // sentinel space and reports `sel:[1,1]`, select-to-line-start +
+    // delete collapses the whole buffer to `sel:[0,0]` — and their
+    // selection rides into the shadow verbatim (the synthesis's
+    // acknowledge half), where it is harmless: a text delta's selection is
+    // never applied to the model ([_applyDelta] derives the caret from the
+    // edit itself), and [_finishBatch]'s push-iff-diverged already
+    // re-teaches the engine the post-edit window. Only the no-diff path —
+    // the NonTextUpdate analogue, the one place the engine selection
+    // DRIVES the model — honors the selection, so only it needs the
+    // invariant.
+    final rawSelection = value.selection;
+    final sentinelSelection =
+        diff == null &&
+        rawSelection.isValid &&
+        rawSelection.start < ImeWindow.sentinel.length;
+    if (sentinelSelection) {
+      journal.record(
+        'sentinelSelectionSuppressed',
+        () => {
+          'sel': [rawSelection.baseOffset, rawSelection.extentOffset],
+        },
+      );
+      value = TextEditingValue(
+        text: value.text,
+        selection: _shadow!.selection,
+        composing: value.composing,
+      );
+    }
     // Deferred reconciliation (passive-while-composing, §web fallback): a
     // prior mid-composition snapshot diverged the window unmappably, so
     // the frontend is a pure observer until the composition ends — see
@@ -1200,7 +1269,13 @@ class ImeService extends ChangeNotifier
     // and must split. Runs before the arm below, so the arming snapshot
     // never disarms itself.
     _disarmCommitKeySuppression('subsequentSnapshot');
-    if (delta == null) return; // pure echo of our own push
+    if (delta == null) {
+      // Pure echo of our own push — except when the sub-sentinel invariant
+      // above discarded the engine's selection: nothing else changed, but
+      // the DOM caret genuinely sits at the artifact, so re-teach it.
+      _restoreSentinelSuppressedSelection(sentinelSelection);
+      return;
+    }
     debugLastDeltas = [delta];
     // An engine snapshot ending a live shadow composition is compositionend
     // reflected — on WebKit the keydown of the key that ended it (the
@@ -1241,8 +1316,36 @@ class ImeService extends ChangeNotifier
       // re-enter the rewrite (see [_staleComposingLatch]'s lifecycle).
       _staleComposingLatch = composing;
     }
+    _restoreSentinelSuppressedSelection(sentinelSelection);
     _scheduleGeometryReport();
     notifyListeners();
+  }
+
+  /// The corrective half of the sub-sentinel selection invariant (the
+  /// suppression block in [updateEditingValue]): with the snapshot's
+  /// selection component discarded, the pipeline converges with the model
+  /// caret preserved — but the BROWSER's DOM selection genuinely sits where
+  /// the artifact put it (Safari's blur reset parked it at zero), and a
+  /// shadow that ignores that forever is exactly the stale engine cursor
+  /// clause (b) of the no-echo invariant exists to prevent. One plain push
+  /// re-teaches the engine the preserved window — the captured session's
+  /// follow-up push (seq 31), which used to carry the sentinel-clamped
+  /// `[2,2]` because the model had already moved, now carries the
+  /// preserved caret. The shadow then equals what the engine holds again:
+  /// no divergence lingers, and no push-fight is possible — a push of the
+  /// preserved window can at most echo back as the pure-echo shape (never
+  /// sub-sentinel, every pushed selection is ≥ the sentinel length), so the
+  /// cycle cannot self-sustain. When [_finishBatch] already pushed (a G3
+  /// latch fire on the composing-clear), this re-push is an identical
+  /// no-op engine-side — the dead-key resync precedent. Skipped
+  /// while a composition stays live or the passive window is armed
+  /// (pushing there is the #1641 seam); those states reconcile through
+  /// their own composition-end push, and a re-attach re-pushes regardless.
+  void _restoreSentinelSuppressedSelection(bool suppressed) {
+    if (!suppressed) return;
+    if (_connection == null || _shadow == null) return;
+    if (_shadowComposing || _passiveDivergence) return;
+    _pushAuthoritativeWindow();
   }
 
   /// The deferred-reconciliation window's snapshot handling

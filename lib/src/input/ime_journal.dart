@@ -48,6 +48,12 @@ class ImeJournalEvent {
 ///   no text change).
 /// - `composingSanitized` / `staleComposingSuppressed` — the composing
 ///   region filters changed what the synthesis sees.
+/// - `sentinelSelectionSuppressed` — a text-unchanged snapshot's selection
+///   starting inside the sentinel zone was discarded as browser
+///   bookkeeping (the Safari blur reset; every pushed window's selection
+///   is ≥ the sentinel length), with the rejected `[base, extent]`; the
+///   model caret stayed put and one plain push re-taught the engine the
+///   preserved window.
 /// - `staleComposingLatchDisarmed` — the stale-composing refusal released
 ///   its latch, with the reason (`corrective` / `differentRange` /
 ///   `fresh`); the `fresh` disarm is a known-ambiguous heuristic

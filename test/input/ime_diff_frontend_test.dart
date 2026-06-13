@@ -752,6 +752,101 @@ void main() {
     });
   });
 
+  group('the sub-sentinel selection invariant (the Safari blur reset: a '
+      'snapshot selection starting inside [0, 2) is browser bookkeeping, '
+      'never input)', () {
+    List<Object?> suppressions() => [
+      for (final e in service.journal.events)
+        if (e.kind == 'sentinelSelectionSuppressed') e.payload['sel'],
+    ];
+
+    test('a collapsed [0,0] on a text-unchanged snapshot is ignored — the '
+        'model caret stays put — while the composing live→empty clear '
+        'still processes (the captured Safari blur shape)', () {
+      build([para('a', 'hi')], selection: caret('a', 2));
+      sendValue(
+        '. hiら',
+        cursor: 5,
+        composing: const TextRange(start: 4, end: 5),
+      );
+      expect(controller.composing, isNotNull);
+      final pushesBefore = connection().pushed.length;
+
+      // Safari blur: compositionend reflected + the DOM selection reset.
+      sendValue('. hiら', cursor: 0);
+
+      expect(suppressions(), [
+        [0, 0],
+      ]);
+      expect(controller.selection, caret('a', 3), reason: 'caret preserved');
+      expect(controller.composing, isNull, reason: 'the clear still lands');
+      expect(shadow().composing, TextRange.empty);
+      expect(service.debugCommitKeySuppressionArmed, isTrue);
+      // The corrective push re-teaches the DOM the PRESERVED caret — the
+      // bug was this push carrying the sentinel-clamped [2,2].
+      expect(connection().pushed.length, pushesBefore + 1);
+      expect(
+        connection().pushed.last.selection,
+        const TextSelection.collapsed(offset: 5),
+      );
+    });
+
+    test('a RANGE whose start is in-zone but extent beyond ([0,3]) is the '
+        'same artifact family: ignored, journaled, and the preserved '
+        'window re-pushed', () {
+      // No pushed window ever anchors inside the sentinel, so honoring a
+      // clamped half would fabricate a selection the user never made.
+      build([para('a', 'hello')], selection: caret('a', 5));
+      final pushesBefore = connection().pushed.length;
+
+      sendValue('. hello', cursor: 3, cursorBase: 0);
+
+      expect(suppressions(), [
+        [0, 3],
+      ]);
+      expect(controller.selection, caret('a', 5), reason: 'caret preserved');
+      expect(connection().pushed.length, pushesBefore + 1);
+      expect(
+        connection().pushed.last.selection,
+        const TextSelection.collapsed(offset: 7),
+      );
+      expect(shadow().selection, const TextSelection.collapsed(offset: 7));
+    });
+
+    test('negative control: a selection at [2,2] (the true block start) is '
+        'honored normally — the NonTextUpdate analogue', () {
+      build([para('a', 'hello')], selection: caret('a', 5));
+      final pushesBefore = connection().pushed.length;
+
+      sendValue('. hello', cursor: 2);
+
+      expect(suppressions(), isEmpty);
+      expect(controller.selection, caret('a', 0));
+      expect(shadow().selection, const TextSelection.collapsed(offset: 2));
+      expect(connection().pushed.length, pushesBefore, reason: 'no echo');
+    });
+
+    test('text-CHANGING snapshots are exempt: a sub-sentinel selection on '
+        'an edit rides into the shadow untouched (G1 sentinel-consuming '
+        "shapes — backspace at block start's [1,1], the composite "
+        "delete's [0,0] — are genuine), a text delta's selection never "
+        'drives the model, and the batch-end reconcile re-pushes the '
+        'post-edit caret', () {
+      build([para('a', 'hello')], selection: caret('a', 5));
+
+      sendValue('. helloX', cursor: 0);
+
+      expect(suppressions(), isEmpty);
+      expect(controller.document.blockById('a')!.plainText, 'helloX');
+      expect(controller.selection, caret('a', 6));
+      expect(
+        connection().pushed.last.selection,
+        const TextSelection.collapsed(offset: 8),
+      );
+      expect(shadow().selection, const TextSelection.collapsed(offset: 8));
+    });
+  });
+
   group('the performAction guard (engine-owned compositions)', () {
     test("performAction(newline) is ignored while the shadow reports a "
         'live composition: no model edit, no push, journaled — the '

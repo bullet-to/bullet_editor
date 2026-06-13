@@ -1131,7 +1131,16 @@ with the dead range (two captured Chrome journals: the blur-return re-arm over a
 window; the same dead range carried onto a different block's freshly pushed window) — so with
 shadow composing empty, a composing decoration on a no-text-change snapshot is filtered to empty
 (journaled `composingBirthSuppressed`), and composing-only updates during a live composition (the
-NonTextUpdate analogue, CJK candidate navigation) pass untouched. `performAction('newline')` is
+NonTextUpdate analogue, CJK candidate navigation) pass untouched. **A text-unchanged snapshot's
+selection starting inside the sentinel zone is likewise never honored:** every pushed window
+carries a selection at or beyond the sentinel length and the hidden editable is unclickable, so a
+sub-sentinel selection start on the no-diff path — the one place the engine selection drives the
+model — is browser bookkeeping (the captured Safari blur reset — compositionend plus a DOM
+selection parked at zero); the selection component is ignored (journaled
+`sentinelSelectionSuppressed`) while the composing transitions process normally, and one plain
+push re-teaches the engine the preserved caret (text-CHANGING snapshots are exempt: G1's
+sentinel-consuming edits genuinely carry sub-sentinel selections, and a text delta's selection
+never drives the model). `performAction('newline')` is
 likewise ignored while the engine owns a composition (shadow composing live or the passive window
 armed) — the deferred-Enter-reaching-the-DOM fallout; a genuine commit newline arrives as a `\n`
 delta/snapshot (G10). Deliberate terminations are unchanged and may still push mid-composition: undo
