@@ -305,7 +305,7 @@ class BulletEditorState extends State<BulletEditor>
   // the remaining key matrix under the same gate.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
-    final (result, handler, deferred, action) = _classifyKeyEvent(event);
+    final (:result, :handler, :deferred, :action) = _classifyKeyEvent(event);
     // Every key event lands in the IME journal so hardware keys interleave
     // with the engine traffic in one capturable stream — `handler` names
     // the controller verb that consumed it (or `ignored`), `deferred`
@@ -331,14 +331,15 @@ class BulletEditorState extends State<BulletEditor>
   }
 
   /// The key dispatch decision, split from [_onKeyEvent] so the journal can
-  /// record the outcome alongside the event before the verb runs. Returns
-  /// (result, the handler label that will consume the key or `ignored`,
-  /// whether the composing gate deferred it to the IME, the controller verb
-  /// to run — null when nothing consumes it).
-  (KeyEventResult, String, bool, VoidCallback?) _classifyKeyEvent(
-    KeyEvent event,
-  ) {
-    const ignored = (KeyEventResult.ignored, 'ignored', false, null);
+  /// record the outcome alongside the event before the verb runs.
+  ({KeyEventResult result, String handler, bool deferred, VoidCallback? action})
+  _classifyKeyEvent(KeyEvent event) {
+    const ignored = (
+      result: KeyEventResult.ignored,
+      handler: 'ignored',
+      deferred: false,
+      action: null,
+    );
     if (widget.readOnly) return ignored;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return ignored;
 
@@ -356,8 +357,18 @@ class BulletEditorState extends State<BulletEditor>
       // armed. Every other key defers through the gate below.
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
         return pressed.isShiftPressed
-            ? (KeyEventResult.handled, 'redo', false, controller.redo)
-            : (KeyEventResult.handled, 'undo', false, controller.undo);
+            ? (
+                result: KeyEventResult.handled,
+                handler: 'redo',
+                deferred: false,
+                action: controller.redo,
+              )
+            : (
+                result: KeyEventResult.handled,
+                handler: 'undo',
+                deferred: false,
+                action: controller.undo,
+              );
       }
       return ignored;
     }
@@ -414,13 +425,18 @@ class BulletEditorState extends State<BulletEditor>
         // while the composition is live), so the composing-clear this key
         // produces must not arm the commit-key suppression below.
         return (
-          KeyEventResult.skipRemainingHandlers,
-          'ignored',
-          true,
-          imeService.noteCommitKeyDeferred,
+          result: KeyEventResult.skipRemainingHandlers,
+          handler: 'ignored',
+          deferred: true,
+          action: imeService.noteCommitKeyDeferred,
         );
       }
-      return (KeyEventResult.skipRemainingHandlers, 'ignored', true, null);
+      return (
+        result: KeyEventResult.skipRemainingHandlers,
+        handler: 'ignored',
+        deferred: true,
+        action: null,
+      );
     }
 
     switch (event.logicalKey) {
@@ -433,13 +449,18 @@ class BulletEditorState extends State<BulletEditor>
         // handled, no newline; the next Enter is genuine (the consult
         // disarmed it).
         if (imeService.consumeCommitKeySuppression()) {
-          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
+          return (
+            result: KeyEventResult.handled,
+            handler: 'commitKeySuppressed',
+            deferred: false,
+            action: null,
+          );
         }
         return (
-          KeyEventResult.handled,
-          'insertNewline',
-          false,
-          controller.insertNewline,
+          result: KeyEventResult.handled,
+          handler: 'insertNewline',
+          deferred: false,
+          action: controller.insertNewline,
         );
       case LogicalKeyboardKey.escape:
         // ProseMirror's other suppressed key: an Escape arriving inside
@@ -449,10 +470,10 @@ class BulletEditorState extends State<BulletEditor>
         // Nothing here handles Escape, so it stays ignored either way —
         // only the arm is consumed (the consult journals the decision).
         return (
-          KeyEventResult.ignored,
-          'ignored',
-          false,
-          imeService.consumeCommitKeySuppression,
+          result: KeyEventResult.ignored,
+          handler: 'ignored',
+          deferred: false,
+          action: imeService.consumeCommitKeySuppression,
         );
       case LogicalKeyboardKey.backspace:
         // WebKit's ordering is not Enter-specific — it applies to EVERY
@@ -463,24 +484,44 @@ class BulletEditorState extends State<BulletEditor>
         // the gate open and would eat a genuine character (the block's
         // period). Same consult, same one-shot.
         if (imeService.consumeCommitKeySuppression()) {
-          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
+          return (
+            result: KeyEventResult.handled,
+            handler: 'commitKeySuppressed',
+            deferred: false,
+            action: null,
+          );
         }
         return (
-          KeyEventResult.handled,
-          'backspace',
-          false,
-          controller.backspace,
+          result: KeyEventResult.handled,
+          handler: 'backspace',
+          deferred: false,
+          action: controller.backspace,
         );
       case LogicalKeyboardKey.tab:
         // Tab cycles candidates in several IMEs and can end a composition
         // — the same exposure as Backspace: an unsuppressed trailing Tab
         // would indent/outdent the block the composition just ended in.
         if (imeService.consumeCommitKeySuppression()) {
-          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
+          return (
+            result: KeyEventResult.handled,
+            handler: 'commitKeySuppressed',
+            deferred: false,
+            action: null,
+          );
         }
         return pressed.isShiftPressed
-            ? (KeyEventResult.handled, 'outdent', false, controller.outdent)
-            : (KeyEventResult.handled, 'indent', false, controller.indent);
+            ? (
+                result: KeyEventResult.handled,
+                handler: 'outdent',
+                deferred: false,
+                action: controller.outdent,
+              )
+            : (
+                result: KeyEventResult.handled,
+                handler: 'indent',
+                deferred: false,
+                action: controller.indent,
+              );
       // Arrows (and the unhandled Home/End) deliberately do NOT consult
       // the one-shot: a trailing post-compositionend arrow only moves the
       // caret — nothing destructive happens — and the selection change it
@@ -490,17 +531,17 @@ class BulletEditorState extends State<BulletEditor>
       // handling).
       case LogicalKeyboardKey.arrowLeft:
         return (
-          KeyEventResult.handled,
-          'moveCaretBack',
-          false,
-          () => controller.moveCaret(-1),
+          result: KeyEventResult.handled,
+          handler: 'moveCaretBack',
+          deferred: false,
+          action: () => controller.moveCaret(-1),
         );
       case LogicalKeyboardKey.arrowRight:
         return (
-          KeyEventResult.handled,
-          'moveCaretForward',
-          false,
-          () => controller.moveCaret(1),
+          result: KeyEventResult.handled,
+          handler: 'moveCaretForward',
+          deferred: false,
+          action: () => controller.moveCaret(1),
         );
     }
 

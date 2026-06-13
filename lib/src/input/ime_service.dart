@@ -2673,11 +2673,14 @@ class ImeGeometryReporter {
   // The last style actually sent, keyed to the channel it was sent over —
   // a fresh connection (attach, Android terminate re-attach) gets a fresh
   // engine element and must be re-styled.
-  ImeGeometryChannel? _styledChannel;
-  String? _sentFontFamily;
-  double? _sentFontSize;
-  FontWeight? _sentFontWeight;
-  TextDirection? _sentTextDirection;
+  ({
+    ImeGeometryChannel channel,
+    String? fontFamily,
+    double? fontSize,
+    FontWeight? fontWeight,
+    TextDirection textDirection,
+  })?
+  _sentStyle;
 
   void report(
     ImeGeometryChannel channel, {
@@ -2709,8 +2712,8 @@ class ImeGeometryReporter {
         );
         if (rects.isNotEmpty) {
           var bounds = rects.first;
-          for (final r in rects.skip(1)) {
-            bounds = bounds.expandToInclude(r);
+          for (var i = 1; i < rects.length; i++) {
+            bounds = bounds.expandToInclude(rects[i]);
           }
           composingRect = _toEditorSpace(bounds, geometry.renderBox, editorBox);
         }
@@ -2769,18 +2772,22 @@ class ImeGeometryReporter {
     final style = lookup(blockId);
     if (style == null) return;
     final direction = textDirection?.call() ?? TextDirection.ltr;
-    if (identical(channel, _styledChannel) &&
-        style.fontFamily == _sentFontFamily &&
-        style.fontSize == _sentFontSize &&
-        style.fontWeight == _sentFontWeight &&
-        direction == _sentTextDirection) {
+    final current = (
+      channel: channel,
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      textDirection: direction,
+    );
+    if (_sentStyle case final sent?
+        when identical(current.channel, sent.channel) &&
+            current.fontFamily == sent.fontFamily &&
+            current.fontSize == sent.fontSize &&
+            current.fontWeight == sent.fontWeight &&
+            current.textDirection == sent.textDirection) {
       return;
     }
-    _styledChannel = channel;
-    _sentFontFamily = style.fontFamily;
-    _sentFontSize = style.fontSize;
-    _sentFontWeight = style.fontWeight;
-    _sentTextDirection = direction;
+    _sentStyle = current;
     channel.setStyle(
       fontFamily: style.fontFamily,
       fontSize: style.fontSize,
