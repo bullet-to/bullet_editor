@@ -77,18 +77,20 @@ class ImeJournalEvent {
 ///   `commitKeySuppressionConsumed` / `commitKeySuppressionExpired` /
 ///   `commitKeySuppressionDisarmed` — the Safari post-compositionend
 ///   commit-key one-shot's decisions: armed when an engine snapshot ends a
-///   live composition, skipped when a gate-deferred Enter proved the
-///   keydown-first ordering, consumed (or expired) by the widget's
-///   Enter/Escape consult, disarmed (with the reason) when a subsequently
-///   accepted snapshot or a non-IME change proved the arm stale.
+///   live composition, skipped when a gate-deferred commit-capable key
+///   (Enter/Backspace/Tab) proved the keydown-first ordering, consumed (or
+///   expired) by the widget's Enter/Backspace/Tab/Escape consult, disarmed
+///   (with the reason) when a subsequently accepted snapshot or a non-IME
+///   change proved the arm stale.
 /// - `passiveReconcile` — the deferred reconciliation's one authoritative
 ///   push: what the absorbed engine window held (`discardedText` /
 ///   `discardedComposing`) vs the authoritative window that replaced it
 ///   (`pushedText` / `pushedSelection`).
 /// - `key` — a hardware key event seen by the editor widget (kind, logical
 ///   key label, character, whether the composing gate deferred it, which
-///   handler consumed it or `ignored` — `commitEnterSuppressed` names a
-///   swallowed commit Enter).
+///   handler consumed it or `ignored` — `commitKeySuppressed` names a
+///   swallowed post-compositionend commit/cancel keydown; the entry's
+///   `key` field says which key it was).
 ///
 /// Replayable kinds (`snapshot`, `deltas`, `performAction`,
 /// `performSelector`, `key`) reconstruct the inbound side in a unit test —

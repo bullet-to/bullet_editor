@@ -606,12 +606,25 @@ class ImeService extends ChangeNotifier
   /// widget's composing gate cannot defer it, and the handled key inserts a
   /// spurious paragraph (the captured Safari Japanese session: conversion
   /// display → compositionend reflected → Enter keydown 29 ms later).
+  /// The ordering is NOT Enter-specific — it applies to every key the IME
+  /// consumes to end a composition: a second capture (Safari, a lone
+  /// composed `n` at the end of a block canceled with one Backspace) shows
+  /// the composing-clear snapshot land first, the arm fire, and the
+  /// trailing Backspace keydown then delete a genuine character (the
+  /// block's period) because only Enter consulted the one-shot. The widget
+  /// therefore consults for ALL the gated editing keys its handlers act on
+  /// destructively — Enter/numpadEnter, Backspace, Tab — plus Escape,
+  /// which spends the arm without handling; arrows/Home/End are not
+  /// consulted (a trailing arrow only moves the caret, and the selection
+  /// change it causes disarms a pending arm anyway).
   /// Chrome/Firefox fire the keydown first (keyCode 229, composition still
   /// live), so the gate covers them there. Prior art: ProseMirror's Safari
   /// workaround (prosemirror-view `input.ts`: `compositionEndedAt` recorded
   /// on compositionend, a near-composition keydown — keyCodes 13/27 —
   /// within 500 ms treated as part of the just-ended composition, the
-  /// timestamp reset once consumed).
+  /// timestamp reset once consumed; our key set is broader than 13/27
+  /// because, unlike ProseMirror, our hardware handlers also act on
+  /// Backspace and Tab once the composition is gone).
   ///
   /// Lifecycle: armed by [_armCommitKeySuppression] when an ENGINE-reported
   /// snapshot ends a live shadow composition (the diff frontend's
@@ -628,12 +641,27 @@ class ImeService extends ChangeNotifier
   /// [terminateComposition], and by [detach].
   int? _commitKeySuppressionArmedAtMs;
 
-  /// Elapsed-ms timestamp of the last Enter keydown the widget's composing
-  /// gate deferred to the IME (null = none) — [noteCommitKeyDeferred]. The
-  /// Chrome/Firefox ordering proof: when the committing keydown reached the
-  /// framework BEFORE the composing-clear, the gate already consumed it, so
-  /// the composition end it produces must not arm the suppression (see
+  /// Elapsed-ms timestamp of the last commit-capable keydown (Enter,
+  /// Backspace, Tab) the widget's composing gate deferred to the IME (null
+  /// = none) — [noteCommitKeyDeferred]. The Chrome/Firefox ordering proof:
+  /// when the composition-ending keydown reached the framework BEFORE the
+  /// composing-clear, the gate already consumed it, so the composition end
+  /// it produces must not arm the suppression (see
   /// [_armCommitKeySuppression]).
+  ///
+  /// Single slot, overwritten by each deferral — one note per
+  /// composition-ending event is the shape, and the broader key set keeps
+  /// it: on the keydown-first platforms every press of these keys defers
+  /// while the composition is live, so the note standing when the
+  /// composing-clear arrives is the ending key's own (a mid-composition
+  /// Backspace's note is overwritten by the canceling one). The arm
+  /// consult consumes the slot unconditionally and the 500 ms window
+  /// bounds staleness. Known residual, WebKit-only: a gate-deferred
+  /// MID-composition Backspace (keydown-first there — only the ENDING
+  /// key's ordering inverts) noted less than a window before a Safari
+  /// composition end skips that arm, degrading that one press to the
+  /// pre-suppression behavior — never worse than the status quo this
+  /// machinery replaced, and any intervening snapshot re-scopes it.
   int? _commitKeyDeferredAtMs;
 
   bool get isAttached => _connection != null;
@@ -878,8 +906,9 @@ class ImeService extends ChangeNotifier
   // --- The commit-key suppression (Safari's keydown-after-compositionend
   // ordering — see [_commitKeySuppressionArmedAtMs] for the full story) ---
 
-  /// How long after an engine-reported composition end a hardware Enter
-  /// still reads as the keystroke that COMMITTED it. ProseMirror's number:
+  /// How long after an engine-reported composition end a hardware
+  /// commit-capable key (Enter, Backspace, Tab, Escape) still reads as the
+  /// keystroke that ENDED it. ProseMirror's number:
   /// prosemirror-view treats a Safari Enter/Escape keydown within 500 ms of
   /// `compositionEndedAt` as belonging to the just-ended composition. The
   /// real gap is tens of milliseconds (29 ms in the captured session); the
@@ -888,14 +917,15 @@ class ImeService extends ChangeNotifier
     milliseconds: 500,
   );
 
-  /// The widget's composing gate deferred an Enter to the platform IME —
-  /// the Chrome/Firefox ordering, where the committing keydown reaches the
-  /// framework BEFORE compositionend (keyCode 229, model composition still
-  /// live). Recording it keeps [_armCommitKeySuppression] from arming off
-  /// that key's own composition end: the gate already consumed the commit
-  /// Enter there, and an armed one-shot would swallow the user's next
-  /// genuine Enter (commit the conversion, Enter for a new line — the
-  /// standard Japanese flow).
+  /// The widget's composing gate deferred a commit-capable key (Enter,
+  /// Backspace, Tab) to the platform IME — the Chrome/Firefox ordering,
+  /// where the composition-ending keydown reaches the framework BEFORE
+  /// compositionend (keyCode 229, model composition still live). Recording
+  /// it keeps [_armCommitKeySuppression] from arming off that key's own
+  /// composition end: the gate already consumed the key there, and an
+  /// armed one-shot would swallow the user's next genuine press (commit
+  /// the conversion, Enter for a new line — the standard Japanese flow;
+  /// or cancel by Backspace, Backspace again to keep deleting).
   void noteCommitKeyDeferred() {
     _commitKeyDeferredAtMs = _monotonicNowMs();
   }
@@ -903,11 +933,12 @@ class ImeService extends ChangeNotifier
   /// Consults — and disarms — the one-shot commit-key suppression: true iff
   /// a live composition ended engine-side within
   /// [commitKeySuppressionWindow] and nothing consumed the arm yet. The
-  /// widget's Enter handler calls this after the composing gate: true means
-  /// the keydown is Safari's post-compositionend commit Enter and must not
-  /// insert a newline. One consult disarms regardless of the verdict
-  /// (ProseMirror's consumed-once-then-reset), so the very next Enter
-  /// behaves normally.
+  /// widget's Enter/Backspace/Tab handlers call this after the composing
+  /// gate (and Escape spends it without handling): true means the keydown
+  /// is Safari's post-compositionend commit/cancel key and must not edit
+  /// the document — the IME already applied its effect engine-side. One
+  /// consult disarms regardless of the verdict (ProseMirror's
+  /// consumed-once-then-reset), so the very next press behaves normally.
   bool consumeCommitKeySuppression() {
     final armedAt = _commitKeySuppressionArmedAtMs;
     if (armedAt == null) return false;
@@ -930,10 +961,10 @@ class ImeService extends ChangeNotifier
   /// Arms the one-shot — called from the diff frontend's snapshot path when
   /// an accepted engine snapshot ends a live shadow composition (the
   /// composing-clear that reflects compositionend). Skipped when a
-  /// gate-deferred Enter preceded the clear within the window: that is the
-  /// Chrome/Firefox keydown-first ordering, where the commit key already
-  /// passed through the gate ([noteCommitKeyDeferred]) and no second
-  /// keydown is coming.
+  /// gate-deferred commit-capable key (Enter/Backspace/Tab) preceded the
+  /// clear within the window: that is the Chrome/Firefox keydown-first
+  /// ordering, where the composition-ending key already passed through the
+  /// gate ([noteCommitKeyDeferred]) and no second keydown is coming.
   void _armCommitKeySuppression() {
     final deferredAt = _commitKeyDeferredAtMs;
     _commitKeyDeferredAtMs = null;
@@ -960,7 +991,7 @@ class ImeService extends ChangeNotifier
   /// auto-commit's follow-up) or a non-IME edit/selection change (the
   /// tap itself). Without this, every engine-side composition end — click
   /// commits, auto-commits, Escape cancels — would swallow the user's
-  /// next genuine Enter for 500 ms.
+  /// next genuine Enter/Backspace/Tab for 500 ms.
   void _disarmCommitKeySuppression(String reason) {
     if (_commitKeySuppressionArmedAtMs == null) return;
     _commitKeySuppressionArmedAtMs = null;

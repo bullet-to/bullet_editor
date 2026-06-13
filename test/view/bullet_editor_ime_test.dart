@@ -1144,7 +1144,7 @@ void main() {
             if (e['kind'] == 'key')
               ((e['payload']! as Map).cast<String, Object?>())['handler'],
         ],
-        contains('commitEnterSuppressed'),
+        contains('commitKeySuppressed'),
         reason: 'the decision is journaled for future captures',
       );
 
@@ -1307,6 +1307,169 @@ void main() {
       await simulateKeyUpEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(controller.document.allBlocks, hasLength(2));
+    });
+  });
+
+  group("Safari's post-compositionend cancel Backspace / Tab "
+      '(web diff fallback)', () {
+    // The tail of a REAL journal capture (Safari): a lone `n` composed at
+    // the end of "image block." was canceled with one Backspace. The IME
+    // consumed the key — the composing-clear snapshot lands FIRST with the
+    // n already deleted (seq 12) — and the trailing Backspace keydown then
+    // reached the framework with composing null, gate open, and ate the
+    // block's period: WebKit's compositionend-before-keydown ordering
+    // applies to EVERY key the IME consumes to end a composition, not just
+    // the commit Enter.
+    const backspaceCaptureTail = r'''
+{"seq":8,"kind":"snapshot","payload":{"text":". image block.n","sel":[15,15],"composing":[14,15]}}
+{"seq":12,"kind":"snapshot","payload":{"text":". image block.","sel":[14,14],"composing":null}}
+''';
+
+    testWidgets('the Backspace that cancels a composition is swallowed once '
+        '— the period stays; the next Backspace deletes it', (tester) async {
+      await pumpEditor(tester, [
+        para('a', 'image block.'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 12)));
+      await tester.pump();
+
+      replayImeJournal(
+        imeOf(tester),
+        parseImeJournalDump(backspaceCaptureTail),
+      );
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'image block.');
+      expect(controller.composing, isNull, reason: 'compositionend reflected');
+
+      // The trailing Backspace keydown (the capture's seq 16): handled,
+      // but NO deletion — the IME already applied it engine-side.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(
+        controller.document.blockById('a')!.plainText,
+        'image block.',
+        reason: 'the cancel Backspace must not also eat the period',
+      );
+      expect(
+        [
+          for (final e in imeOf(tester).journal.toJson())
+            if (e['kind'] == 'key')
+              ((e['payload']! as Map).cast<String, Object?>())['handler'],
+        ],
+        contains('commitKeySuppressed'),
+        reason: 'the decision is journaled for future captures',
+      );
+
+      // One-shot: the suppression disarmed on consumption, so the very
+      // next Backspace is a genuine deletion.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'image block');
+    });
+
+    testWidgets('a Tab ending a composition is swallowed once — no indent; '
+        'the next Tab indents normally', (tester) async {
+      TextBlock listItem(String id, String text) => TextBlock(
+        id: id,
+        blockType: ListItemKeys.type,
+        segments: [StyledSegment(text)],
+      );
+      await pumpEditor(tester, [
+        listItem('a', 'one'),
+        listItem('b', 'two'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('b', 3)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Compose n at the end of "two", then the IME consumes a Tab to end
+      // the composition: compositionend reflects FIRST (the same WebKit
+      // ordering as the Backspace cancel) ...
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. twon',
+          selection: TextSelection.collapsed(offset: 6),
+          composing: TextRange(start: 5, end: 6),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. two',
+          selection: TextSelection.collapsed(offset: 5),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+
+      // ... and the trailing Tab keydown must not indent the block.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.tab), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(
+        controller.document.depthOf(1),
+        0,
+        reason: 'the composition-ending Tab must not also indent',
+      );
+
+      // One-shot: the next Tab is a genuine indent.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.tab), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(controller.document.depthOf(1), 1);
+    });
+
+    testWidgets("Chrome's ordering (cancel Backspace deferred by the gate "
+        'BEFORE compositionend) never arms — the next Backspace deletes', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        para('a', 'hi'),
+      ], imeFrontend: ImeFrontend.nonDeltaDiff);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await tester.pump();
+      final ime = imeOf(tester);
+
+      // Compose か, then Backspace cancels: on Chrome the keydown reaches
+      // the framework while the composition is still live, so the gate
+      // defers it to the browser (and notes the deferral) ...
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. hiか',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange(start: 4, end: 5),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNotNull);
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isFalse);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+
+      // ... which deletes the composed char and reflects compositionend.
+      // The gate-deferred Backspace proved the keydown-first ordering, so
+      // the composing-clear must SKIP the arm — a stale arm here would
+      // swallow the user's next genuine Backspace for 500 ms.
+      ime.updateEditingValue(
+        const TextEditingValue(
+          text: '. hi',
+          selection: TextSelection.collapsed(offset: 4),
+        ),
+      );
+      await tester.pump();
+      expect(controller.composing, isNull);
+      expect(ime.debugCommitKeySuppressionArmed, isFalse);
+      expect([
+        for (final e in ime.journal.toJson()) e['kind'],
+      ], contains('commitKeySuppressionSkipped'));
+
+      // The user's quick follow-up Backspace is a genuine deletion.
+      expect(await simulateKeyDownEvent(LogicalKeyboardKey.backspace), isTrue);
+      await simulateKeyUpEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blockById('a')!.plainText, 'h');
     });
   });
 

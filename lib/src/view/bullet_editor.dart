@@ -393,12 +393,17 @@ class BulletEditorState extends State<BulletEditor>
     // the model there would external-edit terminate → mid-composition
     // push, the corruption class this gate exists to prevent.
     if (controller.composing != null || imeService.engineComposing) {
-      if (event.logicalKey == LogicalKeyboardKey.enter ||
-          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-        // A gate-deferred Enter is noted with the service: it proves the
-        // keydown-first ordering (Chrome/Firefox — keyCode 229 while the
-        // composition is live), so the composing-clear this key produces
-        // must not arm the commit-key suppression below.
+      final key = event.logicalKey;
+      if (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter ||
+          key == LogicalKeyboardKey.backspace ||
+          key == LogicalKeyboardKey.tab) {
+        // A gate-deferred commit-capable key — Enter, Backspace, Tab: the
+        // editing keys an IME consumes to end a composition AND our
+        // handlers act on destructively — is noted with the service: it
+        // proves the keydown-first ordering (Chrome/Firefox — keyCode 229
+        // while the composition is live), so the composing-clear this key
+        // produces must not arm the commit-key suppression below.
         return (
           KeyEventResult.ignored,
           'ignored',
@@ -419,7 +424,7 @@ class BulletEditorState extends State<BulletEditor>
         // handled, no newline; the next Enter is genuine (the consult
         // disarmed it).
         if (imeService.consumeCommitKeySuppression()) {
-          return (KeyEventResult.handled, 'commitEnterSuppressed', false, null);
+          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
         }
         return (
           KeyEventResult.handled,
@@ -441,6 +446,16 @@ class BulletEditorState extends State<BulletEditor>
           imeService.consumeCommitKeySuppression,
         );
       case LogicalKeyboardKey.backspace:
+        // WebKit's ordering is not Enter-specific — it applies to EVERY
+        // key the IME consumes to end a composition. The captured Safari
+        // session: a lone composed `n` canceled with one Backspace
+        // reflects the composing-clear snapshot FIRST (the n already
+        // deleted), then the trailing Backspace keydown lands here with
+        // the gate open and would eat a genuine character (the block's
+        // period). Same consult, same one-shot.
+        if (imeService.consumeCommitKeySuppression()) {
+          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
+        }
         return (
           KeyEventResult.handled,
           'backspace',
@@ -448,9 +463,22 @@ class BulletEditorState extends State<BulletEditor>
           controller.backspace,
         );
       case LogicalKeyboardKey.tab:
+        // Tab cycles candidates in several IMEs and can end a composition
+        // — the same exposure as Backspace: an unsuppressed trailing Tab
+        // would indent/outdent the block the composition just ended in.
+        if (imeService.consumeCommitKeySuppression()) {
+          return (KeyEventResult.handled, 'commitKeySuppressed', false, null);
+        }
         return pressed.isShiftPressed
             ? (KeyEventResult.handled, 'outdent', false, controller.outdent)
             : (KeyEventResult.handled, 'indent', false, controller.indent);
+      // Arrows (and the unhandled Home/End) deliberately do NOT consult
+      // the one-shot: a trailing post-compositionend arrow only moves the
+      // caret — nothing destructive happens — and the selection change it
+      // causes disarms a pending arm through the external-change path
+      // anyway. Only keys our handlers act on destructively consult
+      // (Enter/Backspace/Tab above; Escape spends the arm without
+      // handling).
       case LogicalKeyboardKey.arrowLeft:
         return (
           KeyEventResult.handled,
