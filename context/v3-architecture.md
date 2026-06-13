@@ -1120,7 +1120,21 @@ into the model and the composition is kept; a genuinely unmappable shape (compos
 — should be impossible from a browser, guarded anyway) DEFERS reconciliation: later snapshots
 acknowledge into the shadow only, and the snapshot that ends the composition (composing
 live→empty) runs the one authoritative convergence push — after the composition is over, when
-pushing is safe. Deliberate terminations are unchanged and may still push mid-composition: undo
+pushing is safe; the absorbed composing region being REPLACED by one with a different start (a new
+compositionstart re-latched the engine base) reconciles identically — the absorbed composition
+objectively ended, and staying passive absorbs the user's next composition into the void (the
+captured Chrome blur cascade). **Composing state is only ever BORN from a text-changing snapshot:**
+every genuine compositionstart/update inserts or replaces (a dead key inserts its `´`), while the
+engine's composition latch (`composition_aware_mixin`, reset only by compositionstart/end DOM
+events) survives blur/`connectionClosed`/re-attach and keeps decorating text-unchanged snapshots
+with the dead range (two captured Chrome journals: the blur-return re-arm over an unchanged
+window; the same dead range carried onto a different block's freshly pushed window) — so with
+shadow composing empty, a composing decoration on a no-text-change snapshot is filtered to empty
+(journaled `composingBirthSuppressed`), and composing-only updates during a live composition (the
+NonTextUpdate analogue, CJK candidate navigation) pass untouched. `performAction('newline')` is
+likewise ignored while the engine owns a composition (shadow composing live or the passive window
+armed) — the deferred-Enter-reaching-the-DOM fallout; a genuine commit newline arrives as a `\n`
+delta/snapshot (G10). Deliberate terminations are unchanged and may still push mid-composition: undo
 (G7), `setDocument`/external app edits, non-IME selection moves (tap-to-another-block),
 detach/`connectionClosed` — user/app acts, not snapshot reactions. The delta frontend keeps its
 ordering guarantees and its structural-while-composing divergence rule as specified above, with

@@ -1120,13 +1120,15 @@ class ImeService extends ChangeNotifier
               'inserted': diff.insertedText,
             },
     );
-    // The incoming composing region passes two filters before anything keys
-    // on it: the sanity boundary ([_sanitizeComposing] — a mis-reported
-    // region is no state worth preserving) and the stale-latch refusal
-    // ([_filterStaleComposing] — the engine re-reporting the range a
-    // dead-key rewrite already terminated is not a composition). The drop
-    // below and the synthesis must agree on the result, so it is computed
-    // once here.
+    // The incoming composing region passes three filters before anything
+    // keys on it: the sanity boundary ([_sanitizeComposing] — a
+    // mis-reported region is no state worth preserving), the stale-latch
+    // refusal ([_filterStaleComposing] — the engine re-reporting the range
+    // a dead-key rewrite already terminated is not a composition), and the
+    // composing-birth invariant ([_suppressComposingBirth] — composing can
+    // only be born from a text-changing snapshot; in that order, see the
+    // method doc). The drop below and the synthesis must agree on the
+    // result, so it is computed once here.
     final sanitized = _sanitizeComposing(value.composing, value.text);
     if (sanitized != value.composing) {
       journal.record(
@@ -1137,13 +1139,14 @@ class ImeService extends ChangeNotifier
         },
       );
     }
-    final composing = _filterStaleComposing(sanitized, diff, value.selection);
-    if (composing != sanitized) {
+    final unlatched = _filterStaleComposing(sanitized, diff, value.selection);
+    if (unlatched != sanitized) {
       journal.record(
         'staleComposingSuppressed',
         () => {'range': ImeJournal.describeRange(sanitized)},
       );
     }
+    final composing = _suppressComposingBirth(unlatched, diff);
     final composingLive = composing.isValid && !composing.isCollapsed;
     // Deferred reconciliation (passive-while-composing, §web fallback): a
     // prior mid-composition snapshot diverged the window unmappably, so
@@ -1247,9 +1250,13 @@ class ImeService extends ChangeNotifier
   /// still reports a live composition the snapshot is acknowledged one-way
   /// into the shadow (the model stays put: the window mapping is
   /// unreliable, and a push of any kind would corrupt the browser's marked
-  /// region). The snapshot that ends the composition (composing live→empty
-  /// — compositionend reflected) triggers the ONE authoritative
-  /// reconciliation push: the model is the authority, the composition is
+  /// region). The snapshot that ends the composition triggers the ONE
+  /// authoritative reconciliation push — composing live→empty
+  /// (compositionend reflected) OR the absorbed region REPLACED by one
+  /// with a different start (a new compositionstart re-latched the engine
+  /// base: the absorbed composition objectively ended; the captured Chrome
+  /// cascade's seq-42, where staying passive kept absorbing the user's new
+  /// typing into the void). The model is the authority, the composition is
   /// over, and pushing is safe again. [composing] is the caller's filtered
   /// region (sanitized + stale-latch-refused), so the liveness test and
   /// the shadow agree with the normal path's bookkeeping.
@@ -1283,7 +1290,29 @@ class ImeService extends ChangeNotifier
     // Any accepted snapshot closes the pre-push race window, exactly as on
     // the normal path.
     _previousShadowText = null;
-    if (composingLive) {
+    // The engine window being absorbed/discarded — captured before the
+    // shadow is overwritten: its composing range is the region the
+    // replacement test, the journal, and the in-flight refusal key on.
+    final absorbedComposing = _shadow?.composing ?? TextRange.empty;
+    final absorbedLive =
+        absorbedComposing.isValid && !absorbedComposing.isCollapsed;
+    // Passive-exit-on-region-replacement (the captured Chrome cascade's
+    // seq-42): a live incoming region whose START moved off the absorbed
+    // one is a NEW composition, not the absorbed one continuing — the
+    // engine's `composingBase` is fixed within one composition (set
+    // `??=`, reset only by compositionstart/end), so growth, candidate
+    // replacement, and in-composition deletion all keep the start and move
+    // only the end. The absorbed composition objectively ended; staying
+    // passive here absorbs the user's NEW typing into the void (the
+    // capture's lost d/だ). Reconcile exactly as live→empty: the absorbed
+    // keystrokes are the accepted loss the passiveReconcile payload
+    // records, and the new composition re-arrives against the fresh
+    // window through subsequent snapshots.
+    final regionReplaced =
+        composingLive &&
+        absorbedLive &&
+        composing.start != absorbedComposing.start;
+    if (composingLive && !regionReplaced) {
       _shadow = TextEditingValue(
         text: value.text,
         selection: value.selection,
@@ -1296,17 +1325,17 @@ class ImeService extends ChangeNotifier
       notifyListeners();
       return;
     }
-    // live→empty: the engine ended the composition. Arm the commit-key
-    // suppression first (WebKit's commit keydown may still be in flight
-    // behind this snapshot — the same ordering as the normal path), then
-    // reconcile: shadow acknowledged composing-free so the authoritative
-    // push is legal as a PLAIN push, never a terminate.
+    // live→empty (or region replacement): the engine ended the absorbed
+    // composition. Arm the commit-key suppression first (WebKit's commit
+    // keydown may still be in flight behind this snapshot — the same
+    // ordering as the normal path), then reconcile: shadow acknowledged
+    // composing-free so the authoritative push is legal as a PLAIN push,
+    // never a terminate. A region REPLACEMENT must not arm the one-shot:
+    // the replacing region proves the user's next composition is already
+    // in flight — intervening traffic the bare compositionend→Enter gap
+    // the arm models never has.
     _passiveDivergence = false;
-    // The engine window being discarded — captured before the shadow is
-    // overwritten: its composing range is the absorbed region the journal
-    // and the in-flight refusal below key on.
-    final absorbedComposing = _shadow?.composing ?? TextRange.empty;
-    if (_shadowComposing) _armCommitKeySuppression();
+    if (!regionReplaced && _shadowComposing) _armCommitKeySuppression();
     controller.imeSetComposing(null);
     _shadow = TextEditingValue(
       text: value.text,
@@ -1320,6 +1349,7 @@ class ImeService extends ChangeNotifier
     journal.record(
       'passiveReconcile',
       () => {
+        'trigger': regionReplaced ? 'regionReplaced' : 'compositionEnded',
         'discardedText': value.text,
         'discardedComposing': ImeJournal.describeRange(absorbedComposing),
         'pushedText': window.text,
@@ -1346,8 +1376,9 @@ class ImeService extends ChangeNotifier
   /// shadow to exactly the engine's value (the acknowledge half of the
   /// no-echo triple). [diff] and [composing] are the caller's — computed
   /// once in [updateEditingValue] so the previous-shadow drop and the
-  /// synthesis agree on them ([composing] is already sanitized AND
-  /// stale-latch-filtered). `delta` is null when the value matches the
+  /// synthesis agree on them ([composing] is already sanitized,
+  /// stale-latch-filtered, AND birth-filtered). `delta` is null when the
+  /// value matches the
   /// shadow in text AND selection AND composing; `deadKeyRewrite` reports
   /// whether the append-shaped dead-key compensation
   /// ([_rewriteDeadKeyCommit]) replaced the verbatim synthesis — the caller
@@ -1519,6 +1550,20 @@ class ImeService extends ChangeNotifier
   /// disarm is journaled (`staleComposingLatchDisarmed`, reason `fresh` /
   /// `corrective` / `differentRange`) so a live capture of the cascade
   /// shows the decision that opened it.
+  ///
+  /// Division of labor with the composing-birth invariant
+  /// ([_suppressComposingBirth], which runs AFTER this filter): the
+  /// invariant alone covers dead decorations on text-UNCHANGED snapshots
+  /// whenever this latch is disarmed — notably after blur/connectionClosed,
+  /// which clear the latch with the connection (the two captured Chrome
+  /// journals), so no reason-scoped latch arming is needed there. The
+  /// latch stays load-bearing for text-CHANGING snapshots behind a
+  /// rewrite/reconcile push (the late append-shaped Safari snapshot, the
+  /// plain-keystroke-under-dead-latch é→e cascade), which the invariant
+  /// deliberately does not cover; the same-range freshness test keeps its
+  /// `diff != null` conjunct so the push's own text-unchanged echo leaves
+  /// the latch ARMED for those, rather than disarming into shapes only the
+  /// latch can refuse.
   TextRange _filterStaleComposing(
     TextRange composing,
     TextDiff? diff,
@@ -1559,6 +1604,45 @@ class ImeService extends ChangeNotifier
     );
   }
 
+  /// The composing-birth invariant (§web fallback): composing state can
+  /// only be BORN from a text-CHANGING snapshot. Every genuine web
+  /// composition begins with a text change — compositionstart/update always
+  /// insert or replace (even a dead key inserts its `´`) — while the
+  /// engine's composition latch (composition_aware_mixin.dart:
+  /// `composingText` + `composingBase ??=`, reset ONLY by
+  /// compositionstart/compositionend DOM events) survives blur,
+  /// `connectionClosed`, re-attach, and complete window replacement, and
+  /// keeps decorating snapshots with the dead range. Two captured Chrome
+  /// journals pin the failure: compose → blur → return → a text-UNCHANGED
+  /// snapshot decorated with the dead range re-arms shadow composing (the
+  /// NonTextUpdate analogue), closing the hardware-key gate on a phantom
+  /// composition; and the same dead range carried onto a DIFFERENT block's
+  /// freshly pushed window after an external-edit push, cascading a
+  /// deferred Enter into `performAction` and the passive window into
+  /// absorbing the user's next real composition. So: with shadow composing
+  /// EMPTY, a live region on a no-diff snapshot is filtered to empty
+  /// (journaled `composingBirthSuppressed`). With shadow composing LIVE the
+  /// region passes untouched — composing-only updates (candidate
+  /// navigation, region moves, the live NonTextUpdate analogue) keep
+  /// working exactly as before.
+  ///
+  /// Runs AFTER [_filterStaleComposing], deliberately: the latch must see
+  /// the raw region first — birth-suppressing a latched dead-range echo
+  /// before the latch reads it would make the echo look like a corrective
+  /// (no live region ⇒ disarm), releasing the latch the dead-key rewrite /
+  /// passive reconcile armed against text-CHANGING late snapshots, which
+  /// this invariant deliberately does not cover.
+  TextRange _suppressComposingBirth(TextRange composing, TextDiff? diff) {
+    if (diff != null) return composing; // a real compositionstart/update
+    if (_shadowComposing) return composing; // live: composing-only updates
+    if (!composing.isValid || composing.isCollapsed) return composing;
+    journal.record(
+      'composingBirthSuppressed',
+      () => {'range': ImeJournal.describeRange(composing)},
+    );
+    return TextRange.empty;
+  }
+
   /// Engine-supplied composing ranges are sanitized before they enter the
   /// shadow: an invalid, inverted, or out-of-range region becomes
   /// [TextRange.empty] — treated as "no composition" rather than clamped,
@@ -1574,17 +1658,34 @@ class ImeService extends ChangeNotifier
     return composing;
   }
 
+  /// `newline` is the only action with behavior; every other
+  /// [TextInputAction] (done/go/search/…) is deliberately a journaled
+  /// no-op — none of them maps to an editor verb.
   @override
   void performAction(TextInputAction action) {
     journal.record('performAction', () => {'action': action.name});
     if (action != TextInputAction.newline) return;
     if (_shadow == null) return;
+    // While the engine owns a composition (shadow composing live OR the
+    // passive window armed) a newline action is never a commit: the
+    // captured Chrome cascade's seq-35 — a gate-deferred Enter reached the
+    // DOM textarea and came back as performAction(newline), and the model
+    // edit it triggered diverged the window mid-"composition", arming the
+    // passive absorption that swallowed the user's next real composition.
+    // A GENUINE composition-committing newline arrives as a \n in the
+    // engine's own delta/snapshot (G10); the bare action carries no text
+    // and editing the model on it mid-composition is exactly the
+    // write-while-the-browser-composes seam every web corruption traces to.
+    if (engineComposing) {
+      journal.record('performActionSuppressed', () => {'action': action.name});
+      return;
+    }
     controller.imeEdit(() {
       controller.imeInsertNewline();
       // No delta accompanies an action: re-serialize and reconcile — a
-      // split diverges the window (push; through the choke point if a
-      // composition is live, G10), a code block's literal \n also
-      // re-serializes divergent from the unchanged shadow.
+      // split diverges the window (push — never mid-composition: the
+      // guard above keeps this path composing-free), a code block's
+      // literal \n also re-serializes divergent from the unchanged shadow.
       _finishBatch(editedBlockId: null, editedRange: null);
     });
     _scheduleGeometryReport();

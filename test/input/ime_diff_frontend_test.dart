@@ -604,20 +604,42 @@ void main() {
     });
 
     test('a composing region set over pre-existing text (zero text change) '
-        'never arms the G3 latch: ending it does not convert', () {
+        'is birth-suppressed — it never arms, so ending it can never '
+        'convert (the G3 zero-edit guard, now structural)', () {
+      // Adjudication note: this fixture previously honored the
+      // text-unchanged decoration as a composition (asserting only that
+      // the G3 latch never armed from it). Under the composing-birth
+      // invariant a composition cannot be BORN from a no-text-change
+      // snapshot while shadow composing is empty: on web the only source
+      // of this shape is the engine's stale composition latch (the
+      // captured Chrome blur-return re-arm) — every genuine
+      // compositionstart/update changes text. The protection the test
+      // existed for (no spontaneous rule fire on a zero-edit "commit")
+      // holds a fortiori: the region never enters the model at all.
       build([para('a', '---')], selection: caret('a', 3));
       expect(shadow().text, '. ---');
 
-      // The IME marks the existing dashes — text unchanged, composing set.
+      // The engine decorates an unchanged window — text unchanged,
+      // composing set, shadow composing empty: the dead-latch shape.
       sendValue(
         '. ---',
         cursor: 5,
         composing: const TextRange(start: 2, end: 5),
       );
-      expect(controller.composing, isNotNull);
+      expect(
+        controller.composing,
+        isNull,
+        reason: 'composing is only born from a text-changing snapshot',
+      );
+      expect(shadow().composing, TextRange.empty);
+      final suppression = service.journal.events.lastWhere(
+        (e) => e.kind == 'composingBirthSuppressed',
+      );
+      expect(suppression.payload, {
+        'range': [2, 5],
+      });
 
-      // The composition ends with no edit: nothing to fire on (the
-      // zero-edit rule-firing guard, identical to the delta path).
+      // The decoration clearing again is a silent no-op.
       sendValue('. ---', cursor: 5);
 
       expect(controller.composing, isNull);
@@ -638,6 +660,169 @@ void main() {
 
       sendValue('. か', cursor: 3);
       expect(controller.composing, isNull, reason: 'commit clears it');
+    });
+  });
+
+  group('the composing-birth invariant (§web fallback: composing is only '
+      'born from a text-changing snapshot)', () {
+    test('a text-unchanged snapshot cannot arm composing from an empty '
+        'shadow (the Chrome blur-return stale decoration): filtered, '
+        'journaled, pure echo — the gate inputs stay open', () {
+      // The engine's composition latch (composition_aware_mixin) survives
+      // blur/connectionClosed/re-attach and decorates the re-pushed
+      // window's echo with the dead range; honoring it re-armed shadow
+      // composing and closed the hardware-key gate on a phantom
+      // composition (the captured journal). Every GENUINE composition's
+      // first snapshot changes text, so this shape can never be a birth.
+      build([para('a', 'に')], selection: caret('a', 1));
+      expect(shadow().text, '. に');
+      final pushesBefore = connection().pushed.length;
+
+      sendValue('. に', cursor: 3, composing: const TextRange(start: 2, end: 3));
+
+      expect(controller.composing, isNull);
+      expect(shadow().composing, TextRange.empty);
+      expect(service.engineComposing, isFalse, reason: 'the gate stays open');
+      expect(connection().pushed.length, pushesBefore, reason: 'no echo push');
+      final suppression = service.journal.events.lastWhere(
+        (e) => e.kind == 'composingBirthSuppressed',
+      );
+      expect(suppression.payload, {
+        'range': [2, 3],
+      });
+    });
+
+    test('a text-unchanged decorated snapshot that MOVES the selection '
+        'still applies the move — only the composing decoration is '
+        'filtered (the NonTextUpdate keeps its selection half)', () {
+      build([para('a', 'ab')], selection: caret('a', 2));
+
+      sendValue(
+        '. ab',
+        cursor: 3,
+        composing: const TextRange(start: 2, end: 4),
+      );
+
+      expect(controller.composing, isNull);
+      expect(controller.selection, caret('a', 1));
+      expect(shadow().selection, const TextSelection.collapsed(offset: 3));
+      expect(shadow().composing, TextRange.empty);
+    });
+
+    test('negative control: a text-CHANGING snapshot with a live region '
+        'arms composing normally — a real compositionstart/update '
+        '(the full-peer CJK shapes are unaffected)', () {
+      // The broader negative-control coverage is the existing CJK suite:
+      // 'TextEditingValue.composing maps to ComposingState', the web CJK
+      // trace (compose にほん → convert → commit), and the dead-key shapes.
+      build([para('a', '')], selection: caret('a', 0));
+
+      sendValue('. か', cursor: 3, composing: const TextRange(start: 2, end: 3));
+
+      expect(
+        controller.composing,
+        const ComposingState(blockId: 'a', range: TextRange(start: 0, end: 1)),
+      );
+      expect(
+        service.journal.events.any((e) => e.kind == 'composingBirthSuppressed'),
+        isFalse,
+      );
+    });
+
+    test('composing-only updates during a LIVE composition keep working '
+        '(candidate navigation / the NonTextUpdate analogue): the '
+        'invariant only gates BIRTH, never a live region move', () {
+      build([para('a', '')], selection: caret('a', 0));
+      sendValue('. に', cursor: 3, composing: const TextRange(start: 2, end: 3));
+      expect(controller.composing, isNotNull);
+
+      // The region moves with no text change — live, must pass.
+      sendValue('. に', cursor: 2, composing: const TextRange(start: 2, end: 3));
+
+      expect(controller.composing, isNotNull);
+      expect(shadow().composing, const TextRange(start: 2, end: 3));
+      expect(
+        service.journal.events.any((e) => e.kind == 'composingBirthSuppressed'),
+        isFalse,
+      );
+
+      // And the live→empty commit still clears it.
+      sendValue('. に', cursor: 3);
+      expect(controller.composing, isNull);
+    });
+  });
+
+  group('the performAction guard (engine-owned compositions)', () {
+    test("performAction(newline) is ignored while the shadow reports a "
+        'live composition: no model edit, no push, journaled — the '
+        'genuine commit newline arrives via snapshot (G10)', () {
+      build([para('a', 'ab')], selection: caret('a', 2));
+      sendValue(
+        '. abか',
+        cursor: 5,
+        composing: const TextRange(start: 4, end: 5),
+      );
+      expect(controller.composing, isNotNull);
+      final pushesBefore = connection().pushed.length;
+
+      service.performAction(TextInputAction.newline);
+
+      expect(controller.document.allBlocks, hasLength(1), reason: 'no split');
+      expect(controller.document.blockById('a')!.plainText, 'abか');
+      expect(controller.composing, isNotNull, reason: 'composition intact');
+      expect(connection().pushed.length, pushesBefore, reason: 'no push');
+      final suppression = service.journal.events.lastWhere(
+        (e) => e.kind == 'performActionSuppressed',
+      );
+      expect(suppression.payload, {'action': 'newline'});
+    });
+
+    test('performAction(newline) is ignored while the passive window is '
+        'armed (the captured deferred-Enter-reaching-the-DOM fallout: '
+        'seq 35 edited the model mid-divergence)', () {
+      build([para('a', 'one')], selection: caret('a', 3));
+      sendValue(
+        '. oneか',
+        cursor: 6,
+        composing: const TextRange(start: 5, end: 6),
+      );
+      // The unmappable structural shape arms the deferred reconciliation.
+      sendValue(
+        '. oneか\nx',
+        cursor: 8,
+        composing: const TextRange(start: 5, end: 8),
+      );
+      expect(service.engineComposing, isTrue);
+      final blocksBefore = [
+        for (final b in controller.document.allBlocks) b.plainText,
+      ];
+      final pushesBefore = connection().pushed.length;
+
+      service.performAction(TextInputAction.newline);
+
+      expect(
+        [for (final b in controller.document.allBlocks) b.plainText],
+        blocksBefore,
+        reason: 'no model edit while the engine owns the composition',
+      );
+      expect(connection().pushed.length, pushesBefore);
+      expect(
+        service.journal.events.any((e) => e.kind == 'performActionSuppressed'),
+        isTrue,
+      );
+    });
+
+    test('performAction(newline) with no composition still splits (the '
+        'guard is scoped to engine-owned compositions only)', () {
+      build([para('a', 'onetwo')], selection: caret('a', 3));
+
+      service.performAction(TextInputAction.newline);
+
+      expect(controller.document.allBlocks, hasLength(2));
+      expect(
+        service.journal.events.any((e) => e.kind == 'performActionSuppressed'),
+        isFalse,
+      );
     });
   });
 
@@ -1391,6 +1576,77 @@ void main() {
       );
     });
 
+    test('passive-exit-on-region-replacement (the captured Chrome cascade, '
+        'seq 42): the absorbed region replaced by one with a different '
+        'start reconciles like live→empty — the new composition proceeds '
+        'against the fresh window instead of being absorbed into the '
+        'void', () {
+      build([para('a', 'one')], selection: caret('a', 3));
+      sendValue(
+        '. oneか',
+        cursor: 6,
+        composing: const TextRange(start: 5, end: 6),
+      );
+      // Arm the deferred divergence (the unmappable structural shape).
+      sendValue(
+        '. oneか\nx',
+        cursor: 8,
+        composing: const TextRange(start: 5, end: 8),
+      );
+      expect(service.engineComposing, isTrue);
+      final pushesBefore = connection().pushed.length;
+
+      // The engine reports a NEW composition: a live region whose START
+      // moved off the absorbed one (composingBase is reset only by
+      // compositionstart — within one composition the start is fixed).
+      // The absorbed composition objectively ended; the old behavior kept
+      // absorbing one-way and the new composition's keystrokes vanished
+      // (the capture's lost d/だ).
+      sendValue(
+        '. oneか\nxd',
+        cursor: 9,
+        composing: const TextRange(start: 8, end: 9),
+      );
+
+      expect(service.engineComposing, isFalse, reason: 'passive resolved');
+      expect(controller.composing, isNull);
+      expect(connection().pushed.length, pushesBefore + 1);
+      expect(connection().pushed.last.composing, TextRange.empty);
+      final reconcile = service.journal.events.lastWhere(
+        (e) => e.kind == 'passiveReconcile',
+      );
+      expect(reconcile.payload['trigger'], 'regionReplaced');
+      expect(reconcile.payload['discardedText'], '. oneか\nxd');
+      expect(reconcile.payload['discardedComposing'], [5, 8]);
+      // The replacing region's already-absorbed keystroke is the accepted
+      // loss the payload records; the in-flight protection arms with the
+      // ABSORBED range, and the commit-key one-shot must NOT arm — the
+      // replacing region proves the user's next composition intervened.
+      expect(
+        service.debugStaleComposingLatch,
+        const TextRange(start: 5, end: 8),
+      );
+      expect(service.debugCommitKeySuppressionArmed, isFalse);
+
+      // The new composition re-arrives against the fresh window and
+      // composes normally: the user's input is not lost going forward.
+      final fresh = shadow().text;
+      sendValue(
+        '$freshだ',
+        cursor: fresh.length + 1,
+        composing: TextRange(start: fresh.length, end: fresh.length + 1),
+      );
+      expect(controller.composing, isNotNull);
+      expect(
+        controller.document.allBlocks.map((b) => b.plainText),
+        contains(contains('だ')),
+      );
+
+      // And it commits.
+      sendValue('$freshだ', cursor: fresh.length + 1);
+      expect(controller.composing, isNull);
+    });
+
     test('deliberate terminations survive the passive window: undo during '
         'deferred divergence still terminates and pushes', () {
       build([para('a', 'one')], selection: caret('a', 3));
@@ -1440,15 +1696,25 @@ void main() {
       expect(diff.deletedLength, 0);
       expect(diff.insertedText, 'x');
 
-      // A composing-only value records a null diff (no text change).
+      // A composing-decorated value with no text change records a null
+      // diff — and, with shadow composing empty, the decoration is
+      // birth-suppressed (the value then matches the shadow exactly: a
+      // pure echo, no synthesized delta).
       sendValue(
         '. hix',
         cursor: 5,
         composing: const TextRange(start: 2, end: 5),
       );
       expect(service.debugLastDiff, isNull);
+      expect(
+        service.journal.events.any((e) => e.kind == 'composingBirthSuppressed'),
+        isTrue,
+      );
 
-      // The synthesized batch feeds the same last-batch debug feed.
+      // A selection-only value synthesizes the NonTextUpdate analogue and
+      // feeds the same last-batch debug feed.
+      sendValue('. hix', cursor: 4);
+      expect(service.debugLastDiff, isNull);
       expect(service.debugLastDeltas, hasLength(1));
       expect(
         service.debugLastDeltas!.single,
