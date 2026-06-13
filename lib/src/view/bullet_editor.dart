@@ -381,9 +381,18 @@ class BulletEditorState extends State<BulletEditor>
     // the marked text on the first navigation keystroke (the live
     // Safari/Chrome symptoms: → mid-composition walks the caret through the
     // text and copies it to the start of the next line; ↑/↓ while cycling
-    // the candidate menu push the cursor through the document). Returning
-    // ignored lets the platform IME consume the key and report the
-    // resulting edit as a delta/snapshot.
+    // the candidate menu push the cursor through the document).
+    //
+    // Every key uses skipRemainingHandlers — NOT ignored. On web, ignored
+    // lets Flutter's focus tree consume the key before the browser IME
+    // sees it: FocusTraversalGroup intercepts Tab (and Shift+Tab),
+    // DirectionalFocusTraversalPolicyMixin intercepts arrows, ModalRoute
+    // intercepts Escape. Each calls preventDefault() on the native
+    // keydown, killing the IME's use of that key. skipRemainingHandlers
+    // stops focus-tree propagation WITHOUT preventDefault(), so every key
+    // reaches the platform IME. On desktop this is harmless: the platform
+    // result is "not handled" — same as ignored — and the key continues
+    // up the macOS responder chain to NSTextInputContext.
     //
     // The gate keys on the MODEL's composing state OR the service's
     // engine-side condition ([ImeService.engineComposing]): on the diff
@@ -396,27 +405,14 @@ class BulletEditorState extends State<BulletEditor>
       final key = event.logicalKey;
       if (key == LogicalKeyboardKey.enter ||
           key == LogicalKeyboardKey.numpadEnter ||
-          key == LogicalKeyboardKey.backspace) {
-        // A gate-deferred commit-capable key — Enter, Backspace: the
+          key == LogicalKeyboardKey.backspace ||
+          key == LogicalKeyboardKey.tab) {
+        // A gate-deferred commit-capable key — Enter, Backspace, Tab: the
         // editing keys an IME consumes to end a composition AND our
         // handlers act on destructively — is noted with the service: it
         // proves the keydown-first ordering (Chrome/Firefox — keyCode 229
         // while the composition is live), so the composing-clear this key
         // produces must not arm the commit-key suppression below.
-        return (
-          KeyEventResult.ignored,
-          'ignored',
-          true,
-          imeService.noteCommitKeyDeferred,
-        );
-      }
-      if (key == LogicalKeyboardKey.tab) {
-        // Tab uses skipRemainingHandlers instead of ignored: on web,
-        // Flutter's FocusTraversalGroup intercepts unhandled Tab and calls
-        // preventDefault() on the native keydown — killing the browser
-        // IME's candidate-menu navigation. skipRemainingHandlers stops
-        // focus-tree propagation (no traversal) WITHOUT preventDefault(),
-        // so the native Tab reaches the IME for candidate cycling.
         return (
           KeyEventResult.skipRemainingHandlers,
           'ignored',
@@ -424,7 +420,7 @@ class BulletEditorState extends State<BulletEditor>
           imeService.noteCommitKeyDeferred,
         );
       }
-      return (KeyEventResult.ignored, 'ignored', true, null);
+      return (KeyEventResult.skipRemainingHandlers, 'ignored', true, null);
     }
 
     switch (event.logicalKey) {
