@@ -14,6 +14,41 @@ import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
 import 'mouse_interactor.dart';
 
+typedef _KeyOutcome = ({
+  KeyEventResult result,
+  String handler,
+  bool deferred,
+  VoidCallback? action,
+});
+
+/// A handled key: stops propagation, runs [action] (the controller verb), and
+/// is recorded in the IME journal under [handler].
+_KeyOutcome _handled(String handler, [VoidCallback? action]) => (
+  result: KeyEventResult.handled,
+  handler: handler,
+  deferred: false,
+  action: action,
+);
+
+/// A key the composing gate defers to the platform IME: skipRemainingHandlers
+/// (NOT ignored — see the gate comment) so it reaches the IME without
+/// preventDefault, journaled as deferred. [action] is an optional note hook.
+_KeyOutcome _deferred([VoidCallback? action]) => (
+  result: KeyEventResult.skipRemainingHandlers,
+  handler: 'ignored',
+  deferred: true,
+  action: action,
+);
+
+/// An unhandled key. [action] runs a side effect (e.g. spending a one-shot)
+/// while leaving the event unhandled.
+_KeyOutcome _ignored([VoidCallback? action]) => (
+  result: KeyEventResult.ignored,
+  handler: 'ignored',
+  deferred: false,
+  action: action,
+);
+
 /// The v3 editor root widget: lazy render through the component registry,
 /// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
 /// painting, the IME path (days 5–8 — character input arrives through
@@ -500,16 +535,9 @@ class BulletEditorState extends State<BulletEditor>
 
   /// The key dispatch decision, split from [_onKeyEvent] so the journal can
   /// record the outcome alongside the event before the verb runs.
-  ({KeyEventResult result, String handler, bool deferred, VoidCallback? action})
-  _classifyKeyEvent(KeyEvent event) {
-    const ignored = (
-      result: KeyEventResult.ignored,
-      handler: 'ignored',
-      deferred: false,
-      action: null,
-    );
-    if (widget.readOnly) return ignored;
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return ignored;
+  _KeyOutcome _classifyKeyEvent(KeyEvent event) {
+    if (widget.readOnly) return _ignored();
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return _ignored();
 
     final controller = widget.controller;
     final pressed = HardwareKeyboard.instance;
@@ -525,87 +553,58 @@ class BulletEditorState extends State<BulletEditor>
       // armed.
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
         return pressed.isShiftPressed
-            ? (
-                result: KeyEventResult.handled,
-                handler: 'redo',
-                deferred: false,
-                action: controller.redo,
-              )
-            : (
-                result: KeyEventResult.handled,
-                handler: 'undo',
-                deferred: false,
-                action: controller.undo,
-              );
+            ? _handled('redo', controller.redo)
+            : _handled('undo', controller.undo);
       }
       // Every OTHER shortcut is gated too — a Cmd+arrow during Japanese
       // hardware-keyboard conversion must reach the IME (it navigates clause
       // segments / candidates), not fire a movement that external-edit
       // terminates the composition. The whitelist above is the only exception.
       if (controller.composing != null || imeService.engineComposing) {
-        return (
-          result: KeyEventResult.skipRemainingHandlers,
-          handler: 'ignored',
-          deferred: true,
-          action: null,
-        );
+        return _deferred();
       }
       // Cmd/Ctrl + arrows: line-boundary (←/→) and document-boundary (↑/↓)
       // movement, Shift-extendable. Part of the day-10 key MATRIX.
       final extend = pressed.isShiftPressed;
       switch (event.logicalKey) {
         case LogicalKeyboardKey.arrowLeft:
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveLineStart',
-            deferred: false,
-            action: () {
-              final sel = controller.selection;
-              if (sel != null) {
-                _moveTo(
-                  lineBoundaryTarget(registry, sel, false),
-                  extend: extend,
-                );
-              }
-            },
-          );
+          return _handled('moveLineStart', () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                lineBoundaryTarget(registry, sel, false),
+                extend: extend,
+              );
+            }
+          });
         case LogicalKeyboardKey.arrowRight:
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveLineEnd',
-            deferred: false,
-            action: () {
-              final sel = controller.selection;
-              if (sel != null) {
-                _moveTo(
-                  lineBoundaryTarget(registry, sel, true),
-                  extend: extend,
-                );
-              }
-            },
-          );
+          return _handled('moveLineEnd', () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                lineBoundaryTarget(registry, sel, true),
+                extend: extend,
+              );
+            }
+          });
         case LogicalKeyboardKey.arrowUp:
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveDocStart',
-            deferred: false,
-            action: () => _moveTo(
+          return _handled(
+            'moveDocStart',
+            () => _moveTo(
               documentBoundaryTarget(controller.document, false),
               extend: extend,
             ),
           );
         case LogicalKeyboardKey.arrowDown:
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveDocEnd',
-            deferred: false,
-            action: () => _moveTo(
+          return _handled(
+            'moveDocEnd',
+            () => _moveTo(
               documentBoundaryTarget(controller.document, true),
               extend: extend,
             ),
           );
       }
-      return ignored;
+      return _ignored();
     }
 
     // The full composing gate (architecture §hardware keyboard: "the
@@ -658,44 +657,29 @@ class BulletEditorState extends State<BulletEditor>
         // proves the keydown-first ordering (Chrome/Firefox — keyCode 229
         // while the composition is live), so the composing-clear this key
         // produces must not arm the commit-key suppression below.
-        return (
-          result: KeyEventResult.skipRemainingHandlers,
-          handler: 'ignored',
-          deferred: true,
-          action: imeService.noteCommitKeyDeferred,
-        );
+        return _deferred(imeService.noteCommitKeyDeferred);
       }
-      return (
-        result: KeyEventResult.skipRemainingHandlers,
-        handler: 'ignored',
-        deferred: true,
-        action: null,
-      );
+      return _deferred();
+    }
+
+    // Safari fires compositionend BEFORE the keydown of the key that ended the
+    // composition, so the commit/cancel key (Enter/Backspace/Tab) arrives past
+    // the gate above with composing already null. The service's one-shot
+    // identifies it: swallow it once, handled, with no effect; the next press is
+    // genuine. (Escape spends the same one-shot in its own case below; arrows
+    // deliberately never consult it.)
+    final committedKey = event.logicalKey;
+    if ((committedKey == LogicalKeyboardKey.enter ||
+            committedKey == LogicalKeyboardKey.numpadEnter ||
+            committedKey == LogicalKeyboardKey.backspace ||
+            committedKey == LogicalKeyboardKey.tab) &&
+        imeService.consumeCommitKeySuppression()) {
+      return _handled('commitKeySuppressed');
     }
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
-        // Safari fires compositionend BEFORE the keydown of the key that
-        // ended the composition, so the Enter that COMMITS a conversion
-        // arrives here with `controller.composing` already null — past the
-        // gate above. The service's one-shot suppression (ProseMirror's
-        // `compositionEndedAt` precedent) identifies it: swallow it
-        // handled, no newline; the next Enter is genuine (the consult
-        // disarmed it).
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'insertNewline',
-          deferred: false,
-          action: controller.insertNewline,
-        );
+        return _handled('insertNewline', controller.insertNewline);
       case LogicalKeyboardKey.escape:
         // ProseMirror's other suppressed key: an Escape arriving inside
         // the window is the keydown of the CANCEL that ended the
@@ -703,59 +687,13 @@ class BulletEditorState extends State<BulletEditor>
         // and it must spend the one-shot so the user's next Enter splits.
         // Nothing here handles Escape, so it stays ignored either way —
         // only the arm is consumed (the consult journals the decision).
-        return (
-          result: KeyEventResult.ignored,
-          handler: 'ignored',
-          deferred: false,
-          action: imeService.consumeCommitKeySuppression,
-        );
+        return _ignored(imeService.consumeCommitKeySuppression);
       case LogicalKeyboardKey.backspace:
-        // WebKit's ordering is not Enter-specific — it applies to EVERY
-        // key the IME consumes to end a composition. The captured Safari
-        // session: a lone composed `n` canceled with one Backspace
-        // reflects the composing-clear snapshot FIRST (the n already
-        // deleted), then the trailing Backspace keydown lands here with
-        // the gate open and would eat a genuine character (the block's
-        // period). Same consult, same one-shot.
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'backspace',
-          deferred: false,
-          action: controller.backspace,
-        );
+        return _handled('backspace', controller.backspace);
       case LogicalKeyboardKey.tab:
-        // Tab cycles candidates in several IMEs and can end a composition
-        // — the same exposure as Backspace: an unsuppressed trailing Tab
-        // would indent/outdent the block the composition just ended in.
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
         return pressed.isShiftPressed
-            ? (
-                result: KeyEventResult.handled,
-                handler: 'outdent',
-                deferred: false,
-                action: controller.outdent,
-              )
-            : (
-                result: KeyEventResult.handled,
-                handler: 'indent',
-                deferred: false,
-                action: controller.indent,
-              );
+            ? _handled('outdent', controller.outdent)
+            : _handled('indent', controller.indent);
       // Arrows (and the unhandled Home/End) deliberately do NOT consult
       // the one-shot: a trailing post-compositionend arrow only moves the
       // caret — nothing destructive happens — and the selection change it
@@ -764,54 +702,42 @@ class BulletEditorState extends State<BulletEditor>
       // (Enter/Backspace/Tab above; Escape spends the arm without
       // handling).
       case LogicalKeyboardKey.arrowLeft:
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretBack',
-          deferred: false,
-          action: () => controller.moveCaret(-1, extend: pressed.isShiftPressed),
+        return _handled(
+          'moveCaretBack',
+          () => controller.moveCaret(-1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowRight:
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretForward',
-          deferred: false,
-          action: () => controller.moveCaret(1, extend: pressed.isShiftPressed),
+        return _handled(
+          'moveCaretForward',
+          () => controller.moveCaret(1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowUp:
         // Alt+↑ moves the block (MoveBlock); a plain ↑ moves the caret up a
         // line (geometry-x affinity), Shift-extendable.
         if (pressed.isAltPressed) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveBlockUp',
-            deferred: false,
-            action: () => controller.moveBlock(MoveDirection.up),
+          return _handled(
+            'moveBlockUp',
+            () => controller.moveBlock(MoveDirection.up),
           );
         }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretUp',
-          deferred: false,
-          action: () => _moveVertically(-1, extend: pressed.isShiftPressed),
+        return _handled(
+          'moveCaretUp',
+          () => _moveVertically(-1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowDown:
         if (pressed.isAltPressed) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'moveBlockDown',
-            deferred: false,
-            action: () => controller.moveBlock(MoveDirection.down),
+          return _handled(
+            'moveBlockDown',
+            () => controller.moveBlock(MoveDirection.down),
           );
         }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretDown',
-          deferred: false,
-          action: () => _moveVertically(1, extend: pressed.isShiftPressed),
+        return _handled(
+          'moveCaretDown',
+          () => _moveVertically(1, extend: pressed.isShiftPressed),
         );
     }
 
-    return ignored;
+    return _ignored();
   }
 
   @override
