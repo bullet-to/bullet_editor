@@ -84,7 +84,10 @@ mixin BlockGeometryMixin<T extends StatefulWidget>
     if (paragraph == null) return null;
     final position = TextPosition(offset: offset);
     final caretOffset = paragraph.getOffsetForCaret(position, Rect.zero);
-    final height = paragraph.getFullHeightForCaret(position);
+    // getFullHeightForCaret can return a shorter height after trailing
+    // whitespace (iOS space-glyph metrics); clamp to the line height.
+    final height = paragraph.getFullHeightForCaret(position)
+        .clamp(paragraph.preferredLineHeight, double.infinity);
     return caretOffset & Size(1, height);
   }
 

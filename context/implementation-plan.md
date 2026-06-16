@@ -169,6 +169,21 @@ Stress-test the markdown codec to guarantee lossless round-trips across all bloc
 
 ---
 
+## Phase 13: Right-to-Left & BiDi
+
+Per-block RTL support for Arabic, Hebrew, and mixed-direction content.
+
+- **Text direction detection:** Per-block automatic detection from content (first strong directional character), with optional explicit override via block metadata
+- **RTL rendering:** Set `TextDirection.rtl` on `RichText` widget, right-align RTL blocks, mirror gutter/prefix for RTL list items
+- **Bidi mixing:** Lines containing both RTL and LTR text (e.g. Arabic with English words) — Flutter's `RichText` handles the Unicode Bidi Algorithm; ensure caret positioning and selection work correctly at direction boundaries
+- **Selection & caret:** Verify caret movement (arrow keys), tap-to-position, and drag selection behave correctly in RTL blocks
+- **Input rules:** Ensure `# ` / `- ` / `> ` prefixes work when typed RTL (the prefix is LTR punctuation at the start of an RTL line)
+- **Toolbar / block type picker:** Block alignment indicator if applicable
+
+**Key question answered:** Does per-block direction detection produce correct results without user intervention, and does selection/caret positioning hold up at bidi boundaries?
+
+---
+
 ## Future Phases (unordered)
 
 - WidgetSpan blocks (images, tables, embeds)

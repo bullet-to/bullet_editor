@@ -912,6 +912,7 @@ void main() {
       build([para('a', 'onetwo')], selection: caret('a', 3));
 
       service.performAction(TextInputAction.newline);
+      service.flushPendingNewline();
 
       expect(controller.document.allBlocks, hasLength(2));
       expect(

@@ -597,6 +597,15 @@ class ImeService extends ChangeNotifier
   /// push IS the reconciliation. Never armed on the delta frontend.
   bool _passiveDivergence = false;
 
+  /// iOS sends `performAction(newline)` BEFORE the delta batch that carries
+  /// the actual text changes. Keyboards that commit on Enter (Hindi
+  /// transliteration: "namaste" → "नमस्ते") send the transliteration delta
+  /// AFTER the action — firing `imeInsertNewline()` eagerly in performAction
+  /// would reset the shadow and stale-drop the transliteration. Instead,
+  /// performAction sets this flag and defers to the delta batch; if no batch
+  /// arrives by the end of the frame, a post-frame callback fires the newline.
+  bool _pendingNewlineAction = false;
+
   /// The one-shot commit-key suppression's arming timestamp
   /// ([_monotonicNowMs] domain; null = disarmed) — the WebKit
   /// keydown-after-compositionend compensation. Safari fires compositionend
@@ -751,6 +760,7 @@ class ImeService extends ChangeNotifier
     _quarantine = null;
     _rulesLatch = null;
     _passiveDivergence = false;
+    _pendingNewlineAction = false;
     _commitKeySuppressionArmedAtMs = null;
     _commitKeyDeferredAtMs = null;
     controller.imeClearComposing();
@@ -1067,6 +1077,13 @@ class ImeService extends ChangeNotifier
     debugLastDeltas = textEditingDeltas;
     if (_connection == null || _shadow == null) return;
     controller.imeEdit(() => _processBatch(textEditingDeltas));
+    // Hindi transliteration (and similar commit-on-Enter keyboards) sends
+    // performAction(newline) BEFORE the delta batch that commits the
+    // transliteration. The batch above processed the transliteration with
+    // the correct (pre-split) shadow. If the flag is still live (the batch
+    // had no \n), fire the deferred newline now — the transliteration has
+    // landed and the split goes in the right place.
+    if (_pendingNewlineAction) _flushPendingNewline();
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1348,6 +1365,7 @@ class ImeService extends ChangeNotifier
       _staleComposingLatch = composing;
     }
     _restoreSentinelSuppressedSelection(sentinelSelection);
+    if (_pendingNewlineAction) _flushPendingNewline();
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1814,12 +1832,21 @@ class ImeService extends ChangeNotifier
       journal.record('performActionSuppressed', () => {'action': action.name});
       return;
     }
+    _pendingNewlineAction = true;
+  }
+
+  /// Fires the deferred newline from [performAction]. Called at the end of
+  /// each delta/snapshot batch so the split lands after the batch's text
+  /// changes (Hindi transliteration commit-on-Enter). Also exposed for
+  /// tests that call [performAction] without a following delta batch.
+  @visibleForTesting
+  void flushPendingNewline() => _flushPendingNewline();
+
+  void _flushPendingNewline() {
+    if (!_pendingNewlineAction) return;
+    _pendingNewlineAction = false;
     controller.imeEdit(() {
       controller.imeInsertNewline();
-      // No delta accompanies an action: re-serialize and reconcile — a
-      // split diverges the window (push — never mid-composition: the
-      // guard above keeps this path composing-free), a code block's
-      // literal \n also re-serializes divergent from the unchanged shadow.
       _finishBatch(editedBlockId: null, editedRange: null);
     });
     _scheduleGeometryReport();
@@ -1962,6 +1989,20 @@ class ImeService extends ChangeNotifier
       _quarantine = null;
     }
 
+    // iOS Korean composing (no composing region reported) sends
+    // delete-reinsert batches that overlap the sentinel: nonText →
+    // delete[1,3] → insert " " → insert "하". Per-delta processing fails
+    // because the G1 decomposition diverges the window from the shadow
+    // (the delta removes the sentinel space; our model always preserves
+    // it), killing subsequent deltas as stale. Fix: compute the batch's
+    // net text effect as a single diff against the pre-batch shadow and
+    // process that one synthetic delta — identical to how the diff
+    // frontend handles every snapshot.
+    if (_hasSentinelOverlappingDeletion(deltas)) {
+      _processSentinelOverlapBatch(deltas, quarantine);
+      return;
+    }
+
     var diverged = false;
     String? editedBlockId;
     TextRange? editedRange;
@@ -2034,6 +2075,81 @@ class ImeService extends ChangeNotifier
     }
 
     _finishBatch(editedBlockId: editedBlockId, editedRange: editedRange);
+  }
+
+  /// Whether any deletion or replacement in [deltas] overlaps the sentinel
+  /// boundary — i.e. starts before `sentinel.length` and ends beyond it.
+  /// Pure-sentinel deletions (`end <= sentinel.length`) are genuine
+  /// backspace-at-block-start and handled correctly by the G1 path.
+  static bool _hasSentinelOverlappingDeletion(List<TextEditingDelta> deltas) {
+    const len = ImeWindow.sentinel.length;
+    for (final delta in deltas) {
+      TextRange? range;
+      if (delta is TextEditingDeltaDeletion) {
+        range = delta.deletedRange;
+      } else if (delta is TextEditingDeltaReplacement) {
+        range = delta.replacedRange;
+      }
+      if (range != null && range.start < len && range.end > len) return true;
+    }
+    return false;
+  }
+
+  /// Reprocesses [deltas] whose per-delta application would fail because a
+  /// deletion overlaps the sentinel. Walks the raw delta chain to compute
+  /// the engine's final state, diffs it against the pre-batch shadow, and
+  /// processes the net effect as a single synthetic delta — the same
+  /// strategy the diff frontend applies to every snapshot.
+  void _processSentinelOverlapBatch(
+    List<TextEditingDelta> deltas,
+    ({String text, int offset})? quarantine,
+  ) {
+    final initialShadow = _shadow!;
+    var current = initialShadow;
+    for (final delta in deltas) {
+      if (delta.oldText != current.text) {
+        _recoverAuthoritative('staleDelta');
+        return;
+      }
+      current = delta.apply(current);
+    }
+
+    final diff = diffTexts(
+      initialShadow.text,
+      current.text,
+      cursorOffset:
+          current.selection.isValid ? current.selection.extentOffset : null,
+    );
+
+    final composing = _sanitizeComposing(current.composing, current.text);
+
+    // Echo quarantine: check against the NET insertion, not individual deltas.
+    if (quarantine != null && diff != null && diff.isInsert) {
+      if (diff.insertedText == quarantine.text &&
+          diff.start == quarantine.offset) {
+        _recoverAuthoritative('echoQuarantine');
+        return;
+      }
+    }
+
+    final synth = _synthesizeDelta(
+      initialShadow,
+      current,
+      diff: diff,
+      composing: composing,
+    );
+
+    if (synth.delta != null) {
+      final edited = _applyDelta(synth.delta!, diverged: false);
+      _shadow = current;
+      _finishBatch(
+        editedBlockId: edited?.blockId,
+        editedRange: edited?.range,
+      );
+    } else {
+      _shadow = current;
+      _finishBatch(editedBlockId: null, editedRange: null);
+    }
   }
 
   /// Batch-end reconciliation: re-serialize the window and compare to the
@@ -2503,6 +2619,7 @@ class ImeService extends ChangeNotifier
         edited = _editedFromCaret(part);
       }
       if (i < parts.length - 1) {
+        _pendingNewlineAction = false;
         controller.imeInsertNewline();
         edited = null;
       }

@@ -10,10 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 /// The v3 dev harness (v3-build-strategy.md §dev harness): editor on the
-/// left, tabbed debug panes on the right.
-///
-/// Panes 1–3 (document tree, selection, IME window) are live; panes 4–6
-/// (change stream, perf, record) land with the subsystems they inspect.
+/// left, tabbed debug panes on the right on wide screens. On narrow screens
+/// (mobile), the inspector and a vanilla TextField comparison are separate
+/// bottom-nav tabs so the editor gets full width.
 class InspectorScreen extends StatefulWidget {
   const InspectorScreen({super.key});
 
@@ -21,7 +20,10 @@ class InspectorScreen extends StatefulWidget {
   State<InspectorScreen> createState() => _InspectorScreenState();
 }
 
-class _InspectorScreenState extends State<InspectorScreen> {
+class _InspectorScreenState extends State<InspectorScreen>
+    with SingleTickerProviderStateMixin {
+  static const _wideBreakpoint = 700.0;
+
   late final EditorController _controller = EditorController(
     document: buildGauntletDocument(),
     schema: EditorSchema.standard(),
@@ -29,15 +31,18 @@ class _InspectorScreenState extends State<InspectorScreen> {
   final GlobalKey<BulletEditorState> _editorKey = GlobalKey();
   InlineEntitySnapshot? _lastLinkTap;
   String? _lastLinkTapBlockId;
+  late final TabController _narrowTabController;
 
   @override
   void initState() {
     super.initState();
+    _narrowTabController = TabController(length: 4, vsync: this);
     _controller.addListener(_onControllerChanged);
   }
 
   @override
   void dispose() {
+    _narrowTabController.dispose();
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
@@ -47,12 +52,72 @@ class _InspectorScreenState extends State<InspectorScreen> {
 
   void _reloadFixture() => _controller.setDocument(buildGauntletDocument());
 
+  Widget _buildEditor() => Padding(
+    padding: const EdgeInsets.all(8),
+    child: BulletEditor(
+      key: _editorKey,
+      controller: _controller,
+      autofocus: true,
+      textStyle: Theme.of(context).textTheme.bodyLarge,
+      padding: const EdgeInsets.all(16),
+      onLinkTap: (blockId, offset, entity) {
+        setState(() {
+          _lastLinkTap = entity;
+          _lastLinkTapBlockId = blockId;
+        });
+      },
+    ),
+  );
+
+  Widget _buildInspector() => SelectionArea(
+    child: _InspectorPanes(
+      controller: _controller,
+      editorKey: _editorKey,
+      lastLinkTap: _lastLinkTap,
+      lastLinkTapBlockId: _lastLinkTapBlockId,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
+    final narrow = MediaQuery.of(context).size.width < _wideBreakpoint;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('bullet_editor inspector — v3 day 8'),
+        title: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: const Text('bullet_editor inspector'),
+        ),
         actions: [
+          if (narrow) ...[
+            IconButton(
+              tooltip: 'Clear IME journal',
+              icon: const Icon(Icons.delete_sweep),
+              onPressed: () {
+                final ime = _editorKey.currentState?.imeService;
+                if (ime == null) return;
+                ime.journal.clear();
+              },
+            ),
+            IconButton(
+              tooltip: 'Copy IME journal JSON',
+              icon: const Icon(Icons.copy),
+              onPressed: () {
+                final ime = _editorKey.currentState?.imeService;
+                if (ime == null) return;
+                final dump = ime.journal.dump();
+                if (dump.isEmpty) return;
+                Clipboard.setData(ClipboardData(text: dump));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Copied ${ime.journal.events.length} journal events',
+                    ),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+          ],
           IconButton(
             tooltip: 'Undo',
             icon: const Icon(Icons.undo),
@@ -64,51 +129,48 @@ class _InspectorScreenState extends State<InspectorScreen> {
             onPressed: _controller.canRedo ? _controller.redo : null,
           ),
           IconButton(
+            tooltip: 'Clear document',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: () => _controller.setDocument(
+              Document.empty(ParagraphKeys.type),
+            ),
+          ),
+          IconButton(
             tooltip: 'Reload gauntlet fixture',
             icon: const Icon(Icons.refresh),
             onPressed: _reloadFixture,
           ),
         ],
+        bottom: narrow
+            ? TabBar(
+                controller: _narrowTabController,
+                tabs: const [
+                  Tab(text: 'Editor'),
+                  Tab(text: 'Inspector'),
+                  Tab(text: 'Journal'),
+                  Tab(text: 'TextField'),
+                ],
+              )
+            : null,
       ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            flex: 3,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: BulletEditor(
-                key: _editorKey,
-                controller: _controller,
-                autofocus: true,
-                textStyle: Theme.of(context).textTheme.bodyLarge,
-                padding: const EdgeInsets.all(16),
-                onLinkTap: (blockId, offset, entity) {
-                  setState(() {
-                    _lastLinkTap = entity;
-                    _lastLinkTapBlockId = blockId;
-                  });
-                },
-              ),
+      body: narrow
+          ? TabBarView(
+              controller: _narrowTabController,
+              children: [
+                _buildEditor(),
+                _buildInspector(),
+                _ImeJournalPane(editorKey: _editorKey),
+                const _VanillaTextFieldPane(),
+              ],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 3, child: _buildEditor()),
+                const VerticalDivider(width: 1),
+                Expanded(flex: 2, child: _buildInspector()),
+              ],
             ),
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            flex: 2,
-            // SelectionArea: every pane's text is selectable/copyable —
-            // shadow buffers, journal lines, delta dumps paste straight
-            // into a bug report.
-            child: SelectionArea(
-              child: _InspectorPanes(
-                controller: _controller,
-                editorKey: _editorKey,
-                lastLinkTap: _lastLinkTap,
-                lastLinkTapBlockId: _lastLinkTapBlockId,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -526,6 +588,43 @@ class _LazinessFooterState extends State<_LazinessFooter> {
       child: Text(
         'laid out: $laidOut / $total blocks (lazy if ≪ total)',
         style: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
+}
+
+/// A vanilla [TextField] for A/B comparison during the day-9 gate: type the
+/// same sequence here and in the editor to confirm the editor matches stock
+/// Flutter IME behavior.
+class _VanillaTextFieldPane extends StatelessWidget {
+  const _VanillaTextFieldPane();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Vanilla TextField (comparison)',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Type here with the same keyboard / language to compare '
+            'IME behavior against the editor.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          const TextField(
+            maxLines: null,
+            decoration: InputDecoration(
+              border: OutlineInputBorder(),
+              hintText: 'Type here...',
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -63,4 +63,4 @@ Decisions 2 + 5 + 8 + 12 (three platforms, lazy rendering, spellcheck, native me
 - Cross-cell selection behavior when tables eventually land (appflowy punts — whole-table selection for ranges; accept the same?)
 - Galleries / inline images: designed-for-deferred or re-evaluate after launch?
 - Scribble / stylus handwriting (iPad): explicitly out, or designed-for?
-- Right-to-left text and BiDi: launch bar or debt?
+- ~~Right-to-left text and BiDi: launch bar or debt?~~ **Decided: launch.** Per-block text direction detection + RTL alignment + bidi mixing. IME input already works for Arabic/Hebrew (direct insertion, no composition); this is rendering/layout only.

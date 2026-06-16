@@ -351,9 +351,15 @@ class EditorController extends ChangeNotifier {
       _undoManager.clear();
       _clearComposingState();
       _document = document;
-      _selection = selection == null
-          ? null
-          : _normalizeSelection(selection, document);
+      if (selection != null || _selection != null) {
+        final sel = selection ??
+            DocSelection.collapsed(
+              DocPosition(document.allBlocks.first.id, 0),
+            );
+        _selection = _normalizeSelection(sel, document);
+      } else {
+        _selection = null;
+      }
     });
   }
 

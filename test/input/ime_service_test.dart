@@ -319,6 +319,7 @@ void main() {
         build([para('a', 'onetwo')], selection: caret('a', 3));
 
         service.performAction(TextInputAction.newline);
+        service.flushPendingNewline();
 
         expect(controller.document.allBlocks, hasLength(2));
         expect(connection().pushed.last.text, '. two');
@@ -356,6 +357,7 @@ void main() {
         build([typed('l', ListItemKeys.type, '')], selection: caret('l', 0));
 
         service.performAction(TextInputAction.newline);
+        service.flushPendingNewline();
 
         expect(
           controller.document.blockById('l')!.blockType,
@@ -681,14 +683,16 @@ void main() {
       });
 
       test('case 3: the action arrives first; the late replacement delta '
-          'references the pre-split buffer and the guard drops it', () {
+          'lands before the deferred split — autocorrect preserved', () {
         build([para('a', 'teh')], selection: caret('a', 3));
 
+        // performAction defers the split so the delta batch can land first.
         service.performAction(TextInputAction.newline);
-        expect(controller.document.allBlocks, hasLength(2));
+        expect(controller.document.allBlocks, hasLength(1),
+            reason: 'split deferred');
 
-        // The autocorrect replacement lands after the split: its oldText is
-        // the pre-split buffer, not the freshly pushed window.
+        // The autocorrect replacement now processes against the correct
+        // (pre-split) shadow. The post-batch flush fires the deferred split.
         sendDeltas([
           const TextEditingDeltaReplacement(
             oldText: '. teh',
@@ -699,10 +703,8 @@ void main() {
           ),
         ]);
 
-        // The correction is lost; the document is never corrupted.
-        expect(controller.document.allBlocks[0].plainText, 'teh');
+        expect(controller.document.allBlocks[0].plainText, 'the');
         expect(controller.document.allBlocks, hasLength(2));
-        expect(service.debugLastDropReason, 'staleDelta');
         expect(connection().pushed.last.text, '. ');
       });
     });
@@ -1453,6 +1455,218 @@ void main() {
 
         expect(controller.document.allBlocks, hasLength(1));
         expect(controller.document.allBlocks.single.plainText, 'z');
+      });
+    });
+
+    group('iOS Korean composing (sentinel-overlapping delete-reinsert)', () {
+      test('ㅎ + ㅏ = 하: the delete-reinsert batch that overlaps the sentinel '
+          'is reprocessed as a single replacement', () {
+        build([para('a', '')], selection: caret('a', 0));
+
+        // User types ㅎ (initial consonant). No composing reported by iOS.
+        sendInsertion('ㅎ');
+        expect(controller.document.blockById('a')!.plainText, 'ㅎ');
+        expect(shadow().text, '. ㅎ');
+
+        // User types ㅏ (vowel). iOS sends a 4-delta delete-reinsert batch
+        // that overlaps the sentinel:
+        //   nonText sel [1,3] → delete [1,3] → insert " " at 1 → insert "하" at 2
+        final old = shadow();
+        sendDeltas([
+          TextEditingDeltaNonTextUpdate(
+            oldText: old.text,
+            selection: const TextSelection(baseOffset: 1, extentOffset: 3),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaDeletion(
+            oldText: old.text,
+            deletedRange: const TextRange(start: 1, end: 3),
+            selection: const TextSelection.collapsed(offset: 1),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '.',
+            textInserted: ' ',
+            insertionOffset: 1,
+            selection: const TextSelection.collapsed(offset: 2),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: '하',
+            insertionOffset: 2,
+            selection: const TextSelection.collapsed(offset: 3),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        expect(controller.document.blockById('a')!.plainText, '하');
+        expect(shadow().text, '. 하');
+      });
+
+      test('the sentinel-overlap path works for multi-character Korean '
+          'compositions (ㅎ → 하 → 한)', () {
+        build([para('a', '')], selection: caret('a', 0));
+        sendInsertion('ㅎ');
+        expect(controller.document.blockById('a')!.plainText, 'ㅎ');
+
+        // ㅎ → 하
+        final s1 = shadow();
+        sendDeltas([
+          TextEditingDeltaNonTextUpdate(
+            oldText: s1.text,
+            selection: const TextSelection(baseOffset: 1, extentOffset: 3),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaDeletion(
+            oldText: s1.text,
+            deletedRange: const TextRange(start: 1, end: 3),
+            selection: const TextSelection.collapsed(offset: 1),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '.',
+            textInserted: ' ',
+            insertionOffset: 1,
+            selection: const TextSelection.collapsed(offset: 2),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: '하',
+            insertionOffset: 2,
+            selection: const TextSelection.collapsed(offset: 3),
+            composing: TextRange.empty,
+          ),
+        ]);
+        expect(controller.document.blockById('a')!.plainText, '하');
+
+        // 하 → 한
+        final s2 = shadow();
+        sendDeltas([
+          TextEditingDeltaNonTextUpdate(
+            oldText: s2.text,
+            selection: const TextSelection(baseOffset: 1, extentOffset: 3),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaDeletion(
+            oldText: s2.text,
+            deletedRange: const TextRange(start: 1, end: 3),
+            selection: const TextSelection.collapsed(offset: 1),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '.',
+            textInserted: ' ',
+            insertionOffset: 1,
+            selection: const TextSelection.collapsed(offset: 2),
+            composing: TextRange.empty,
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: '한',
+            insertionOffset: 2,
+            selection: const TextSelection.collapsed(offset: 3),
+            composing: TextRange.empty,
+          ),
+        ]);
+        expect(controller.document.blockById('a')!.plainText, '한');
+        expect(shadow().text, '. 한');
+      });
+    });
+
+    group('iOS performAction + delta double-fire', () {
+      test('Enter on an empty paragraph: performAction defers, the delta \\n '
+          'fires the split — only one split', () {
+        build([para('a', '')], selection: caret('a', 0));
+        final blockCountBefore = controller.document.blocks.length;
+
+        // iOS fires performAction first — deferred, no immediate split.
+        service.performAction(TextInputAction.newline);
+        expect(controller.document.blocks.length, blockCountBefore,
+            reason: 'split deferred');
+
+        // The delta with \n fires imeInsertNewline and clears the flag.
+        final old = shadow();
+        sendDeltas([
+          TextEditingDeltaInsertion(
+            oldText: old.text,
+            textInserted: '\n',
+            insertionOffset: old.selection.extentOffset,
+            selection: TextSelection.collapsed(
+              offset: old.selection.extentOffset + 1,
+            ),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        expect(controller.document.blocks.length, blockCountBefore + 1);
+      });
+
+      test('Enter on a non-empty paragraph: only one split', () {
+        build([para('a', 'hello')], selection: caret('a', 5));
+        final blockCountBefore = controller.document.blocks.length;
+
+        service.performAction(TextInputAction.newline);
+        expect(controller.document.blocks.length, blockCountBefore,
+            reason: 'split deferred');
+
+        final old = shadow();
+        sendDeltas([
+          TextEditingDeltaInsertion(
+            oldText: old.text,
+            textInserted: '\n',
+            insertionOffset: old.selection.extentOffset,
+            selection: TextSelection.collapsed(
+              offset: old.selection.extentOffset + 1,
+            ),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        expect(controller.document.blocks.length, blockCountBefore + 1);
+      });
+
+      test('Hindi transliteration commit-on-Enter: transliteration lands '
+          'before the deferred split', () {
+        build([para('a', 'namaste')], selection: caret('a', 7));
+        final blockCountBefore = controller.document.blocks.length;
+
+        // iOS Hindi fires performAction first.
+        service.performAction(TextInputAction.newline);
+        expect(controller.document.blocks.length, blockCountBefore);
+
+        // Transliteration delta lands (shadow still pre-split — correct!).
+        sendDeltas([
+          const TextEditingDeltaReplacement(
+            oldText: '. namaste',
+            replacedRange: TextRange(start: 2, end: 9),
+            replacementText: 'नमस्ते',
+            selection: TextSelection.collapsed(offset: 8),
+            composing: TextRange.empty,
+          ),
+        ]);
+
+        // Transliteration applied AND deferred newline fired.
+        final blocks = controller.document.allBlocks;
+        expect(blocks, hasLength(blockCountBefore + 1));
+        expect(blocks[0].plainText,
+            'नमस्ते');
+        expect(blocks[1].plainText, '');
+      });
+
+      test('a delta \\n WITHOUT a preceding performAction still splits '
+          'normally', () {
+        build([para('a', 'hello')], selection: caret('a', 5));
+        final blockCountBefore = controller.document.blocks.length;
+
+        // No performAction — just a delta with \n (e.g. IME composing commit).
+        sendInsertion('\n');
+
+        expect(
+          controller.document.blocks.length,
+          blockCountBefore + 1,
+        );
       });
     });
 
