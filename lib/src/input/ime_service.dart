@@ -2162,6 +2162,11 @@ class ImeService extends ChangeNotifier
       }
     }
 
+    // Only `synth.delta` is consumed: `deadKeyRewrite` cannot fire here. This
+    // path is reached only for the iOS Korean no-composing-region batch shape,
+    // and [_rewriteDeadKeyCommit] returns a rewrite only with a live
+    // non-collapsed composing region — so the snapshot path's post-rewrite
+    // resync push ([_pushAuthoritativeWindow]) is intentionally not needed.
     final synth = _synthesizeDelta(
       initialShadow,
       current,
