@@ -274,10 +274,31 @@ class _SelectionHighlightPainter extends CustomPainter {
   final TextRange range;
   final Color color;
 
+  /// Width of the empty-line sliver as a fraction of the line height — about
+  /// the width of a space glyph, the standard "selected newline" affordance.
+  static const _emptyLineSliverFraction = 0.3;
+
   @override
   void paint(Canvas canvas, Size size) {
-    if (!range.isValid || range.isCollapsed) return;
+    if (!range.isValid) return;
     final paint = Paint()..color = color;
+    if (range.isCollapsed) {
+      // An empty line the selection passes through (its trailing newline is
+      // selected): paint a short sliver at the line start so a multi-line
+      // selection reads as one continuous band instead of one with holes.
+      final caret = geometry.rectForOffset(range.start);
+      if (caret == null) return;
+      canvas.drawRect(
+        Rect.fromLTWH(
+          caret.left,
+          caret.top,
+          caret.height * _emptyLineSliverFraction,
+          caret.height,
+        ),
+        paint,
+      );
+      return;
+    }
     for (final rect in geometry.rectsForRange(range.start, range.end)) {
       canvas.drawRect(rect, paint);
     }

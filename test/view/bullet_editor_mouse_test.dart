@@ -285,6 +285,53 @@ void main() {
     });
   });
 
+  group('empty-line highlight', () {
+    testWidgets(
+      'an empty line the selection passes through paints a sliver',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'hello'),
+          para('empty', ''),
+          para('b', 'world'),
+        ]);
+        controller.setSelection(
+          DocSelection(base: DocPosition('a', 2), extent: DocPosition('b', 3)),
+        );
+        await tester.pump();
+
+        // All three text blocks — including the empty middle line — paint a
+        // highlight, so the band has no hole.
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is CustomPaint && w.painter != null && w.child is RichText,
+          ),
+          findsNWidgets(3),
+        );
+      },
+    );
+
+    testWidgets('an empty END line (selection stops at its start) gets none', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello'), para('empty', '')]);
+      controller.setSelection(
+        DocSelection(
+          base: DocPosition('a', 2),
+          extent: DocPosition('empty', 0),
+        ),
+      );
+      await tester.pump();
+
+      // Only 'a' highlights; the empty end line's newline isn't selected.
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter != null && w.child is RichText,
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('wheel-scroll mid-drag re-hit-test (G5)', () {
     testWidgets(
       'press, scroll two viewports, release without moving → extent under the '

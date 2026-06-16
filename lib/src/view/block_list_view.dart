@@ -145,7 +145,15 @@ TextBlock _lastDescendant(TextBlock block) =>
     }
     final from = i == startIdx ? start.offset : 0;
     final to = i == endIdx ? end.offset : block.length;
-    if (to > from) text[block.id] = TextRange(start: from, end: to);
+    if (to > from) {
+      text[block.id] = TextRange(start: from, end: to);
+    } else if (block.length == 0 && i < endIdx) {
+      // An empty line the selection passes through (its trailing newline is
+      // inside the range): a collapsed-range sentinel asks the painter for a
+      // short sliver so the line doesn't read as a hole in the band. Empty
+      // END lines (selection stops at their start) get nothing.
+      text[block.id] = const TextRange(start: 0, end: 0);
+    }
   }
   return (text, voids);
 }
