@@ -2,12 +2,14 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../editor/edit_operation.dart' show MoveDirection;
 import '../editor/editor_controller.dart';
 import '../input/ime_service.dart';
 import '../model/doc_selection.dart';
 import '../model/inline_entity.dart';
 import 'block_layout_registry.dart';
 import 'block_list_view.dart';
+import 'caret_movement.dart';
 import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
 import 'mouse_interactor.dart';
@@ -17,11 +19,12 @@ import 'mouse_interactor.dart';
 /// painting, the IME path (days 5–8 — character input arrives through
 /// [ImeService], never as key events: engine deltas on delta platforms,
 /// diffed full-value snapshots behind the web fallback, per [imeFrontend]),
-/// and the hardware-key handlers the IME doesn't own (Enter, Backspace,
-/// Tab, arrows, undo) behind the full composing gate (day-10 work pulled
-/// forward — see [_classifyKeyEvent]). Day 10 brings the full key MATRIX
-/// (new bindings: ↑/↓ caret movement, Cmd+arrows, Alt+↑/↓ `MoveBlock`); the
-/// gate itself has landed.
+/// and the hardware-key handlers the IME doesn't own behind the full
+/// composing gate (see [_classifyKeyEvent]): Enter, Backspace, Tab, undo/redo,
+/// and the day-10 key MATRIX — ←/→ grapheme movement, ↑/↓ vertical movement
+/// (geometry-x affinity), Cmd/Ctrl line (←/→) and document (↑/↓) boundaries,
+/// Shift extension, and Alt+↑/↓ `MoveBlock`. Mouse/trackpad selection
+/// gestures route to [MouseInteractor]; touch gestures arrive days 11–13.
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -341,11 +344,26 @@ class BulletEditorState extends State<BulletEditor>
     widget.controller.requestFocus();
   }
 
+  /// Applies a computed movement [target] (caret_movement.dart) as a collapsed
+  /// caret, or — under Shift ([extend]) — as a base-anchored extension. Null
+  /// targets (no geometry yet, empty doc) no-op. setSelection clamps offsets
+  /// and atomic-normalizes a void target.
+  void _moveTo(DocPosition? target, {required bool extend}) {
+    if (target == null) return;
+    final controller = widget.controller;
+    final sel = controller.selection;
+    controller.setSelection(
+      extend && sel != null
+          ? DocSelection(base: sel.base, extent: target)
+          : DocSelection.collapsed(target),
+    );
+  }
+
   // --- Hardware keys (the division of labor: keys the IME doesn't own.
   // Character input goes through the IME delta path exclusively — a
   // hardware character-insert here would double-type against the engine
-  // connection. The composing gate covers ALL handlers below; day 10 adds
-  // the remaining key matrix under the same gate.) ---
+  // connection. The composing gate covers ALL handlers below, including the
+  // day-10 movement matrix.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     final (:result, :handler, :deferred, :action) = _classifyKeyEvent(event);
@@ -397,7 +415,7 @@ class BulletEditorState extends State<BulletEditor>
       // a composition is live — undo is a first-class composition terminator
       // (G7): the controller restores the pre-composition snapshot and the
       // IME push routes through terminateComposition('undo'), quarantine
-      // armed. Every other key defers through the gate below.
+      // armed.
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
         return pressed.isShiftPressed
             ? (
@@ -413,15 +431,81 @@ class BulletEditorState extends State<BulletEditor>
                 action: controller.undo,
               );
       }
+      // Every OTHER shortcut is gated too — a Cmd+arrow during Japanese
+      // hardware-keyboard conversion must reach the IME (it navigates clause
+      // segments / candidates), not fire a movement that external-edit
+      // terminates the composition. The whitelist above is the only exception.
+      if (controller.composing != null || imeService.engineComposing) {
+        return (
+          result: KeyEventResult.skipRemainingHandlers,
+          handler: 'ignored',
+          deferred: true,
+          action: null,
+        );
+      }
+      // Cmd/Ctrl + arrows: line-boundary (←/→) and document-boundary (↑/↓)
+      // movement, Shift-extendable. Part of the day-10 key MATRIX.
+      final extend = pressed.isShiftPressed;
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.arrowLeft:
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveLineStart',
+            deferred: false,
+            action: () {
+              final sel = controller.selection;
+              if (sel != null) {
+                _moveTo(
+                  lineBoundaryTarget(registry, sel, false),
+                  extend: extend,
+                );
+              }
+            },
+          );
+        case LogicalKeyboardKey.arrowRight:
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveLineEnd',
+            deferred: false,
+            action: () {
+              final sel = controller.selection;
+              if (sel != null) {
+                _moveTo(
+                  lineBoundaryTarget(registry, sel, true),
+                  extend: extend,
+                );
+              }
+            },
+          );
+        case LogicalKeyboardKey.arrowUp:
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveDocStart',
+            deferred: false,
+            action: () => _moveTo(
+              documentBoundaryTarget(controller.document, false),
+              extend: extend,
+            ),
+          );
+        case LogicalKeyboardKey.arrowDown:
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveDocEnd',
+            deferred: false,
+            action: () => _moveTo(
+              documentBoundaryTarget(controller.document, true),
+              extend: extend,
+            ),
+          );
+      }
       return ignored;
     }
 
-    // The full composing gate — day-10 work pulled forward (architecture
-    // §hardware keyboard: "the composing gate covers ALL of keyboard_service,
-    // not just Enter/Backspace — ignore-everything-while-composing with an
-    // explicit whitelist"; the whitelist is the shortcut block above). Day 10
-    // retains only the full key MATRIX (new bindings: ↑/↓ caret movement,
-    // Cmd+arrows, Alt+↑/↓ MoveBlock) — each lands under this same gate.
+    // The full composing gate (architecture §hardware keyboard: "the
+    // composing gate covers ALL of keyboard_service, not just Enter/Backspace
+    // — ignore-everything-while-composing with an explicit whitelist"; the
+    // whitelist is the shortcut block above). The day-10 movement matrix (↑/↓
+    // vertical, Cmd+arrows, Alt+↑/↓ MoveBlock) lands under this same gate.
     // While a composition is live EVERY editing/navigation key belongs to
     // the IME: on macOS the text input plugin is a SECONDARY key responder,
     // so a key event the framework marks handled never reaches
@@ -577,14 +661,62 @@ class BulletEditorState extends State<BulletEditor>
           result: KeyEventResult.handled,
           handler: 'moveCaretBack',
           deferred: false,
-          action: () => controller.moveCaret(-1),
+          action: () => controller.moveCaret(-1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowRight:
         return (
           result: KeyEventResult.handled,
           handler: 'moveCaretForward',
           deferred: false,
-          action: () => controller.moveCaret(1),
+          action: () => controller.moveCaret(1, extend: pressed.isShiftPressed),
+        );
+      case LogicalKeyboardKey.arrowUp:
+        // Alt+↑ moves the block (MoveBlock); a plain ↑ moves the caret up a
+        // line (geometry-x affinity), Shift-extendable.
+        if (pressed.isAltPressed) {
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveBlockUp',
+            deferred: false,
+            action: () => controller.moveBlock(MoveDirection.up),
+          );
+        }
+        return (
+          result: KeyEventResult.handled,
+          handler: 'moveCaretUp',
+          deferred: false,
+          action: () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                verticalCaretTarget(registry, sel, -1),
+                extend: pressed.isShiftPressed,
+              );
+            }
+          },
+        );
+      case LogicalKeyboardKey.arrowDown:
+        if (pressed.isAltPressed) {
+          return (
+            result: KeyEventResult.handled,
+            handler: 'moveBlockDown',
+            deferred: false,
+            action: () => controller.moveBlock(MoveDirection.down),
+          );
+        }
+        return (
+          result: KeyEventResult.handled,
+          handler: 'moveCaretDown',
+          deferred: false,
+          action: () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                verticalCaretTarget(registry, sel, 1),
+                extend: pressed.isShiftPressed,
+              );
+            }
+          },
         );
     }
 

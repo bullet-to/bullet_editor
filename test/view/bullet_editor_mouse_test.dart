@@ -10,10 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 /// and the wheel-scroll-mid-drag re-hit-test (G5). Touch gestures (handles,
 /// magnifier) are days 11–13.
 void main() {
-  Finder richTextContaining(String text) => find.byWidgetPredicate(
-    (w) => w is RichText && w.text.toPlainText().contains(text),
-  );
-
   TextBlock para(String id, String text) => TextBlock(
     id: id,
     blockType: ParagraphKeys.type,

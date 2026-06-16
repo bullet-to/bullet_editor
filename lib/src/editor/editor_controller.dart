@@ -171,9 +171,10 @@ class EditorController extends ChangeNotifier {
 
   /// IME forward delete — macOS `performSelector('deleteForward:')`
   /// (Fn+Delete): grapheme delete after the caret within the block; a
-  /// non-collapsed selection deletes. Forward delete at block end (a
-  /// forward merge) needs its own policy consultation and lands with the
-  /// day-10 hardware-key matrix — it no-ops here until then.
+  /// non-collapsed selection deletes. Forward delete at block end (a forward
+  /// merge) needs its own policy consultation; it and the desktop Delete-key
+  /// binding are deferred past the day-10 movement matrix (recorded in the
+  /// plan's day-10 row) — forward delete at block end no-ops here until then.
   void imeDeleteForward() {
     assert(
       _inEdit && _currentEditIsIme,
@@ -799,13 +800,21 @@ class EditorController extends ChangeNotifier {
   /// within the block, hops to the adjacent flat block at the edges, and
   /// atomic-selects voids on entry (arrowing off a void hops past it). A
   /// non-collapsed text selection collapses to its directional edge.
-  /// Vertical movement needs line geometry and lands with the day-10 key
-  /// matrix.
-  void moveCaret(int direction) {
+  ///
+  /// With [extend] (Shift+arrow), the base is held and only the extent steps
+  /// — growing or shrinking the selection one grapheme at a time. Vertical /
+  /// line / document movement (which need geometry) live in the view layer
+  /// (`caret_movement.dart`) and route through [setSelection].
+  void moveCaret(int direction, {bool extend = false}) {
     _edit(() {
       final sel = _selection;
       if (sel == null) return;
       final doc = _document;
+
+      if (extend) {
+        _extendCaret(sel, direction, doc);
+        return;
+      }
 
       if (!sel.isCollapsed) {
         final block = doc.blockById(sel.extent.blockId);
@@ -843,6 +852,54 @@ class EditorController extends ChangeNotifier {
       }
 
       _hopToAdjacentBlock(flatIndex, direction);
+    });
+  }
+
+  /// Shift+arrow: hold the base, step the extent one grapheme (within the
+  /// block, or to the adjacent flat block's near edge at a boundary). A void
+  /// neighbour's near edge is normalized by [setSelection]'s clamp; the base
+  /// is never disturbed.
+  void _extendCaret(DocSelection sel, int direction, Document doc) {
+    final caret = sel.extent;
+    final block = doc.blockById(caret.blockId);
+    final flatIndex = doc.idToFlatIndex[caret.blockId];
+    if (block == null || flatIndex == null) return;
+
+    final text = block.plainText;
+    DocPosition target;
+    if (direction < 0 && caret.offset > 0) {
+      final step = _graphemeLengthBefore(text, caret.offset);
+      target = DocPosition(caret.blockId, caret.offset - step);
+    } else if (direction > 0 && caret.offset < block.length) {
+      final step = _graphemeLengthAfter(text, caret.offset);
+      target = DocPosition(caret.blockId, caret.offset + step);
+    } else {
+      final targetIndex = flatIndex + (direction < 0 ? -1 : 1);
+      if (targetIndex < 0 || targetIndex >= doc.allBlocks.length) return;
+      final neighbour = doc.allBlocks[targetIndex];
+      target = DocPosition(
+        neighbour.id,
+        direction < 0 ? neighbour.length : 0,
+      );
+    }
+    final next = _normalizeSelection(
+      DocSelection(base: sel.base, extent: target),
+      doc,
+    );
+    if (next != null) _selection = next;
+  }
+
+  /// Moves the caret's block one position among its siblings (Alt+↑/↓ — the
+  /// D10 keyboard-move coverage). A boundary hit (first sibling up / last
+  /// sibling down) is a no-op, not a rejection. Selection is id-based, so it
+  /// rides the reindex untouched.
+  void moveBlock(MoveDirection direction) {
+    _edit(() {
+      final sel = _selection;
+      if (sel == null) return;
+      final blockId = sel.extent.blockId;
+      if (_document.idToFlatIndex[blockId] == null) return;
+      _applyBatch([MoveBlock(blockId, direction)]);
     });
   }
 
