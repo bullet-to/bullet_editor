@@ -1,6 +1,6 @@
 # v2 test archive (not run by `flutter test`)
 
-Migration policy (see `context/v3-build-strategy.md` §Test migration): keep
+Migration policy (see `docs/v3-build-strategy.md` §Test migration): keep
 tests by what they assert, throw by what they touch, harvest scenarios when
 throwing.
 

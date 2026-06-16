@@ -6,9 +6,9 @@
 > the amendment trail. Winning prior: **minimal-20day** ("smallest tier 3 that ships in
 > 20 days"), with the single-writer serialization discipline grafted from the
 > command-pipeline runner-up and the tests-as-milestone-artifacts discipline from the
-> selection-first runner-up. Judged against `context/v3-requirements.md` (decisions
+> selection-first runner-up. Judged against `docs/v3-requirements.md` (decisions
 > D1–D14) and the 15-scenario gauntlet reproduced in Appendix A (scenarios cited as
-> G1–G15). Research backing: `context/editor-architecture-v3-research.md`.
+> G1–G15). Research backing: `docs/editor-architecture-v3-research.md`.
 
 Forced prior honored throughout: every layer below exists because a requirement or gauntlet
 scenario demands it. Where super_editor has a layer we don't, the omission is deliberate and

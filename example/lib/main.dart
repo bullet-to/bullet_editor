@@ -5,7 +5,7 @@ import 'inspector.dart';
 void main() => runApp(const BulletEditorExample());
 
 /// The v3 dev harness: the inspector (editor left, debug panes right).
-/// See context/v3-build-strategy.md §dev harness.
+/// See docs/v3-build-strategy.md §dev harness.
 class BulletEditorExample extends StatelessWidget {
   const BulletEditorExample({super.key});
 
