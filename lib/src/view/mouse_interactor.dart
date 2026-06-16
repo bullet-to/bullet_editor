@@ -31,15 +31,15 @@ class MouseInteractor {
   MouseInteractor({
     required this.registry,
     required this.documentOf,
-    required this.setSelection,
+    required void Function(DocSelection selection) setSelection,
     required this.requestFocus,
     required this.scrollPositionOf,
     required this.viewportRectOf,
-  });
+  }) : _rawSetSelection = setSelection;
 
   final BlockLayoutRegistry registry;
   final Document Function() documentOf;
-  final void Function(DocSelection selection) setSelection;
+  final void Function(DocSelection selection) _rawSetSelection;
   final void Function() requestFocus;
 
   /// The editor's scroll position, or null before the viewport is laid out.
@@ -63,6 +63,20 @@ class MouseInteractor {
   /// cannot produce an out-of-bounds shift-click).
   DocSelection? _expandBase;
 
+  /// The last selection this interactor pushed. A drag re-hit-tests on every
+  /// pointer move AND on every scroll notification (wheel, trackpad, autoscroll
+  /// tick) — frequently resolving the SAME offset for consecutive samples. We
+  /// push only on an actual change so the editor doesn't rebuild (and the caret
+  /// doesn't visibly flicker) on no-op samples (manual-test B5). Compared
+  /// pre-normalization, which is fine: a stable input maps to a stable output.
+  DocSelection? _lastPushed;
+
+  void _setSelection(DocSelection selection) {
+    if (selection == _lastPushed) return;
+    _lastPushed = selection;
+    _rawSetSelection(selection);
+  }
+
   bool _dragging = false;
   Offset? _dragPointer;
   bool get isDragging => _dragging;
@@ -82,6 +96,10 @@ class MouseInteractor {
   void handlePointerDown(PointerDownEvent event) {
     if (event.buttons != kPrimaryMouseButton) return;
     requestFocus();
+    // Start each gesture with a clean dedup baseline: the selection may have
+    // moved since our last push (a keyboard caret move between clicks), so the
+    // first push of this gesture must always go through.
+    _lastPushed = null;
     final global = event.position;
     _dragPointer = global;
     _dragging = true;
@@ -103,7 +121,7 @@ class MouseInteractor {
     if (hit == null) return;
     final anchor = _selectionForClick(hit, _clickCount);
     _expandBase = anchor;
-    setSelection(anchor);
+    _setSelection(anchor);
   }
 
   void handlePointerMove(PointerMoveEvent event) {
@@ -188,7 +206,7 @@ class MouseInteractor {
   void _extendTo(DocPosition point) {
     final anchor = _expandBase;
     if (anchor == null) {
-      setSelection(DocSelection.collapsed(point));
+      _setSelection(DocSelection.collapsed(point));
       return;
     }
     final (start, end) = anchor.normalized(_doc);
@@ -200,7 +218,7 @@ class MouseInteractor {
     } else {
       extended = anchor;
     }
-    setSelection(extended);
+    _setSelection(extended);
   }
 
   /// Document order of two positions: by flat block index, then offset.

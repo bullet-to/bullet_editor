@@ -91,6 +91,107 @@ void main() {
       expect(controller.selection!.base, DocPosition('a', 4));
       expect(controller.selection!.extent.blockId, 'b');
     });
+
+    testWidgets(
+      '↓ holds the goal column across a short intervening line (B2)',
+      (tester) async {
+        // The middle line is too short to hold the caret's column; the goal
+        // column must survive it so the third line lands back at the column,
+        // not at the short line's clamped end.
+        await pumpEditor(tester, [
+          para('a', 'a long first line'),
+          para('b', 'x'),
+          para('c', 'a long third line'),
+        ]);
+        controller.setSelection(DocSelection.collapsed(DocPosition('a', 12)));
+        await tester.pump();
+
+        await press(tester, LogicalKeyboardKey.arrowDown);
+        // 'b' is one char — the column clamps to its end.
+        expect(controller.selection!.extent.blockId, 'b');
+        expect(controller.selection!.extent.offset, 1);
+
+        await press(tester, LogicalKeyboardKey.arrowDown);
+        expect(controller.selection!.extent.blockId, 'c');
+        // The remembered column (≈12), NOT 'b''s clamped offset 1.
+        expect(controller.selection!.extent.offset, greaterThan(6));
+      },
+    );
+
+    testWidgets(
+      'a horizontal move resets the goal column (B2)',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'a long first line'),
+          para('b', 'x'),
+          para('c', 'a long third line'),
+        ]);
+        controller.setSelection(DocSelection.collapsed(DocPosition('a', 12)));
+        await tester.pump();
+
+        await press(tester, LogicalKeyboardKey.arrowDown); // → (b, 1)
+        // A horizontal move breaks the vertical run; the next ↓ recomputes the
+        // column from 'b''s caret (offset 1), so 'c' lands near the start.
+        await press(tester, LogicalKeyboardKey.arrowLeft); // → (b, 0)
+        await press(tester, LogicalKeyboardKey.arrowDown);
+        expect(controller.selection!.extent.blockId, 'c');
+        expect(controller.selection!.extent.offset, lessThan(3));
+      },
+    );
+  });
+
+  group('vertical movement across a void (B3)', () {
+    TextBlock image(String id) => TextBlock(id: id, blockType: ImageKeys.type);
+
+    testWidgets(
+      'Shift+↓ onto an image includes it, then lands on the block below '
+      '(no overshoot)',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'above text'),
+          image('img'),
+          para('b', 'below text'),
+          para('c', 'further down'),
+        ]);
+        controller.setSelection(DocSelection.collapsed(DocPosition('a', 3)));
+        await tester.pump();
+
+        // First Shift+↓ extends ONTO the image — its downstream edge so the
+        // void's [0,1) falls inside the selection (it is selected, not skipped).
+        await press(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(controller.selection!.base, DocPosition('a', 3));
+        expect(controller.selection!.extent, DocPosition('img', 1));
+
+        // Second Shift+↓ leaves the (tall) void by a small step → the very
+        // next block, not an overshoot past it into 'c'.
+        await press(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(controller.selection!.extent.blockId, 'b');
+      },
+    );
+
+    testWidgets('plain ↓ onto an image atomic-selects it, ↑ returns (B2/B3)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [
+        para('a', 'above text here'),
+        image('img'),
+        para('b', 'below text here'),
+      ]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 8)));
+      await tester.pump();
+
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      expect(
+        controller.selection,
+        DocSelection(base: DocPosition('img', 0), extent: DocPosition('img', 1)),
+      );
+
+      // ↑ off the image returns to the original block at the held column, not
+      // the image's left edge (column 0).
+      await press(tester, LogicalKeyboardKey.arrowUp);
+      expect(controller.selection!.extent.blockId, 'a');
+      expect(controller.selection!.extent.offset, greaterThan(3));
+    });
   });
 
   group('line boundary (Cmd+←/→)', () {
@@ -140,6 +241,71 @@ void main() {
 
       expect(controller.selection!.base, DocPosition('a', 1));
       expect(controller.selection!.extent, DocPosition('a', 3));
+    });
+  });
+
+  group('scroll caret into view on keyboard movement (B4)', () {
+    Future<ScrollController> pumpTall(WidgetTester tester) async {
+      controller = EditorController(
+        document: Document([
+          for (var i = 0; i < 40; i++) para('b$i', 'line number $i'),
+        ]),
+        schema: EditorSchema.standard(),
+      );
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(
+                controller: controller,
+                autofocus: true,
+                scrollController: scroll,
+                textStyle: const TextStyle(
+                  fontSize: 16,
+                  color: Color(0xFF000000),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return scroll;
+    }
+
+    testWidgets('Cmd+↓ to document end scrolls the last block into view', (
+      tester,
+    ) async {
+      final scroll = await pumpTall(tester);
+      controller.setSelection(DocSelection.collapsed(DocPosition('b0', 0)));
+      await tester.pump();
+      expect(scroll.offset, 0);
+
+      await press(tester, LogicalKeyboardKey.arrowDown, meta: true);
+      await tester.pumpAndSettle();
+
+      expect(controller.selection!.extent.blockId, 'b39');
+      expect(scroll.offset, greaterThan(0));
+      // The last block is now laid out and within the viewport.
+      final state = tester.state<BulletEditorState>(find.byType(BulletEditor));
+      expect(state.registry.geometryOf('b39'), isNotNull);
+    });
+
+    testWidgets('repeated ↓ past the viewport edge follows the caret down', (
+      tester,
+    ) async {
+      final scroll = await pumpTall(tester);
+      controller.setSelection(DocSelection.collapsed(DocPosition('b0', 0)));
+      await tester.pump();
+
+      for (var i = 0; i < 20; i++) {
+        await press(tester, LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expect(scroll.offset, greaterThan(0));
     });
   });
 

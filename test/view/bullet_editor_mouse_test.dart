@@ -179,6 +179,36 @@ void main() {
       expect(end, DocPosition('b', 4));
     });
 
+    testWidgets(
+      'a drag move resolving to the same offset does not re-push (B5)',
+      (tester) async {
+        await pumpEditor(tester, [para('a', 'hello world')]);
+        final start = pointFor(tester, 'a', 2);
+        final gesture = await tester.startGesture(
+          start,
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        final afterDown = controller.selection;
+
+        // Tiny moves that stay within the same glyph resolve to the same
+        // offset: the interactor must not push a redundant selection (which
+        // would rebuild the editor and visibly jitter the caret).
+        await gesture.moveTo(start + const Offset(1, 0));
+        await tester.pump();
+        await gesture.moveTo(start + const Offset(2, 0));
+        await tester.pump();
+        expect(
+          identical(controller.selection, afterDown),
+          isTrue,
+          reason: 'no new selection instance for same-offset moves',
+        );
+
+        await gesture.up();
+        await tester.pump();
+      },
+    );
+
     testWidgets('downward drag across an image includes and tints it', (
       tester,
     ) async {

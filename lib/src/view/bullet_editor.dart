@@ -100,12 +100,16 @@ class BulletEditorState extends State<BulletEditor>
     requestFocus: () => widget.controller.requestFocus(),
     scrollPositionOf: () =>
         _scrollController.hasClients ? _scrollController.position : null,
-    viewportRectOf: () {
-      final renderObject = context.findRenderObject();
-      if (renderObject is! RenderBox || !renderObject.hasSize) return null;
-      return renderObject.localToGlobal(Offset.zero) & renderObject.size;
-    },
+    viewportRectOf: _editorGlobalRect,
   );
+
+  /// The editor's global rect — the autoscroll edge zone (mouse interactor)
+  /// and the keyboard ensure-visible margin (B4) both measure against it.
+  Rect? _editorGlobalRect() {
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+  }
 
   ScrollController? _ownedScrollController;
   FocusNode? _ownedFocusNode;
@@ -119,6 +123,16 @@ class BulletEditorState extends State<BulletEditor>
       (_ownedFocusNode ??= FocusNode(debugLabel: 'BulletEditor'));
 
   Offset? _pointerDownPosition;
+
+  /// Goal-column state for ↑/↓ (architecture §hardware keyboard: geometry-x
+  /// affinity). [_verticalGoalX] is the global x a consecutive vertical run
+  /// holds; [_verticalAnchorExtent] is where the last vertical move left the
+  /// extent. A run continues only while the live extent still equals it —
+  /// any click, edit, horizontal move, or boundary jump changes the extent
+  /// and so recomputes the column from the caret afresh (no per-path reset
+  /// plumbing needed).
+  double? _verticalGoalX;
+  DocPosition? _verticalAnchorExtent;
 
   /// The controller/focus-node pair is attached and detached symmetrically —
   /// one helper pair covers mount, every didUpdateWidget swap combination
@@ -359,6 +373,91 @@ class BulletEditorState extends State<BulletEditor>
     );
   }
 
+  /// ↑/↓ caret movement with goal-column affinity (B2/B3). Reuses the carried
+  /// [_verticalGoalX] only while this is a consecutive vertical run (the live
+  /// extent still where the last vertical move left it); otherwise it starts a
+  /// fresh column from the current caret. The remembered extent is read back
+  /// AFTER `setSelection` so it matches the void `[0,1)` atomic normalization.
+  void _moveVertically(int direction, {required bool extend}) {
+    final controller = widget.controller;
+    final sel = controller.selection;
+    if (sel == null) return;
+    final goalX = sel.extent == _verticalAnchorExtent ? _verticalGoalX : null;
+    final move = verticalCaretTarget(
+      registry,
+      controller.schema,
+      controller.document,
+      sel,
+      direction,
+      goalX: goalX,
+    );
+    if (move == null) return;
+    _verticalGoalX = move.goalX;
+    _moveTo(move.target, extend: extend);
+    _verticalAnchorExtent = controller.selection?.extent;
+  }
+
+  /// Brings the caret/extent into view after a keyboard movement (B4). Driven
+  /// post-frame from [_onKeyEvent] for every handled key so a move past the
+  /// viewport edge (↑/↓), or a line/document boundary jump (Cmd+arrows),
+  /// scrolls the caret back on-screen. Geometry-based and lazy-viewport safe:
+  /// when the extent block isn't laid out (a document-boundary jump landing
+  /// far off-screen) it scrolls to the matching scroll extreme so the next
+  /// frame lays the block out, then the following pass fine-tunes the margin.
+  void _scheduleEnsureCaretVisible() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ensureCaretVisible();
+    });
+  }
+
+  void _ensureCaretVisible() {
+    if (!_scrollController.hasClients) return;
+    final sel = widget.controller.selection;
+    if (sel == null) return;
+    final position = _scrollController.position;
+    final editorRect = _editorGlobalRect();
+    if (editorRect == null) return;
+
+    final geometry = registry.geometryOf(sel.extent.blockId);
+    final caret = geometry?.rectForOffset(sel.extent.offset);
+    if (geometry == null || caret == null) {
+      // The extent landed on a block the lazy viewport hasn't built (a
+      // document-boundary jump). Scroll toward the block: ahead of the
+      // current band scrolls down, behind it scrolls up. The post-frame
+      // re-schedule below lays it out and re-runs to settle the margin.
+      final index = widget.controller.document.indexOfBlock(sel.extent.blockId);
+      if (index < 0) return;
+      final laidOut = registry.laidOutBlockIds
+          .map(widget.controller.document.indexOfBlock)
+          .where((i) => i >= 0);
+      if (laidOut.isEmpty) return;
+      final ahead = index > laidOut.reduce((a, b) => a > b ? a : b);
+      final target = ahead ? position.maxScrollExtent : position.minScrollExtent;
+      if (target != position.pixels) {
+        position.jumpTo(target);
+        _scheduleEnsureCaretVisible();
+      }
+      return;
+    }
+
+    const margin = 12.0;
+    final box = geometry.renderBox;
+    final caretTop = box.localToGlobal(caret.topLeft).dy;
+    final caretBottom = box.localToGlobal(caret.bottomLeft).dy;
+    double delta = 0;
+    if (caretTop < editorRect.top + margin) {
+      delta = caretTop - (editorRect.top + margin);
+    } else if (caretBottom > editorRect.bottom - margin) {
+      delta = caretBottom - (editorRect.bottom - margin);
+    }
+    if (delta == 0) return;
+    final target = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if (target != position.pixels) position.jumpTo(target);
+  }
+
   // --- Hardware keys (the division of labor: keys the IME doesn't own.
   // Character input goes through the IME delta path exclusively — a
   // hardware character-insert here would double-type against the engine
@@ -388,6 +487,10 @@ class BulletEditorState extends State<BulletEditor>
       },
     );
     action?.call();
+    // Keep the caret on-screen after any handled key (B4): movement past the
+    // viewport edge, a Cmd-boundary jump, or an edit that pushed the caret out.
+    // Post-frame, so it measures the geometry this key's edit/move produced.
+    if (result == KeyEventResult.handled) _scheduleEnsureCaretVisible();
     return result;
   }
 
@@ -685,15 +788,7 @@ class BulletEditorState extends State<BulletEditor>
           result: KeyEventResult.handled,
           handler: 'moveCaretUp',
           deferred: false,
-          action: () {
-            final sel = controller.selection;
-            if (sel != null) {
-              _moveTo(
-                verticalCaretTarget(registry, sel, -1),
-                extend: pressed.isShiftPressed,
-              );
-            }
-          },
+          action: () => _moveVertically(-1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowDown:
         if (pressed.isAltPressed) {
@@ -708,15 +803,7 @@ class BulletEditorState extends State<BulletEditor>
           result: KeyEventResult.handled,
           handler: 'moveCaretDown',
           deferred: false,
-          action: () {
-            final sel = controller.selection;
-            if (sel != null) {
-              _moveTo(
-                verticalCaretTarget(registry, sel, 1),
-                extend: pressed.isShiftPressed,
-              );
-            }
-          },
+          action: () => _moveVertically(1, extend: pressed.isShiftPressed),
         );
     }
 
@@ -776,16 +863,20 @@ class BulletEditorState extends State<BulletEditor>
               child: ScrollConfiguration(
                 // Force mouse out of the scrollable's drag devices so mouse
                 // drag-select is never claimed by it (architecture §Gestures:
-                // the dragDevices-excludes-mouse invariant). We keep the
-                // ambient behavior's scrollbars/overscroll but override
-                // dragDevices, so an app that enabled mouse-drag scrolling
-                // (common on web) cannot reintroduce the two-writers
-                // pathology under the editor.
+                // the dragDevices-excludes-mouse invariant). The set is the
+                // framework default MINUS mouse only — trackpad must stay in,
+                // or two-finger (trackpad-pan) scrolling dies with it (the
+                // day-10 manual-test regression B1). We keep the ambient
+                // behavior's scrollbars/overscroll but override dragDevices,
+                // so an app that enabled mouse-drag scrolling (common on web)
+                // cannot reintroduce the two-writers pathology under the
+                // editor.
                 behavior: ScrollConfiguration.of(context).copyWith(
                   dragDevices: const {
                     PointerDeviceKind.touch,
                     PointerDeviceKind.stylus,
                     PointerDeviceKind.invertedStylus,
+                    PointerDeviceKind.trackpad,
                   },
                 ),
                 child: CustomScrollView(
