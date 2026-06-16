@@ -59,8 +59,14 @@ class MouseInteractor {
   /// Distance from a viewport edge within which a drag autoscrolls.
   static const _edgeZone = 50.0;
 
-  /// Pixels scrolled per autoscroll frame tick.
-  static const _autoScrollStep = 16.0;
+  /// Peak autoscroll speed in **pixels per second** (reached when the pointer
+  /// is a full [_edgeZone] past the viewport edge). A per-second rate, not a
+  /// per-frame step, so the physical scroll speed is identical at 60Hz and
+  /// 120Hz and doesn't stutter when frame delivery is uneven — the tick scales
+  /// it by real elapsed time (manual-test B5: fixed-per-frame steps jittered
+  /// under ProMotion's variable refresh). Tuned for a snappy full-depth scroll
+  /// (the ramp keeps it gentle near the boundary).
+  static const _autoScrollMaxVelocity = 1800.0;
 
   /// The anchored selection a drag/shift-click extends from — the click point
   /// (collapsed), the double-clicked word, or the triple-clicked block. Never
@@ -94,10 +100,13 @@ class MouseInteractor {
   Offset? _lastDownPosition;
   int _clickCount = 0;
 
-  // Autoscroll ticker.
+  // Autoscroll ticker. Velocity is in pixels/second (signed); the tick scales
+  // it by the real interval since [_lastAutoScrollTick] so speed is frame-rate
+  // independent.
   double _autoScrollVelocity = 0;
   bool _autoScrollScheduled = false;
   bool _rehitScheduled = false;
+  Duration? _lastAutoScrollTick;
 
   Document get _doc => documentOf();
 
@@ -152,6 +161,7 @@ class MouseInteractor {
     _dragging = false;
     _dragPointer = null;
     _autoScrollVelocity = 0;
+    _lastAutoScrollTick = null;
   }
 
   /// Re-hit-test under the stationary pointer after a scroll (autoscroll tick,
@@ -260,13 +270,26 @@ class MouseInteractor {
       _autoScrollVelocity = 0;
       return;
     }
-    if (globalPointer.dy < viewport.top + _edgeZone) {
-      _autoScrollVelocity = -_autoScrollStep;
-    } else if (globalPointer.dy > viewport.bottom - _edgeZone) {
-      _autoScrollVelocity = _autoScrollStep;
+    final previousVelocity = _autoScrollVelocity;
+    final topZone = viewport.top + _edgeZone;
+    final bottomZone = viewport.bottom - _edgeZone;
+    // Velocity RAMPS with how far the pointer has penetrated the edge zone
+    // (0 at the boundary, full speed a zone-width past the edge) rather than
+    // snapping between 0 and a fixed step. A binary on/off velocity stutters
+    // when the pointer hovers near the boundary — every micro-movement flips
+    // it (manual-test B5). The ramp eases that to zero instead.
+    if (globalPointer.dy < topZone) {
+      final depth = ((topZone - globalPointer.dy) / _edgeZone).clamp(0.0, 1.0);
+      _autoScrollVelocity = -_autoScrollMaxVelocity * depth;
+    } else if (globalPointer.dy > bottomZone) {
+      final depth = ((globalPointer.dy - bottomZone) / _edgeZone).clamp(0.0, 1.0);
+      _autoScrollVelocity = _autoScrollMaxVelocity * depth;
     } else {
       _autoScrollVelocity = 0;
       return;
+    }
+    if (previousVelocity == 0) {
+      _lastAutoScrollTick = null; // fresh interval baseline for the first tick
     }
     if (!_autoScrollScheduled) {
       _autoScrollScheduled = true;
@@ -275,12 +298,25 @@ class MouseInteractor {
     }
   }
 
-  void _autoScrollTick(Duration _) {
+  void _autoScrollTick(Duration timeStamp) {
     _autoScrollScheduled = false;
-    if (!_dragging || _autoScrollVelocity == 0) return;
+    if (!_dragging || _autoScrollVelocity == 0) {
+      _lastAutoScrollTick = null;
+      return;
+    }
     final position = scrollPositionOf();
     if (position == null) return;
-    final target = (position.pixels + _autoScrollVelocity).clamp(
+
+    // Scale the per-second velocity by the REAL interval since the last tick,
+    // so physical scroll speed is identical regardless of refresh rate and
+    // doesn't jitter when frames land at uneven intervals. The first tick of a
+    // run (null baseline) assumes a nominal 60Hz frame so it still advances.
+    final last = _lastAutoScrollTick;
+    _lastAutoScrollTick = timeStamp;
+    final dtSeconds = last == null
+        ? 1 / 60
+        : (timeStamp - last).inMicroseconds / Duration.microsecondsPerSecond;
+    final target = (position.pixels + _autoScrollVelocity * dtSeconds).clamp(
       position.minScrollExtent,
       position.maxScrollExtent,
     );
