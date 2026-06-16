@@ -187,21 +187,35 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
 
     final caretOffset = ctx.caretOffset;
     final composing = ctx.composing;
-    if (caretOffset != null || composing != null) {
-      // The painter queries the RenderParagraph at paint time (post-layout)
-      // through the geometry mixin — never during build. One layer paints
-      // composing underline then caret (§per-block painting order).
+    final highlight = ctx.selectionHighlight;
+    if (caretOffset != null || composing != null || highlight != null) {
+      // The painters query the RenderParagraph at paint time (post-layout)
+      // through the geometry mixin — never during build. §per-block painting
+      // order: the selection highlight paints BEHIND the text (the `painter`,
+      // before the child), then the child text, then the foreground painter
+      // lays the composing underline and caret on top.
       text = CustomPaint(
-        foregroundPainter: _CaretPainter(
-          geometry: this,
-          offset: caretOffset,
-          visible: _caretVisible,
-          composing: composing,
-          color:
-              DefaultSelectionStyle.of(context).cursorColor ??
-              ctx.resolvedStyle.color ??
-              const Color(0xFF000000),
-        ),
+        painter: highlight == null
+            ? null
+            : _SelectionHighlightPainter(
+                geometry: this,
+                range: highlight,
+                color:
+                    DefaultSelectionStyle.of(context).selectionColor ??
+                    const Color(0x4D2196F3),
+              ),
+        foregroundPainter: (caretOffset != null || composing != null)
+            ? _CaretPainter(
+                geometry: this,
+                offset: caretOffset,
+                visible: _caretVisible,
+                composing: composing,
+                color:
+                    DefaultSelectionStyle.of(context).cursorColor ??
+                    ctx.resolvedStyle.color ??
+                    const Color(0xFF000000),
+              )
+            : null,
         child: text,
       );
     }
@@ -244,6 +258,57 @@ List<Rect> composingUnderlineRects(List<Rect> glyphRects, double thickness) {
     for (final rect in glyphRects)
       Rect.fromLTWH(rect.left, bottom - thickness, rect.width, thickness),
   ];
+}
+
+/// Paints the selection highlight behind the `RichText` child for the
+/// block-local [range] (the non-collapsed selection slice). Queries the
+/// glyph boxes from [geometry] at paint time, when the paragraph is laid out.
+class _SelectionHighlightPainter extends CustomPainter {
+  _SelectionHighlightPainter({
+    required this.geometry,
+    required this.range,
+    required this.color,
+  });
+
+  final BlockGeometry geometry;
+  final TextRange range;
+  final Color color;
+
+  /// Width of the empty-line sliver as a fraction of the line height — about
+  /// the width of a space glyph, the standard "selected newline" affordance.
+  static const _emptyLineSliverFraction = 0.3;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!range.isValid) return;
+    final paint = Paint()..color = color;
+    if (range.isCollapsed) {
+      // An empty line the selection passes through (its trailing newline is
+      // selected): paint a short sliver at the line start so a multi-line
+      // selection reads as one continuous band instead of one with holes.
+      final caret = geometry.rectForOffset(range.start);
+      if (caret == null) return;
+      canvas.drawRect(
+        Rect.fromLTWH(
+          caret.left,
+          caret.top,
+          caret.height * _emptyLineSliverFraction,
+          caret.height,
+        ),
+        paint,
+      );
+      return;
+    }
+    for (final rect in geometry.rectsForRange(range.start, range.end)) {
+      canvas.drawRect(rect, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SelectionHighlightPainter old) =>
+      range != old.range ||
+      color != old.color ||
+      !identical(geometry, old.geometry);
 }
 
 /// Paints the composing-region underline and the collapsed caret over the

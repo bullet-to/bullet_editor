@@ -456,6 +456,41 @@ void main() {
       expect(controller.document.blockById('a')!.plainText, '');
     });
 
+    testWidgets('Cmd+arrows (line/document boundaries) defer while composing — '
+        'they must not terminate a hardware-keyboard conversion (day 10)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello'), para('b', 'world')]);
+      controller.setSelection(DocSelection.collapsed(DocPosition('a', 5)));
+      await tester.pump();
+
+      sendInsertion(tester, 'か', composing: const TextRange(start: 7, end: 8));
+      await tester.pump();
+      final selectionDuringComposition = controller.selection;
+      expect(controller.composing, isNotNull);
+
+      for (final key in [
+        LogicalKeyboardKey.arrowLeft,
+        LogicalKeyboardKey.arrowRight,
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowDown,
+      ]) {
+        await simulateKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await simulateKeyDownEvent(key);
+        await simulateKeyUpEvent(key);
+        await simulateKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      }
+      await tester.pump();
+
+      expect(controller.composing, isNotNull);
+      expect(imeOf(tester).debugLastTerminateReason, isNull);
+      expect(
+        controller.selection,
+        selectionDuringComposition,
+        reason: 'a gated Cmd+arrow moves nothing — the IME owns the keystroke',
+      );
+    });
+
     testWidgets('the composing gate defers Enter and Tab to the IME while '
         'marked text exists, and releases them when it clears', (tester) async {
       await pumpEditor(tester, [para('a', 'ab')]);

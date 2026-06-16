@@ -2,25 +2,64 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../editor/edit_operation.dart' show MoveDirection;
 import '../editor/editor_controller.dart';
 import '../input/ime_service.dart';
 import '../model/doc_selection.dart';
 import '../model/inline_entity.dart';
 import 'block_layout_registry.dart';
 import 'block_list_view.dart';
+import 'caret_movement.dart';
 import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
+import 'mouse_interactor.dart';
+
+typedef _KeyOutcome = ({
+  KeyEventResult result,
+  String handler,
+  bool deferred,
+  VoidCallback? action,
+});
+
+/// A handled key: stops propagation, runs [action] (the controller verb), and
+/// is recorded in the IME journal under [handler].
+_KeyOutcome _handled(String handler, [VoidCallback? action]) => (
+  result: KeyEventResult.handled,
+  handler: handler,
+  deferred: false,
+  action: action,
+);
+
+/// A key the composing gate defers to the platform IME: skipRemainingHandlers
+/// (NOT ignored — see the gate comment) so it reaches the IME without
+/// preventDefault, journaled as deferred. [action] is an optional note hook.
+_KeyOutcome _deferred([VoidCallback? action]) => (
+  result: KeyEventResult.skipRemainingHandlers,
+  handler: 'ignored',
+  deferred: true,
+  action: action,
+);
+
+/// An unhandled key. [action] runs a side effect (e.g. spending a one-shot)
+/// while leaving the event unhandled.
+_KeyOutcome _ignored([VoidCallback? action]) => (
+  result: KeyEventResult.ignored,
+  handler: 'ignored',
+  deferred: false,
+  action: action,
+);
 
 /// The v3 editor root widget: lazy render through the component registry,
 /// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
 /// painting, the IME path (days 5–8 — character input arrives through
 /// [ImeService], never as key events: engine deltas on delta platforms,
 /// diffed full-value snapshots behind the web fallback, per [imeFrontend]),
-/// and the hardware-key handlers the IME doesn't own (Enter, Backspace,
-/// Tab, arrows, undo) behind the full composing gate (day-10 work pulled
-/// forward — see [_classifyKeyEvent]). Day 10 brings the full key MATRIX
-/// (new bindings: ↑/↓ caret movement, Cmd+arrows, Alt+↑/↓ `MoveBlock`); the
-/// gate itself has landed.
+/// and the hardware-key handlers the IME doesn't own behind the full
+/// composing gate (see [_classifyKeyEvent]): Enter, Backspace, Tab, undo/redo,
+/// and the day-10 key MATRIX — ←/→ grapheme movement, ↑/↓ vertical movement
+/// (geometry-x affinity), Cmd/Ctrl line (←/→) and document (↑/↓) boundaries,
+/// Shift extension, and Alt+↑/↓ `MoveBlock`. Mouse/trackpad selection
+/// gestures route to [MouseInteractor]; touch gestures arrive days 11–13.
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -86,6 +125,31 @@ class BulletEditorState extends State<BulletEditor>
   /// for the inspector pane and for tests that drive engine deltas.
   late ImeService imeService;
 
+  /// Mouse/trackpad selection gestures (architecture §Gestures, per-kind
+  /// dispatch). Touch/stylus gestures (long-press, handles, magnifier) arrive
+  /// days 11–13; today touch keeps the slop-gated tap-to-caret below.
+  late final MouseInteractor _mouseInteractor = MouseInteractor(
+    registry: registry,
+    documentOf: () => widget.controller.document,
+    isVoid: (blockId) {
+      final block = widget.controller.document.blockById(blockId);
+      return block != null && widget.controller.schema.isVoid(block.blockType);
+    },
+    setSelection: (selection) => widget.controller.setSelection(selection),
+    requestFocus: () => widget.controller.requestFocus(),
+    scrollPositionOf: () =>
+        _scrollController.hasClients ? _scrollController.position : null,
+    viewportRectOf: _editorGlobalRect,
+  );
+
+  /// The editor's global rect — the autoscroll edge zone (mouse interactor)
+  /// and the keyboard ensure-visible margin (B4) both measure against it.
+  Rect? _editorGlobalRect() {
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+  }
+
   ScrollController? _ownedScrollController;
   FocusNode? _ownedFocusNode;
 
@@ -98,6 +162,16 @@ class BulletEditorState extends State<BulletEditor>
       (_ownedFocusNode ??= FocusNode(debugLabel: 'BulletEditor'));
 
   Offset? _pointerDownPosition;
+
+  /// Goal-column state for ↑/↓ (architecture §hardware keyboard: geometry-x
+  /// affinity). [_verticalGoalX] is the global x a consecutive vertical run
+  /// holds; [_verticalAnchorExtent] is where the last vertical move left the
+  /// extent. A run continues only while the live extent still equals it —
+  /// any click, edit, horizontal move, or boundary jump changes the extent
+  /// and so recomputes the column from the caret afresh (no per-path reset
+  /// plumbing needed).
+  double? _verticalGoalX;
+  DocPosition? _verticalAnchorExtent;
 
   /// The controller/focus-node pair is attached and detached symmetrically —
   /// one helper pair covers mount, every didUpdateWidget swap combination
@@ -272,20 +346,45 @@ class BulletEditorState extends State<BulletEditor>
     setState(() {}); // caret visibility
   }
 
-  // --- Tap-to-caret (raw Listener: arena-exempt, so it composes with the
-  // link-span recognizers — G11 invariant; interactor recognizers that
-  // compete with the scrollable arrive days 10–13) ---
+  // --- Pointer dispatch by kind (architecture §Gestures). Mouse/trackpad
+  // pointers drive the mouse interactor (click/drag/multi-click/shift-click +
+  // autoscroll); touch/stylus keep the slop-gated tap-to-caret until the
+  // touch interactor lands days 11–13. The raw Listener is arena-exempt, so
+  // both compose with the link-span recognizers — G11 invariant. Mouse drag
+  // does not fight the scrollable: the editor pins a ScrollBehavior whose
+  // dragDevices exclude mouse (see [build]). ---
 
   void _onPointerDown(PointerDownEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerDown(event);
+      return;
+    }
     _pointerDownPosition = event.position;
   }
 
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerMove(event);
+    }
+  }
+
   void _onPointerUp(PointerUpEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerUp(event);
+      return;
+    }
     final down = _pointerDownPosition;
     _pointerDownPosition = null;
     if (down == null) return;
     if ((event.position - down).distance > kTouchSlop) return; // drag/scroll
     _handleTap(event.position);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerCancel(event);
+    }
+    _pointerDownPosition = null;
   }
 
   void _handleTap(Offset globalPosition) {
@@ -298,11 +397,111 @@ class BulletEditorState extends State<BulletEditor>
     widget.controller.requestFocus();
   }
 
+  /// Applies a computed movement [target] (caret_movement.dart) as a collapsed
+  /// caret, or — under Shift ([extend]) — as a base-anchored extension. Null
+  /// targets (no geometry yet, empty doc) no-op. setSelection clamps offsets
+  /// and atomic-normalizes a void target.
+  void _moveTo(DocPosition? target, {required bool extend}) {
+    if (target == null) return;
+    final controller = widget.controller;
+    final sel = controller.selection;
+    controller.setSelection(
+      extend && sel != null
+          ? DocSelection(base: sel.base, extent: target)
+          : DocSelection.collapsed(target),
+    );
+  }
+
+  /// ↑/↓ caret movement with goal-column affinity (B2/B3). Reuses the carried
+  /// [_verticalGoalX] only while this is a consecutive vertical run (the live
+  /// extent still where the last vertical move left it); otherwise it starts a
+  /// fresh column from the current caret. The remembered extent is read back
+  /// AFTER `setSelection` so it matches the void `[0,1)` atomic normalization.
+  void _moveVertically(int direction, {required bool extend}) {
+    final controller = widget.controller;
+    final sel = controller.selection;
+    if (sel == null) return;
+    final goalX = sel.extent == _verticalAnchorExtent ? _verticalGoalX : null;
+    final move = verticalCaretTarget(
+      registry,
+      controller.schema,
+      controller.document,
+      sel,
+      direction,
+      goalX: goalX,
+    );
+    if (move == null) return;
+    _verticalGoalX = move.goalX;
+    _moveTo(move.target, extend: extend);
+    _verticalAnchorExtent = controller.selection?.extent;
+  }
+
+  /// Brings the caret/extent into view after a keyboard movement (B4). Driven
+  /// post-frame from [_onKeyEvent] for every handled key so a move past the
+  /// viewport edge (↑/↓), or a line/document boundary jump (Cmd+arrows),
+  /// scrolls the caret back on-screen. Geometry-based and lazy-viewport safe:
+  /// when the extent block isn't laid out (a document-boundary jump landing
+  /// far off-screen) it scrolls to the matching scroll extreme so the next
+  /// frame lays the block out, then the following pass fine-tunes the margin.
+  void _scheduleEnsureCaretVisible() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ensureCaretVisible();
+    });
+  }
+
+  void _ensureCaretVisible() {
+    if (!_scrollController.hasClients) return;
+    final sel = widget.controller.selection;
+    if (sel == null) return;
+    final position = _scrollController.position;
+    final editorRect = _editorGlobalRect();
+    if (editorRect == null) return;
+
+    final geometry = registry.geometryOf(sel.extent.blockId);
+    final caret = geometry?.rectForOffset(sel.extent.offset);
+    if (geometry == null || caret == null) {
+      // The extent landed on a block the lazy viewport hasn't built (a
+      // document-boundary jump). Scroll toward the block: ahead of the
+      // current band scrolls down, behind it scrolls up. The post-frame
+      // re-schedule below lays it out and re-runs to settle the margin.
+      final index = widget.controller.document.indexOfBlock(sel.extent.blockId);
+      if (index < 0) return;
+      final laidOut = registry.laidOutBlockIds
+          .map(widget.controller.document.indexOfBlock)
+          .where((i) => i >= 0);
+      if (laidOut.isEmpty) return;
+      final ahead = index > laidOut.reduce((a, b) => a > b ? a : b);
+      final target = ahead ? position.maxScrollExtent : position.minScrollExtent;
+      if (target != position.pixels) {
+        position.jumpTo(target);
+        _scheduleEnsureCaretVisible();
+      }
+      return;
+    }
+
+    const margin = 12.0;
+    final box = geometry.renderBox;
+    final caretTop = box.localToGlobal(caret.topLeft).dy;
+    final caretBottom = box.localToGlobal(caret.bottomLeft).dy;
+    double delta = 0;
+    if (caretTop < editorRect.top + margin) {
+      delta = caretTop - (editorRect.top + margin);
+    } else if (caretBottom > editorRect.bottom - margin) {
+      delta = caretBottom - (editorRect.bottom - margin);
+    }
+    if (delta == 0) return;
+    final target = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if (target != position.pixels) position.jumpTo(target);
+  }
+
   // --- Hardware keys (the division of labor: keys the IME doesn't own.
   // Character input goes through the IME delta path exclusively — a
   // hardware character-insert here would double-type against the engine
-  // connection. The composing gate covers ALL handlers below; day 10 adds
-  // the remaining key matrix under the same gate.) ---
+  // connection. The composing gate covers ALL handlers below, including the
+  // day-10 movement matrix.) ---
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     final (:result, :handler, :deferred, :action) = _classifyKeyEvent(event);
@@ -327,21 +526,18 @@ class BulletEditorState extends State<BulletEditor>
       },
     );
     action?.call();
+    // Keep the caret on-screen after any handled key (B4): movement past the
+    // viewport edge, a Cmd-boundary jump, or an edit that pushed the caret out.
+    // Post-frame, so it measures the geometry this key's edit/move produced.
+    if (result == KeyEventResult.handled) _scheduleEnsureCaretVisible();
     return result;
   }
 
   /// The key dispatch decision, split from [_onKeyEvent] so the journal can
   /// record the outcome alongside the event before the verb runs.
-  ({KeyEventResult result, String handler, bool deferred, VoidCallback? action})
-  _classifyKeyEvent(KeyEvent event) {
-    const ignored = (
-      result: KeyEventResult.ignored,
-      handler: 'ignored',
-      deferred: false,
-      action: null,
-    );
-    if (widget.readOnly) return ignored;
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return ignored;
+  _KeyOutcome _classifyKeyEvent(KeyEvent event) {
+    if (widget.readOnly) return _ignored();
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return _ignored();
 
     final controller = widget.controller;
     final pressed = HardwareKeyboard.instance;
@@ -354,31 +550,68 @@ class BulletEditorState extends State<BulletEditor>
       // a composition is live — undo is a first-class composition terminator
       // (G7): the controller restores the pre-composition snapshot and the
       // IME push routes through terminateComposition('undo'), quarantine
-      // armed. Every other key defers through the gate below.
+      // armed.
       if (event.logicalKey == LogicalKeyboardKey.keyZ) {
         return pressed.isShiftPressed
-            ? (
-                result: KeyEventResult.handled,
-                handler: 'redo',
-                deferred: false,
-                action: controller.redo,
-              )
-            : (
-                result: KeyEventResult.handled,
-                handler: 'undo',
-                deferred: false,
-                action: controller.undo,
-              );
+            ? _handled('redo', controller.redo)
+            : _handled('undo', controller.undo);
       }
-      return ignored;
+      // Every OTHER shortcut is gated too — a Cmd+arrow during Japanese
+      // hardware-keyboard conversion must reach the IME (it navigates clause
+      // segments / candidates), not fire a movement that external-edit
+      // terminates the composition. The whitelist above is the only exception.
+      if (controller.composing != null || imeService.engineComposing) {
+        return _deferred();
+      }
+      // Cmd/Ctrl + arrows: line-boundary (←/→) and document-boundary (↑/↓)
+      // movement, Shift-extendable. Part of the day-10 key MATRIX.
+      final extend = pressed.isShiftPressed;
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.arrowLeft:
+          return _handled('moveLineStart', () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                lineBoundaryTarget(registry, sel, false),
+                extend: extend,
+              );
+            }
+          });
+        case LogicalKeyboardKey.arrowRight:
+          return _handled('moveLineEnd', () {
+            final sel = controller.selection;
+            if (sel != null) {
+              _moveTo(
+                lineBoundaryTarget(registry, sel, true),
+                extend: extend,
+              );
+            }
+          });
+        case LogicalKeyboardKey.arrowUp:
+          return _handled(
+            'moveDocStart',
+            () => _moveTo(
+              documentBoundaryTarget(controller.document, false),
+              extend: extend,
+            ),
+          );
+        case LogicalKeyboardKey.arrowDown:
+          return _handled(
+            'moveDocEnd',
+            () => _moveTo(
+              documentBoundaryTarget(controller.document, true),
+              extend: extend,
+            ),
+          );
+      }
+      return _ignored();
     }
 
-    // The full composing gate — day-10 work pulled forward (architecture
-    // §hardware keyboard: "the composing gate covers ALL of keyboard_service,
-    // not just Enter/Backspace — ignore-everything-while-composing with an
-    // explicit whitelist"; the whitelist is the shortcut block above). Day 10
-    // retains only the full key MATRIX (new bindings: ↑/↓ caret movement,
-    // Cmd+arrows, Alt+↑/↓ MoveBlock) — each lands under this same gate.
+    // The full composing gate (architecture §hardware keyboard: "the
+    // composing gate covers ALL of keyboard_service, not just Enter/Backspace
+    // — ignore-everything-while-composing with an explicit whitelist"; the
+    // whitelist is the shortcut block above). The day-10 movement matrix (↑/↓
+    // vertical, Cmd+arrows, Alt+↑/↓ MoveBlock) lands under this same gate.
     // While a composition is live EVERY editing/navigation key belongs to
     // the IME: on macOS the text input plugin is a SECONDARY key responder,
     // so a key event the framework marks handled never reaches
@@ -424,44 +657,29 @@ class BulletEditorState extends State<BulletEditor>
         // proves the keydown-first ordering (Chrome/Firefox — keyCode 229
         // while the composition is live), so the composing-clear this key
         // produces must not arm the commit-key suppression below.
-        return (
-          result: KeyEventResult.skipRemainingHandlers,
-          handler: 'ignored',
-          deferred: true,
-          action: imeService.noteCommitKeyDeferred,
-        );
+        return _deferred(imeService.noteCommitKeyDeferred);
       }
-      return (
-        result: KeyEventResult.skipRemainingHandlers,
-        handler: 'ignored',
-        deferred: true,
-        action: null,
-      );
+      return _deferred();
+    }
+
+    // Safari fires compositionend BEFORE the keydown of the key that ended the
+    // composition, so the commit/cancel key (Enter/Backspace/Tab) arrives past
+    // the gate above with composing already null. The service's one-shot
+    // identifies it: swallow it once, handled, with no effect; the next press is
+    // genuine. (Escape spends the same one-shot in its own case below; arrows
+    // deliberately never consult it.)
+    final committedKey = event.logicalKey;
+    if ((committedKey == LogicalKeyboardKey.enter ||
+            committedKey == LogicalKeyboardKey.numpadEnter ||
+            committedKey == LogicalKeyboardKey.backspace ||
+            committedKey == LogicalKeyboardKey.tab) &&
+        imeService.consumeCommitKeySuppression()) {
+      return _handled('commitKeySuppressed');
     }
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter:
-        // Safari fires compositionend BEFORE the keydown of the key that
-        // ended the composition, so the Enter that COMMITS a conversion
-        // arrives here with `controller.composing` already null — past the
-        // gate above. The service's one-shot suppression (ProseMirror's
-        // `compositionEndedAt` precedent) identifies it: swallow it
-        // handled, no newline; the next Enter is genuine (the consult
-        // disarmed it).
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'insertNewline',
-          deferred: false,
-          action: controller.insertNewline,
-        );
+        return _handled('insertNewline', controller.insertNewline);
       case LogicalKeyboardKey.escape:
         // ProseMirror's other suppressed key: an Escape arriving inside
         // the window is the keydown of the CANCEL that ended the
@@ -469,59 +687,13 @@ class BulletEditorState extends State<BulletEditor>
         // and it must spend the one-shot so the user's next Enter splits.
         // Nothing here handles Escape, so it stays ignored either way —
         // only the arm is consumed (the consult journals the decision).
-        return (
-          result: KeyEventResult.ignored,
-          handler: 'ignored',
-          deferred: false,
-          action: imeService.consumeCommitKeySuppression,
-        );
+        return _ignored(imeService.consumeCommitKeySuppression);
       case LogicalKeyboardKey.backspace:
-        // WebKit's ordering is not Enter-specific — it applies to EVERY
-        // key the IME consumes to end a composition. The captured Safari
-        // session: a lone composed `n` canceled with one Backspace
-        // reflects the composing-clear snapshot FIRST (the n already
-        // deleted), then the trailing Backspace keydown lands here with
-        // the gate open and would eat a genuine character (the block's
-        // period). Same consult, same one-shot.
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
-        return (
-          result: KeyEventResult.handled,
-          handler: 'backspace',
-          deferred: false,
-          action: controller.backspace,
-        );
+        return _handled('backspace', controller.backspace);
       case LogicalKeyboardKey.tab:
-        // Tab cycles candidates in several IMEs and can end a composition
-        // — the same exposure as Backspace: an unsuppressed trailing Tab
-        // would indent/outdent the block the composition just ended in.
-        if (imeService.consumeCommitKeySuppression()) {
-          return (
-            result: KeyEventResult.handled,
-            handler: 'commitKeySuppressed',
-            deferred: false,
-            action: null,
-          );
-        }
         return pressed.isShiftPressed
-            ? (
-                result: KeyEventResult.handled,
-                handler: 'outdent',
-                deferred: false,
-                action: controller.outdent,
-              )
-            : (
-                result: KeyEventResult.handled,
-                handler: 'indent',
-                deferred: false,
-                action: controller.indent,
-              );
+            ? _handled('outdent', controller.outdent)
+            : _handled('indent', controller.indent);
       // Arrows (and the unhandled Home/End) deliberately do NOT consult
       // the one-shot: a trailing post-compositionend arrow only moves the
       // caret — nothing destructive happens — and the selection change it
@@ -530,22 +702,42 @@ class BulletEditorState extends State<BulletEditor>
       // (Enter/Backspace/Tab above; Escape spends the arm without
       // handling).
       case LogicalKeyboardKey.arrowLeft:
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretBack',
-          deferred: false,
-          action: () => controller.moveCaret(-1),
+        return _handled(
+          'moveCaretBack',
+          () => controller.moveCaret(-1, extend: pressed.isShiftPressed),
         );
       case LogicalKeyboardKey.arrowRight:
-        return (
-          result: KeyEventResult.handled,
-          handler: 'moveCaretForward',
-          deferred: false,
-          action: () => controller.moveCaret(1),
+        return _handled(
+          'moveCaretForward',
+          () => controller.moveCaret(1, extend: pressed.isShiftPressed),
+        );
+      case LogicalKeyboardKey.arrowUp:
+        // Alt+↑ moves the block (MoveBlock); a plain ↑ moves the caret up a
+        // line (geometry-x affinity), Shift-extendable.
+        if (pressed.isAltPressed) {
+          return _handled(
+            'moveBlockUp',
+            () => controller.moveBlock(MoveDirection.up),
+          );
+        }
+        return _handled(
+          'moveCaretUp',
+          () => _moveVertically(-1, extend: pressed.isShiftPressed),
+        );
+      case LogicalKeyboardKey.arrowDown:
+        if (pressed.isAltPressed) {
+          return _handled(
+            'moveBlockDown',
+            () => controller.moveBlock(MoveDirection.down),
+          );
+        }
+        return _handled(
+          'moveCaretDown',
+          () => _moveVertically(1, extend: pressed.isShiftPressed),
         );
     }
 
-    return ignored;
+    return _ignored();
   }
 
   @override
@@ -574,7 +766,9 @@ class BulletEditorState extends State<BulletEditor>
         onKeyEvent: _onKeyEvent,
         child: Listener(
           onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           behavior: HitTestBehavior.opaque,
           // I-beam over editor content. Per-segment refinement (click over
           // links, basic over voids) is interactor-side, day 14.
@@ -589,11 +783,36 @@ class BulletEditorState extends State<BulletEditor>
             child: NotificationListener<ScrollNotification>(
               onNotification: (_) {
                 imeService.scheduleGeometryReport();
+                // While a drag is active, every scroll notification — wheel,
+                // trackpad, or the autoscroll ticker — schedules a post-frame
+                // re-hit-test under the stationary pointer so the extent
+                // tracks the pointer's visual position (G5).
+                if (_mouseInteractor.isDragging) _mouseInteractor.onScroll();
                 return false;
               },
-              child: CustomScrollView(
-                controller: _scrollController,
-                slivers: [sliver],
+              child: ScrollConfiguration(
+                // Force mouse out of the scrollable's drag devices so mouse
+                // drag-select is never claimed by it (architecture §Gestures:
+                // the dragDevices-excludes-mouse invariant). The set is the
+                // framework default MINUS mouse only — trackpad must stay in,
+                // or two-finger (trackpad-pan) scrolling dies with it (the
+                // day-10 manual-test regression B1). We keep the ambient
+                // behavior's scrollbars/overscroll but override dragDevices,
+                // so an app that enabled mouse-drag scrolling (common on web)
+                // cannot reintroduce the two-writers pathology under the
+                // editor.
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  dragDevices: const {
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.stylus,
+                    PointerDeviceKind.invertedStylus,
+                    PointerDeviceKind.trackpad,
+                  },
+                ),
+                child: CustomScrollView(
+                  controller: _scrollController,
+                  slivers: [sliver],
+                ),
               ),
             ),
           ),

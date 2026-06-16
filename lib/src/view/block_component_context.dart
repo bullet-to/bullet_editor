@@ -9,8 +9,8 @@ import '../schema/editor_schema.dart';
 /// components consume only this tuple, so a computed view-model layer can be
 /// inserted behind it later without touching components.
 ///
-/// The block-local selection slice is [caretOffset] + [isSelected] today;
-/// day 10 widens it with the range-highlight slice. The reserved
+/// The block-local selection slice is [caretOffset] + [isSelected] +
+/// [selectionHighlight] (the day-10 range slice). The reserved
 /// [BlockDef.semanticsBuilder] hook covers future editing semantics (GATE-A).
 class BlockComponentContext {
   const BlockComponentContext({
@@ -21,6 +21,7 @@ class BlockComponentContext {
     this.caretOffset,
     this.composing,
     this.isSelected = false,
+    this.selectionHighlight,
     this.onLinkTap,
   });
 
@@ -45,9 +46,16 @@ class BlockComponentContext {
   /// (G3 visibility: CJK marked text must not look committed).
   final TextRange? composing;
 
-  /// Whether this (void) block is atomically selected — its `[0,1)` is the
-  /// whole selection (D3). Range-spanning selection slices arrive day 10.
+  /// Whether this (void) block is atomically selected — its `[0,1)` lies
+  /// inside the current selection range (D3): a click/tap on the void, or a
+  /// multi-block range sweeping over it.
   final bool isSelected;
+
+  /// The block-local text range covered by a non-collapsed selection, when
+  /// this text block intersects it; null otherwise. The component paints it
+  /// as the selection highlight behind the text (§per-block painting order:
+  /// highlight → composing underline → caret).
+  final TextRange? selectionHighlight;
 
   /// Link/entity tap surface (D3) — driven by the link-span recognizers in
   /// the default text component.

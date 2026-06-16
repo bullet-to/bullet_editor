@@ -51,6 +51,15 @@ class BlockListView extends StatelessWidget {
       for (var i = 0; i < roots.length; i++) roots[i].id: i,
     };
 
+    // The per-block selection slices, computed once from the doc-global
+    // selection + flat order (the one place with the Document). BlockSubtree
+    // stays Document-free: it reads its own value-comparable slice by id.
+    final (textHighlights, selectedVoids) = _selectionSlices(
+      document,
+      schema,
+      selection,
+    );
+
     return SliverList(
       delegate: SliverChildBuilderDelegate(
         (context, index) {
@@ -69,6 +78,8 @@ class BlockListView extends StatelessWidget {
               isFirstInDocument: index == 0,
               containsDocumentEnd: index == roots.length - 1,
               selection: selection,
+              textHighlights: textHighlights,
+              selectedVoids: selectedVoids,
               composing: composing,
               showCaret: showCaret,
               schema: schema,
@@ -99,6 +110,54 @@ class BlockListView extends StatelessWidget {
 TextBlock _lastDescendant(TextBlock block) =>
     block.children.isEmpty ? block : _lastDescendant(block.children.last);
 
+/// The per-block selection slices for a non-collapsed selection: the
+/// block-local text range each intersected text block paints as highlight,
+/// and the set of void blocks whose `[0,1)` lies inside the range (the
+/// midpoint-resolved drag includes a swept void in either direction — G5).
+/// Collapsed/absent selections produce empty slices (the caret paints
+/// separately).
+(Map<String, TextRange>, Set<String>) _selectionSlices(
+  Document document,
+  EditorSchema schema,
+  DocSelection? selection,
+) {
+  if (selection == null || selection.isCollapsed) {
+    return (const {}, const {});
+  }
+  final (start, end) = selection.normalized(document);
+  final startIdx = document.indexOfBlock(start.blockId);
+  final endIdx = document.indexOfBlock(end.blockId);
+  if (startIdx < 0 || endIdx < 0) return (const {}, const {});
+
+  final flat = document.allBlocks;
+  final text = <String, TextRange>{};
+  final voids = <String>{};
+  for (var i = startIdx; i <= endIdx; i++) {
+    final block = flat[i];
+    if (schema.isVoid(block.blockType)) {
+      // The void's [0,1) is covered when the range reaches offset 0 at its
+      // start edge and offset >= 1 at its end edge (a strictly-interior void
+      // is always covered).
+      final coversStart = i > startIdx || start.offset == 0;
+      final coversEnd = i < endIdx || end.offset >= 1;
+      if (coversStart && coversEnd) voids.add(block.id);
+      continue;
+    }
+    final from = i == startIdx ? start.offset : 0;
+    final to = i == endIdx ? end.offset : block.length;
+    if (to > from) {
+      text[block.id] = TextRange(start: from, end: to);
+    } else if (block.length == 0 && i < endIdx) {
+      // An empty line the selection passes through (its trailing newline is
+      // inside the range): a collapsed-range sentinel asks the painter for a
+      // short sliver so the line doesn't read as a hole in the band. Empty
+      // END lines (selection stops at their start) get nothing.
+      text[block.id] = const TextRange(start: 0, end: 0);
+    }
+  }
+  return (text, voids);
+}
+
 /// Renders one block — gutter slot (prefixBuilder) + component — plus its
 /// children Column, recursing through the componentBuilder registry.
 ///
@@ -120,6 +179,8 @@ class BlockSubtree extends StatelessWidget {
     required this.schema,
     required this.baseStyle,
     this.selection,
+    this.textHighlights = const {},
+    this.selectedVoids = const {},
     this.composing,
     this.showCaret = false,
     this.onLinkTap,
@@ -138,9 +199,15 @@ class BlockSubtree extends StatelessWidget {
   /// Whether this subtree's last descendant is the document's last block.
   final bool containsDocumentEnd;
 
-  /// The document selection; this widget derives only same-block slices
-  /// (caret offset, void atomic selection), so no [Document] is needed.
+  /// The document selection; this widget derives only the same-block caret
+  /// offset from it (the range slices arrive precomputed below), so no
+  /// [Document] is needed.
   final DocSelection? selection;
+
+  /// blockId → block-local highlight range, and the set of range-selected
+  /// void ids — precomputed by [BlockListView] (the value-comparable slices).
+  final Map<String, TextRange> textHighlights;
+  final Set<String> selectedVoids;
 
   /// The doc-global composing state; only the same-block range slice is
   /// handed to the component.
@@ -166,15 +233,12 @@ class BlockSubtree extends StatelessWidget {
   TextRange? get _composingRange =>
       composing?.blockId == block.id ? composing!.range : null;
 
-  /// Whether this block is atomically selected (a void's whole-block
-  /// selection: both endpoints in this block, non-collapsed).
-  bool get _isSelected {
-    final sel = selection;
-    return sel != null &&
-        !sel.isCollapsed &&
-        sel.base.blockId == block.id &&
-        sel.extent.blockId == block.id;
-  }
+  /// Whether this (void) block's `[0,1)` lies inside the selection range.
+  bool get _isSelected => selectedVoids.contains(block.id);
+
+  /// The block-local highlight range when this text block intersects the
+  /// selection range.
+  TextRange? get _selectionHighlight => textHighlights[block.id];
 
   @override
   Widget build(BuildContext context) {
@@ -197,6 +261,7 @@ class BlockSubtree extends StatelessWidget {
       caretOffset: _caretOffset,
       composing: _composingRange,
       isSelected: _isSelected,
+      selectionHighlight: _selectionHighlight,
       onLinkTap: onLinkTap,
     );
 
@@ -272,6 +337,8 @@ class BlockSubtree extends StatelessWidget {
           containsDocumentEnd:
               containsDocumentEnd && i == block.children.length - 1,
           selection: selection,
+          textHighlights: textHighlights,
+          selectedVoids: selectedVoids,
           composing: composing,
           showCaret: showCaret,
           schema: schema,

@@ -1,0 +1,332 @@
+import 'package:flutter/gestures.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+
+import '../model/doc_selection.dart';
+import '../model/document.dart';
+import 'block_layout_registry.dart';
+import 'editor_hit_tester.dart';
+
+/// Selection gestures for mouse/trackpad-kind pointers, on every platform
+/// (architecture §Gestures: per-kind dispatch, not platform-at-build — iPad
+/// Magic Keyboard and Android mouse are launch surfaces, and the mouse
+/// interactor is web's only selection path, never-cut).
+///
+/// Click places a caret (voids atomic-select `[0,1)`); double-click selects
+/// the word (`wordBoundaryAt`); triple-click the whole block; shift-click and
+/// press-drag extend from the recorded `expandBase` (G6). A drag updates the
+/// extent each move via the shared hit tester, autoscrolls in the viewport
+/// edge zone, and — through [onScroll] — re-hit-tests under the stationary
+/// pointer on every scroll notification so wheel/trackpad scroll mid-drag
+/// tracks the pointer's visual position (G5). A swept void is selected the
+/// moment the drag enters its box (resolved by direction in
+/// [_resolveSweptVoid], the web feel — D6), not at its vertical midpoint. The
+/// final selection is exact by construction: a void-edge collapse normalizes
+/// to the atomic selection in `setSelection`.
+///
+/// The interactor owns no widgets — `BulletEditorState` feeds it pointer
+/// events (dispatched by `PointerDeviceKind`) and scroll notifications, and
+/// supplies the document/selection/scroll surfaces as callbacks so the
+/// interactor stays render-agnostic and unit-reachable.
+class MouseInteractor {
+  MouseInteractor({
+    required this.registry,
+    required this.documentOf,
+    required this.isVoid,
+    required void Function(DocSelection selection) setSelection,
+    required this.requestFocus,
+    required this.scrollPositionOf,
+    required this.viewportRectOf,
+  }) : _rawSetSelection = setSelection;
+
+  final BlockLayoutRegistry registry;
+  final Document Function() documentOf;
+
+  /// Whether a block is a void (image, divider) — drag selection resolves a
+  /// swept void by direction (D6), not the geometry's midpoint rule.
+  final bool Function(String blockId) isVoid;
+
+  final void Function(DocSelection selection) _rawSetSelection;
+  final void Function() requestFocus;
+
+  /// The editor's scroll position, or null before the viewport is laid out.
+  final ScrollPosition? Function() scrollPositionOf;
+
+  /// The editor viewport's global rect, for the autoscroll edge zone.
+  final Rect? Function() viewportRectOf;
+
+  /// Distance from a viewport edge within which a drag autoscrolls.
+  static const _edgeZone = 50.0;
+
+  /// Peak autoscroll speed in **pixels per second** (reached when the pointer
+  /// is a full [_edgeZone] past the viewport edge). A per-second rate, not a
+  /// per-frame step, so the physical scroll speed is identical at 60Hz and
+  /// 120Hz and doesn't stutter when frame delivery is uneven — the tick scales
+  /// it by real elapsed time (manual-test B5: fixed-per-frame steps jittered
+  /// under ProMotion's variable refresh). Tuned for a snappy full-depth scroll
+  /// (the ramp keeps it gentle near the boundary).
+  static const _autoScrollMaxVelocity = 1800.0;
+
+  /// The anchored selection a drag/shift-click extends from — the click point
+  /// (collapsed), the double-clicked word, or the triple-clicked block. Never
+  /// shrunk below its own granularity while extending (native word/block
+  /// drag). Survives across edits only as data: every use routes back through
+  /// [setSelection], which clamps stale offsets and rejects gone ids (the
+  /// stale-anchor invalidation — a queued delta that shortened the block
+  /// cannot produce an out-of-bounds shift-click).
+  DocSelection? _expandBase;
+
+  /// The last selection this interactor pushed. A drag re-hit-tests on every
+  /// pointer move AND on every scroll notification (wheel, trackpad, autoscroll
+  /// tick) — frequently resolving the SAME offset for consecutive samples. We
+  /// push only on an actual change so the editor doesn't rebuild (and the caret
+  /// doesn't visibly flicker) on no-op samples (manual-test B5). Compared
+  /// pre-normalization, which is fine: a stable input maps to a stable output.
+  DocSelection? _lastPushed;
+
+  void _setSelection(DocSelection selection) {
+    if (selection == _lastPushed) return;
+    _lastPushed = selection;
+    _rawSetSelection(selection);
+  }
+
+  bool _dragging = false;
+  Offset? _dragPointer;
+  bool get isDragging => _dragging;
+
+  // Multi-click bookkeeping (timeStamp/position deltas, the SerialTap rule).
+  Duration? _lastDownTime;
+  Offset? _lastDownPosition;
+  int _clickCount = 0;
+
+  // Autoscroll ticker. Velocity is in pixels/second (signed); the tick scales
+  // it by the real interval since [_lastAutoScrollTick] so speed is frame-rate
+  // independent.
+  double _autoScrollVelocity = 0;
+  bool _autoScrollScheduled = false;
+  bool _rehitScheduled = false;
+  Duration? _lastAutoScrollTick;
+
+  Document get _doc => documentOf();
+
+  void handlePointerDown(PointerDownEvent event) {
+    if (event.buttons != kPrimaryMouseButton) return;
+    requestFocus();
+    // Start each gesture with a clean dedup baseline: the selection may have
+    // moved since our last push (a keyboard caret move between clicks), so the
+    // first push of this gesture must always go through.
+    _lastPushed = null;
+    final global = event.position;
+    _dragPointer = global;
+    _dragging = true;
+
+    if (HardwareKeyboard.instance.isShiftPressed && _expandBase != null) {
+      // Shift-click extends from the existing anchor; the anchor is unchanged.
+      _clickCount = 0;
+      _lastDownTime = null;
+      final hit = hitTestDocPosition(registry, global);
+      if (hit != null) _extendTo(hit);
+      return;
+    }
+
+    _clickCount = _isConsecutive(event.timeStamp, global) ? _clickCount + 1 : 1;
+    _lastDownTime = event.timeStamp;
+    _lastDownPosition = global;
+
+    final hit = hitTestDocPosition(registry, global);
+    if (hit == null) return;
+    final anchor = _selectionForClick(hit, _clickCount);
+    _expandBase = anchor;
+    _setSelection(anchor);
+  }
+
+  void handlePointerMove(PointerMoveEvent event) {
+    if (!_dragging) return;
+    _dragPointer = event.position;
+    final hit = hitTestDocPosition(registry, event.position);
+    if (hit != null) _extendTo(hit);
+    _updateAutoScroll(event.position);
+  }
+
+  void handlePointerUp(PointerUpEvent event) {
+    _endDrag();
+  }
+
+  void handlePointerCancel(PointerCancelEvent event) {
+    _endDrag();
+  }
+
+  void _endDrag() {
+    _dragging = false;
+    _dragPointer = null;
+    _autoScrollVelocity = 0;
+    _lastAutoScrollTick = null;
+  }
+
+  /// Re-hit-test under the stationary pointer after a scroll (autoscroll tick,
+  /// wheel, or trackpad) committed and the sliver re-laid the revealed
+  /// content — scheduled post-frame so the hit always lands on laid-out
+  /// content, never an estimate (G5). Called by the editor's scroll-
+  /// notification listener while a drag is active.
+  void onScroll() {
+    if (!_dragging || _dragPointer == null || _rehitScheduled) return;
+    _rehitScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _rehitScheduled = false;
+      final pointer = _dragPointer;
+      if (!_dragging || pointer == null) return;
+      final hit = hitTestDocPosition(registry, pointer);
+      if (hit != null) _extendTo(hit);
+    });
+  }
+
+  bool _isConsecutive(Duration time, Offset position) {
+    final lastTime = _lastDownTime;
+    final lastPosition = _lastDownPosition;
+    if (lastTime == null || lastPosition == null) return false;
+    return time - lastTime < kDoubleTapTimeout &&
+        (position - lastPosition).distance < kDoubleTapSlop;
+  }
+
+  /// The selection a click of [clickCount] at [hit] produces. Voids
+  /// atomic-select regardless of count (no word/block granularity); text
+  /// blocks: caret (1), word (2), whole block (3+, wrapping).
+  DocSelection _selectionForClick(DocPosition hit, int clickCount) {
+    final block = _doc.blockById(hit.blockId);
+    if (block == null) return DocSelection.collapsed(hit);
+
+    final geometry = registry.geometryOf(hit.blockId);
+    // A void hit (midpoint-resolved 0/1) collapses onto the void, which
+    // setSelection normalizes to the atomic [0,1) selection.
+    if (geometry == null) return DocSelection.collapsed(hit);
+
+    switch (clickCount) {
+      case 2:
+        final word = geometry.wordBoundaryAt(hit.offset);
+        return DocSelection(
+          base: DocPosition(hit.blockId, word.start),
+          extent: DocPosition(hit.blockId, word.end),
+        );
+      case 3:
+        return DocSelection(
+          base: DocPosition(hit.blockId, 0),
+          extent: DocPosition(hit.blockId, block.length),
+        );
+      default:
+        return DocSelection.collapsed(hit);
+    }
+  }
+
+  /// Extends the current drag/shift selection to [point], oriented in
+  /// document order against the anchor and never shrinking the anchor's own
+  /// word/block span (native multi-click-drag behavior).
+  void _extendTo(DocPosition point) {
+    final anchor = _expandBase;
+    if (anchor == null) {
+      _setSelection(DocSelection.collapsed(point));
+      return;
+    }
+    final (start, end) = anchor.normalized(_doc);
+    point = _resolveSweptVoid(point, start);
+    final DocSelection extended;
+    if (_compare(point, start) < 0) {
+      extended = DocSelection(base: end, extent: point);
+    } else if (_compare(point, end) > 0) {
+      extended = DocSelection(base: start, extent: point);
+    } else {
+      extended = anchor;
+    }
+    _setSelection(extended);
+  }
+
+  /// Selects a swept void the moment the drag enters its box (D6, web feel),
+  /// not at its vertical midpoint: resolve the void edge by drag direction so
+  /// its `[0,1)` is covered — downstream (`1`) when it sits at/after the
+  /// anchor (dragging down onto it), upstream (`0`) when before (dragging up).
+  /// The geometry's midpoint rule still answers a plain click (which
+  /// normalizes to the atomic selection either way). A void that IS the anchor
+  /// passes through untouched.
+  DocPosition _resolveSweptVoid(DocPosition point, DocPosition anchorStart) {
+    if (!isVoid(point.blockId)) return point;
+    final voidIndex = _doc.indexOfBlock(point.blockId);
+    final anchorIndex = _doc.indexOfBlock(anchorStart.blockId);
+    return DocPosition(point.blockId, voidIndex >= anchorIndex ? 1 : 0);
+  }
+
+  /// Document order of two positions: by flat block index, then offset.
+  int _compare(DocPosition a, DocPosition b) {
+    final ia = _doc.indexOfBlock(a.blockId);
+    final ib = _doc.indexOfBlock(b.blockId);
+    if (ia != ib) return ia.compareTo(ib);
+    return a.offset.compareTo(b.offset);
+  }
+
+  // --- Autoscroll (edge zone) ---
+
+  void _updateAutoScroll(Offset globalPointer) {
+    final viewport = viewportRectOf();
+    if (viewport == null) {
+      _autoScrollVelocity = 0;
+      return;
+    }
+    final previousVelocity = _autoScrollVelocity;
+    final topZone = viewport.top + _edgeZone;
+    final bottomZone = viewport.bottom - _edgeZone;
+    // Velocity RAMPS with how far the pointer has penetrated the edge zone
+    // (0 at the boundary, full speed a zone-width past the edge) rather than
+    // snapping between 0 and a fixed step. A binary on/off velocity stutters
+    // when the pointer hovers near the boundary — every micro-movement flips
+    // it (manual-test B5). The ramp eases that to zero instead.
+    if (globalPointer.dy < topZone) {
+      final depth = ((topZone - globalPointer.dy) / _edgeZone).clamp(0.0, 1.0);
+      _autoScrollVelocity = -_autoScrollMaxVelocity * depth;
+    } else if (globalPointer.dy > bottomZone) {
+      final depth = ((globalPointer.dy - bottomZone) / _edgeZone).clamp(0.0, 1.0);
+      _autoScrollVelocity = _autoScrollMaxVelocity * depth;
+    } else {
+      _autoScrollVelocity = 0;
+      return;
+    }
+    if (previousVelocity == 0) {
+      _lastAutoScrollTick = null; // fresh interval baseline for the first tick
+    }
+    if (!_autoScrollScheduled) {
+      _autoScrollScheduled = true;
+      SchedulerBinding.instance.scheduleFrameCallback(_autoScrollTick);
+      SchedulerBinding.instance.scheduleFrame();
+    }
+  }
+
+  void _autoScrollTick(Duration timeStamp) {
+    _autoScrollScheduled = false;
+    if (!_dragging || _autoScrollVelocity == 0) {
+      _lastAutoScrollTick = null;
+      return;
+    }
+    final position = scrollPositionOf();
+    if (position == null) return;
+
+    // Scale the per-second velocity by the REAL interval since the last tick,
+    // so physical scroll speed is identical regardless of refresh rate and
+    // doesn't jitter when frames land at uneven intervals. The first tick of a
+    // run (null baseline) assumes a nominal 60Hz frame so it still advances.
+    final last = _lastAutoScrollTick;
+    _lastAutoScrollTick = timeStamp;
+    final dtSeconds = last == null
+        ? 1 / 60
+        : (timeStamp - last).inMicroseconds / Duration.microsecondsPerSecond;
+    final target = (position.pixels + _autoScrollVelocity * dtSeconds).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    // jumpTo dispatches a ScrollNotification; the editor's listener routes it
+    // back through onScroll, which re-hit-tests the extent under the
+    // stationary pointer post-frame. No extent update here — one path.
+    if (target != position.pixels) position.jumpTo(target);
+    // Keep ticking while the pointer stays in the edge zone.
+    _autoScrollScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback(_autoScrollTick);
+    SchedulerBinding.instance.scheduleFrame();
+  }
+}
