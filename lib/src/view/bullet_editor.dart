@@ -10,6 +10,7 @@ import 'block_layout_registry.dart';
 import 'block_list_view.dart';
 import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
+import 'mouse_interactor.dart';
 
 /// The v3 editor root widget: lazy render through the component registry,
 /// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
@@ -85,6 +86,23 @@ class BulletEditorState extends State<BulletEditor>
   /// The IME delta frontend — one service per attached controller. Exposed
   /// for the inspector pane and for tests that drive engine deltas.
   late ImeService imeService;
+
+  /// Mouse/trackpad selection gestures (architecture §Gestures, per-kind
+  /// dispatch). Touch/stylus gestures (long-press, handles, magnifier) arrive
+  /// days 11–13; today touch keeps the slop-gated tap-to-caret below.
+  late final MouseInteractor _mouseInteractor = MouseInteractor(
+    registry: registry,
+    documentOf: () => widget.controller.document,
+    setSelection: (selection) => widget.controller.setSelection(selection),
+    requestFocus: () => widget.controller.requestFocus(),
+    scrollPositionOf: () =>
+        _scrollController.hasClients ? _scrollController.position : null,
+    viewportRectOf: () {
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+      return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    },
+  );
 
   ScrollController? _ownedScrollController;
   FocusNode? _ownedFocusNode;
@@ -272,20 +290,45 @@ class BulletEditorState extends State<BulletEditor>
     setState(() {}); // caret visibility
   }
 
-  // --- Tap-to-caret (raw Listener: arena-exempt, so it composes with the
-  // link-span recognizers — G11 invariant; interactor recognizers that
-  // compete with the scrollable arrive days 10–13) ---
+  // --- Pointer dispatch by kind (architecture §Gestures). Mouse/trackpad
+  // pointers drive the mouse interactor (click/drag/multi-click/shift-click +
+  // autoscroll); touch/stylus keep the slop-gated tap-to-caret until the
+  // touch interactor lands days 11–13. The raw Listener is arena-exempt, so
+  // both compose with the link-span recognizers — G11 invariant. Mouse drag
+  // does not fight the scrollable: the editor pins a ScrollBehavior whose
+  // dragDevices exclude mouse (see [build]). ---
 
   void _onPointerDown(PointerDownEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerDown(event);
+      return;
+    }
     _pointerDownPosition = event.position;
   }
 
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerMove(event);
+    }
+  }
+
   void _onPointerUp(PointerUpEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerUp(event);
+      return;
+    }
     final down = _pointerDownPosition;
     _pointerDownPosition = null;
     if (down == null) return;
     if ((event.position - down).distance > kTouchSlop) return; // drag/scroll
     _handleTap(event.position);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.kind == PointerDeviceKind.mouse) {
+      _mouseInteractor.handlePointerCancel(event);
+    }
+    _pointerDownPosition = null;
   }
 
   void _handleTap(Offset globalPosition) {
@@ -574,7 +617,9 @@ class BulletEditorState extends State<BulletEditor>
         onKeyEvent: _onKeyEvent,
         child: Listener(
           onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           behavior: HitTestBehavior.opaque,
           // I-beam over editor content. Per-segment refinement (click over
           // links, basic over voids) is interactor-side, day 14.
@@ -589,11 +634,32 @@ class BulletEditorState extends State<BulletEditor>
             child: NotificationListener<ScrollNotification>(
               onNotification: (_) {
                 imeService.scheduleGeometryReport();
+                // While a drag is active, every scroll notification — wheel,
+                // trackpad, or the autoscroll ticker — schedules a post-frame
+                // re-hit-test under the stationary pointer so the extent
+                // tracks the pointer's visual position (G5).
+                if (_mouseInteractor.isDragging) _mouseInteractor.onScroll();
                 return false;
               },
-              child: CustomScrollView(
-                controller: _scrollController,
-                slivers: [sliver],
+              child: ScrollConfiguration(
+                // Force mouse out of the scrollable's drag devices so mouse
+                // drag-select is never claimed by it (architecture §Gestures:
+                // the dragDevices-excludes-mouse invariant). We keep the
+                // ambient behavior's scrollbars/overscroll but override
+                // dragDevices, so an app that enabled mouse-drag scrolling
+                // (common on web) cannot reintroduce the two-writers
+                // pathology under the editor.
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  dragDevices: const {
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.stylus,
+                    PointerDeviceKind.invertedStylus,
+                  },
+                ),
+                child: CustomScrollView(
+                  controller: _scrollController,
+                  slivers: [sliver],
+                ),
               ),
             ),
           ),
