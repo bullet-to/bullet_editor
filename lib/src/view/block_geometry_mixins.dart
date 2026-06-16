@@ -85,9 +85,17 @@ mixin BlockGeometryMixin<T extends StatefulWidget>
     final position = TextPosition(offset: offset);
     final caretOffset = paragraph.getOffsetForCaret(position, Rect.zero);
     // getFullHeightForCaret can return a shorter height after trailing
-    // whitespace (iOS space-glyph metrics); clamp to the line height.
-    final height = paragraph.getFullHeightForCaret(position)
-        .clamp(paragraph.preferredLineHeight, double.infinity);
+    // whitespace (iOS space-glyph metrics); clamp to the line height so the
+    // painted caret and the IME candidate-window anchor stay full-height.
+    // preferredLineHeight is exactly that value but RenderParagraph marks it
+    // @visibleForTesting and exposes no public equivalent — reconstructing a
+    // parallel TextPainter to dodge the lint would duplicate the paragraph's
+    // config and allocate per query, so we use the framework's own value.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final lineHeight = paragraph.preferredLineHeight;
+    final height = paragraph
+        .getFullHeightForCaret(position)
+        .clamp(lineHeight, double.infinity);
     return caretOffset & Size(1, height);
   }
 

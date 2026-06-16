@@ -602,8 +602,18 @@ class ImeService extends ChangeNotifier
   /// transliteration: "namaste" → "नमस्ते") send the transliteration delta
   /// AFTER the action — firing `imeInsertNewline()` eagerly in performAction
   /// would reset the shadow and stale-drop the transliteration. Instead,
-  /// performAction sets this flag and defers to the delta batch; if no batch
-  /// arrives by the end of the frame, a post-frame callback fires the newline.
+  /// performAction sets this flag and the flush ([_flushPendingNewline])
+  /// runs at the END of the accompanying batch, after the batch's text has
+  /// landed.
+  ///
+  /// A batch always accompanies the action on the supported platforms:
+  /// macOS intercepts `insertNewline:` and reports Enter as an insertText
+  /// `"\n"` delta plus the action (see [performSelector]); iOS sends the
+  /// `"\n"` (or the commit-on-Enter transliteration) delta right behind the
+  /// action. A bare `"\n"` delta in that batch performs the split itself and
+  /// clears this flag ([_insertParts]) so the flush is a no-op — exactly one
+  /// split. Tests that exercise performAction without scripting the
+  /// follow-up batch fire the flush directly via [flushPendingNewline].
   bool _pendingNewlineAction = false;
 
   /// The one-shot commit-key suppression's arming timestamp
@@ -1083,7 +1093,7 @@ class ImeService extends ChangeNotifier
     // the correct (pre-split) shadow. If the flag is still live (the batch
     // had no \n), fire the deferred newline now — the transliteration has
     // landed and the split goes in the right place.
-    if (_pendingNewlineAction) _flushPendingNewline();
+    _flushPendingNewline();
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1365,7 +1375,7 @@ class ImeService extends ChangeNotifier
       _staleComposingLatch = composing;
     }
     _restoreSentinelSuppressedSelection(sentinelSelection);
-    if (_pendingNewlineAction) _flushPendingNewline();
+    _flushPendingNewline();
     _scheduleGeometryReport();
     notifyListeners();
   }
@@ -1996,8 +2006,9 @@ class ImeService extends ChangeNotifier
     // (the delta removes the sentinel space; our model always preserves
     // it), killing subsequent deltas as stale. Fix: compute the batch's
     // net text effect as a single diff against the pre-batch shadow and
-    // process that one synthetic delta — identical to how the diff
-    // frontend handles every snapshot.
+    // process that one synthetic delta — borrowing the diff frontend's
+    // net-diff-then-synthesize strategy. See [_processSentinelOverlapBatch]
+    // for why the snapshot path's composing/stale filters are not re-run.
     if (_hasSentinelOverlappingDeletion(deltas)) {
       _processSentinelOverlapBatch(deltas, quarantine);
       return;
@@ -2098,8 +2109,27 @@ class ImeService extends ChangeNotifier
   /// Reprocesses [deltas] whose per-delta application would fail because a
   /// deletion overlaps the sentinel. Walks the raw delta chain to compute
   /// the engine's final state, diffs it against the pre-batch shadow, and
-  /// processes the net effect as a single synthetic delta — the same
-  /// strategy the diff frontend applies to every snapshot.
+  /// processes the net effect as a single synthetic delta — borrowing the
+  /// diff frontend's net-diff-then-synthesize core ([diffTexts] +
+  /// [_synthesizeDelta]).
+  ///
+  /// This is the tail of [_processBatch], which BOTH frontends share: the
+  /// delta frontend arrives with raw engine deltas, the diff frontend with
+  /// the single delta [updateEditingValue] already synthesized from a
+  /// snapshot (the class doc's "routed through the SAME batch path"). So the
+  /// snapshot path's composing/stale filters ([_filterStaleComposing],
+  /// [_suppressComposingBirth], the previous-shadow drop, `deadKeyRewrite`,
+  /// [_passiveDivergence]) are deliberately NOT re-run here: on the diff
+  /// frontend they already ran upstream before the delta reached
+  /// [_processBatch]; on the delta frontend they have no snapshot to act on.
+  /// Re-running them would double-filter, not close a gap — only
+  /// [_sanitizeComposing] (cheap, idempotent) and the net-insertion echo
+  /// quarantine remain.
+  ///
+  /// The one synthesized delta is applied directly rather than routed back
+  /// through [_processBatch]: the net diff of a sentinel-overlapping batch
+  /// can itself be sentinel-overlapping, so re-routing would re-enter this
+  /// method forever.
   void _processSentinelOverlapBatch(
     List<TextEditingDelta> deltas,
     ({String text, int offset})? quarantine,
@@ -2619,6 +2649,9 @@ class ImeService extends ChangeNotifier
         edited = _editedFromCaret(part);
       }
       if (i < parts.length - 1) {
+        // This batch carries its own `\n`, so it splits here — a deferred
+        // performAction(newline) is now fulfilled; clear it so the batch-end
+        // flush doesn't split a second time.
         _pendingNewlineAction = false;
         controller.imeInsertNewline();
         edited = null;
