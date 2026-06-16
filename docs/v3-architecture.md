@@ -481,11 +481,14 @@ Two op-vocabulary changes, owned by days 1–2 / day 10:
 - **`MoveBlock` is a NEW op (~60 LOC)** — it does not exist in v2 (the vocabulary is
   Insert/Delete/Toggle/Split/Merge/ChangeType/DeleteRange/Remove/Paste/SetMetadata/Indent/
   Outdent; Indent/Outdent change depth, not sibling order). It moves a block **with its subtree
-  intact** one position up/down among its siblings. Launch boundary policy (recorded decision):
-  movement is within the current parent only — Alt+↑ on a first sibling / Alt+↓ on a last sibling
-  is a no-op; cross-parent hoisting rides the post-launch drag-reorder work. Undo is the usual
-  snapshot; selection follows by id for free. This is the D10 launch-gap coverage ("keyboard-based
-  move can cover the gap"), scheduled on day 10 with its Alt+↑/↓ bindings.
+  intact** one position up/down among its siblings. Launch boundary policy (recorded decision,
+  **confirmed after day-10 manual testing — D7**): movement is within the current parent only —
+  Alt+↑ on a first sibling / Alt+↓ on a last sibling is a no-op; cross-parent hoisting rides the
+  post-launch drag-reorder work. The no-op-at-boundary call was validated against the field: Notion
+  and Craft don't offer keyboard block-move at all, so there's no precedent to match and no user
+  expectation to violate — keep the conservative no-op. Undo is the usual snapshot; selection
+  follows by id for free. This is the D10 launch-gap coverage ("keyboard-based move can cover the
+  gap"), scheduled on day 10 with its Alt+↑/↓ bindings.
 
 **Undo** (`undo_manager.dart`, 108 LOC kept + ~20 LOC grouping): snapshots are `(Document,
 DocSelection)` pairs — **ComposingState is not part of the restorable snapshot** (debug-only
@@ -1343,8 +1346,12 @@ affordance; then type → image replaced by a paragraph containing the typed tex
   the extent is never an estimate and the under-highlight window is at most one frame of lag, the
   same lag native editors exhibit (clamping to the nearest laid block at arbitrary times would
   accept visible jitter; sequencing hit-testing after layout removes the wobble). Dragging *across
-  the image* resolves via the midpoint rule — symmetric for downward and upward drags, so a swept
-  image is tinted during the drag and included in the final selection regardless of direction.
+  the image* resolves by drag DIRECTION (**day-10 manual-test decision — D6**, web feel): a swept
+  void is tinted the moment the drag enters its box — downstream edge when dragging down onto it,
+  upstream when dragging up — not at its vertical midpoint. (The midpoint rule survives in
+  `VoidBlockGeometry.offsetForLocalPoint` as the geometry default for a plain click, which
+  normalizes to the atomic `[0,1)` selection either way; drag and keyboard movement both override
+  it by direction so the void is included symmetrically.)
   **Wheel/trackpad scroll mid-drag — the tick generalizes to every `ScrollNotification`:** a
   `PointerScrollEvent` is not a pointer move and runs no autoscroll tick, yet it is the natural
   way to traverse "paragraph 3 viewports below" on web/desktop — content would scroll under the

@@ -235,6 +235,70 @@ void main() {
       );
     });
 
+    testWidgets(
+      'a downward drag entering an image selects it before the midpoint '
+      '(D6, web feel)',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'above'),
+          TextBlock(id: 'img', blockType: ImageKeys.type),
+          para('b', 'below'),
+        ]);
+        final imgRect = tester.getRect(find.byType(ImageBlockComponent));
+        final gesture = await tester.startGesture(
+          pointFor(tester, 'a', 1),
+          kind: PointerDeviceKind.mouse,
+        );
+        // Stop in the TOP tenth of the image — above its vertical midpoint.
+        await gesture.moveTo(
+          Offset(imgRect.center.dx, imgRect.top + imgRect.height * 0.1),
+        );
+        await tester.pump();
+
+        expect(controller.selection!.extent, DocPosition('img', 1));
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Container && w.foregroundDecoration != null,
+          ),
+          findsOneWidget,
+          reason: 'the image is tinted the moment the drag enters it',
+        );
+        await gesture.up();
+        await tester.pump();
+      },
+    );
+
+    testWidgets(
+      'an upward drag entering an image selects it before the midpoint (D6)',
+      (tester) async {
+        await pumpEditor(tester, [
+          para('a', 'above'),
+          TextBlock(id: 'img', blockType: ImageKeys.type),
+          para('b', 'below'),
+        ]);
+        final imgRect = tester.getRect(find.byType(ImageBlockComponent));
+        final gesture = await tester.startGesture(
+          pointFor(tester, 'b', 1),
+          kind: PointerDeviceKind.mouse,
+        );
+        // Stop in the BOTTOM tenth of the image — below its vertical midpoint.
+        await gesture.moveTo(
+          Offset(imgRect.center.dx, imgRect.bottom - imgRect.height * 0.1),
+        );
+        await tester.pump();
+
+        expect(controller.selection!.extent, DocPosition('img', 0));
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Container && w.foregroundDecoration != null,
+          ),
+          findsOneWidget,
+        );
+        await gesture.up();
+        await tester.pump();
+      },
+    );
+
     testWidgets('upward drag across an image also includes it (symmetric)', (
       tester,
     ) async {

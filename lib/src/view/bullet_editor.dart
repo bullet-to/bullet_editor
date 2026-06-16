@@ -96,6 +96,10 @@ class BulletEditorState extends State<BulletEditor>
   late final MouseInteractor _mouseInteractor = MouseInteractor(
     registry: registry,
     documentOf: () => widget.controller.document,
+    isVoid: (blockId) {
+      final block = widget.controller.document.blockById(blockId);
+      return block != null && widget.controller.schema.isVoid(block.blockType);
+    },
     setSelection: (selection) => widget.controller.setSelection(selection),
     requestFocus: () => widget.controller.requestFocus(),
     scrollPositionOf: () =>

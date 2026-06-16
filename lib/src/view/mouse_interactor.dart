@@ -19,9 +19,11 @@ import 'editor_hit_tester.dart';
 /// extent each move via the shared hit tester, autoscrolls in the viewport
 /// edge zone, and — through [onScroll] — re-hit-tests under the stationary
 /// pointer on every scroll notification so wheel/trackpad scroll mid-drag
-/// tracks the pointer's visual position (G5). The final selection is exact by
-/// construction: a void-edge collapse normalizes to the atomic selection in
-/// `setSelection`.
+/// tracks the pointer's visual position (G5). A swept void is selected the
+/// moment the drag enters its box (resolved by direction in
+/// [_resolveSweptVoid], the web feel — D6), not at its vertical midpoint. The
+/// final selection is exact by construction: a void-edge collapse normalizes
+/// to the atomic selection in `setSelection`.
 ///
 /// The interactor owns no widgets — `BulletEditorState` feeds it pointer
 /// events (dispatched by `PointerDeviceKind`) and scroll notifications, and
@@ -31,6 +33,7 @@ class MouseInteractor {
   MouseInteractor({
     required this.registry,
     required this.documentOf,
+    required this.isVoid,
     required void Function(DocSelection selection) setSelection,
     required this.requestFocus,
     required this.scrollPositionOf,
@@ -39,6 +42,11 @@ class MouseInteractor {
 
   final BlockLayoutRegistry registry;
   final Document Function() documentOf;
+
+  /// Whether a block is a void (image, divider) — drag selection resolves a
+  /// swept void by direction (D6), not the geometry's midpoint rule.
+  final bool Function(String blockId) isVoid;
+
   final void Function(DocSelection selection) _rawSetSelection;
   final void Function() requestFocus;
 
@@ -210,6 +218,7 @@ class MouseInteractor {
       return;
     }
     final (start, end) = anchor.normalized(_doc);
+    point = _resolveSweptVoid(point, start);
     final DocSelection extended;
     if (_compare(point, start) < 0) {
       extended = DocSelection(base: end, extent: point);
@@ -219,6 +228,20 @@ class MouseInteractor {
       extended = anchor;
     }
     _setSelection(extended);
+  }
+
+  /// Selects a swept void the moment the drag enters its box (D6, web feel),
+  /// not at its vertical midpoint: resolve the void edge by drag direction so
+  /// its `[0,1)` is covered — downstream (`1`) when it sits at/after the
+  /// anchor (dragging down onto it), upstream (`0`) when before (dragging up).
+  /// The geometry's midpoint rule still answers a plain click (which
+  /// normalizes to the atomic selection either way). A void that IS the anchor
+  /// passes through untouched.
+  DocPosition _resolveSweptVoid(DocPosition point, DocPosition anchorStart) {
+    if (!isVoid(point.blockId)) return point;
+    final voidIndex = _doc.indexOfBlock(point.blockId);
+    final anchorIndex = _doc.indexOfBlock(anchorStart.blockId);
+    return DocPosition(point.blockId, voidIndex >= anchorIndex ? 1 : 0);
   }
 
   /// Document order of two positions: by flat block index, then offset.
