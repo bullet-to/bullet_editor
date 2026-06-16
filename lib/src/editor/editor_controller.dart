@@ -346,14 +346,26 @@ class EditorController extends ChangeNotifier {
   /// flag makes the next composition's first batch skip its pre-composition
   /// undo push in headless use — because its block id references the
   /// outgoing document.
+  ///
+  /// When no [selection] is given but one was live, the caret is re-homed to
+  /// the document start rather than dropped — this keeps focus across an
+  /// in-place reload.
   void setDocument(Document document, {DocSelection? selection}) {
     _edit(() {
       _undoManager.clear();
       _clearComposingState();
       _document = document;
-      _selection = selection == null
+      final fallback = document.allBlocks.isEmpty
           ? null
-          : _normalizeSelection(selection, document);
+          : DocSelection.collapsed(
+              DocPosition(document.allBlocks.first.id, 0),
+            );
+      if (selection != null || (_selection != null && fallback != null)) {
+        final sel = selection ?? fallback!;
+        _selection = _normalizeSelection(sel, document);
+      } else {
+        _selection = null;
+      }
     });
   }
 

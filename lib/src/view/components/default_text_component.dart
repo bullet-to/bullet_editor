@@ -179,6 +179,10 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
       key: richTextKey,
       text: span,
       textScaler: MediaQuery.textScalerOf(context),
+      strutStyle: StrutStyle.fromTextStyle(
+        ctx.resolvedStyle,
+        forceStrutHeight: true,
+      ),
     );
 
     final caretOffset = ctx.caretOffset;
@@ -225,6 +229,23 @@ class _DefaultTextComponentState extends State<DefaultTextComponent>
   }
 }
 
+@visibleForTesting
+List<Rect> composingUnderlineRects(List<Rect> glyphRects, double thickness) {
+  if (glyphRects.isEmpty) return const [];
+
+  // Mixed-script composing runs (e.g. kana + romaji) produce boxes with
+  // different bottoms. Normalize to the deepest bottom so the underline
+  // is continuous.
+  final bottom = glyphRects.fold(
+    0.0,
+    (m, r) => r.bottom > m ? r.bottom : m,
+  );
+  return [
+    for (final rect in glyphRects)
+      Rect.fromLTWH(rect.left, bottom - thickness, rect.width, thickness),
+  ];
+}
+
 /// Paints the composing-region underline and the collapsed caret over the
 /// `RichText` child. Queries rects from [geometry] at paint time, when the
 /// paragraph is laid out.
@@ -263,20 +284,12 @@ class _CaretPainter extends CustomPainter {
     final composing = this.composing;
     if (composing != null && composing.isValid && !composing.isCollapsed) {
       final paint = Paint()..color = color;
-      for (final rect in geometry.rectsForRange(
-        composing.start,
-        composing.end,
+      final glyphRects = geometry.rectsForRange(composing.start, composing.end);
+      for (final rect in composingUnderlineRects(
+        glyphRects,
+        _underlineThickness,
       )) {
-        // A solid underline rect per line fragment of the composed range.
-        canvas.drawRect(
-          Rect.fromLTWH(
-            rect.left,
-            rect.bottom - _underlineThickness,
-            rect.width,
-            _underlineThickness,
-          ),
-          paint,
-        );
+        canvas.drawRect(rect, paint);
       }
     }
 

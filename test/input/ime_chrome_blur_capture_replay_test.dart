@@ -220,6 +220,7 @@ void main() {
     replay(r'''
 {"seq":35,"kind":"performAction","payload":{"action":"newline"}}
 ''');
+    service.flushPendingNewline();
     expect(
       service.journal.events.any((e) => e.kind == 'performActionSuppressed'),
       isFalse,
