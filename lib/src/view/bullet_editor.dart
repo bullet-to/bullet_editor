@@ -1,16 +1,20 @@
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart' show BrowserContextMenu;
 import 'package:flutter/widgets.dart';
 
 import '../editor/editor_controller.dart';
 import '../input/ime_service.dart';
-import '../model/doc_selection.dart';
 import '../model/inline_entity.dart';
 import 'block_layout_registry.dart';
 import 'block_list_view.dart';
-import 'editor_hit_tester.dart';
 import 'editor_view_scope.dart';
 import 'keyboard_interactor.dart';
+import 'menus/context_menus.dart';
 import 'mouse_interactor.dart';
+import 'selection_handles.dart';
+import 'selection_magnifier.dart';
+import 'touch_interactor.dart';
 
 /// The v3 editor root widget: lazy render through the component registry,
 /// geometry registry (GATE-L), focus, tap-to-caret, caret + composing
@@ -89,20 +93,92 @@ class BulletEditorState extends State<BulletEditor>
   late ImeService imeService;
 
   /// Mouse/trackpad selection gestures (architecture §Gestures, per-kind
-  /// dispatch). Touch/stylus gestures (long-press, handles, magnifier) arrive
-  /// days 11–13; today touch keeps the slop-gated tap-to-caret below.
+  /// dispatch). Touch/stylus gestures route to [_touchInteractor].
   late final MouseInteractor _mouseInteractor = MouseInteractor(
     registry: registry,
     documentOf: () => widget.controller.document,
-    isVoid: (blockId) {
-      final block = widget.controller.document.blockById(blockId);
-      return block != null && widget.controller.schema.isVoid(block.blockType);
-    },
+    isVoid: _isVoidBlock,
     setSelection: (selection) => widget.controller.setSelection(selection),
     requestFocus: () => widget.controller.requestFocus(),
     scrollPositionOf: _scrollPosition,
     viewportRectOf: _editorGlobalRect,
   );
+
+  /// Touch/stylus selection gestures (architecture §Gestures, per-kind
+  /// dispatch): tap-to-caret, long-press word-select, long-press-drag
+  /// extension, the G11 handle drag (pointer-route owned), and the source of
+  /// truth for the handle / magnifier / toolbar overlays. Always mounted, so it
+  /// owns the handle pointer route across a handle widget unmounting mid-drag.
+  late final TouchInteractor _touchInteractor = TouchInteractor(
+    registry: registry,
+    documentOf: () => widget.controller.document,
+    selectionOf: () => widget.controller.selection,
+    isVoid: _isVoidBlock,
+    setSelection: (selection) => widget.controller.setSelection(selection),
+    requestFocus: () => widget.controller.requestFocus(),
+    scrollPositionOf: _scrollPosition,
+    viewportRectOf: _editorGlobalRect,
+  );
+
+  /// Touch/stylus pointer kinds — the per-kind acceptance gate on the
+  /// interactor-owned recognizers (architecture §Gestures): mouse-kind never
+  /// reaches them (it drives the mouse interactor off the raw Listener), so a
+  /// mouse press-drag is unaffected and a plain touch drag without a long-press
+  /// still falls through to the scrollable.
+  static const _touchKinds = {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.invertedStylus,
+  };
+
+  /// The interactor-owned recognizers that put touch/stylus gestures in the
+  /// gesture arena (architecture §Gestures arena participation): the tap fires
+  /// only when the scrollable loses the arena, and the long-press win
+  /// suppresses the scroll drag for that pointer and drives word
+  /// drag-extension. A bare `Listener` cannot deny an accepted drag recognizer,
+  /// so without these a finger drift after long-press would scroll the list
+  /// under the live selection. Hosted by the [RawGestureDetector] in [build]
+  /// (the mechanism of Flutter's own `TextSelectionGestureDetector`).
+  late final Map<Type, GestureRecognizerFactory> _touchGestures = {
+    TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+      TapGestureRecognizer
+    >(
+      () => TapGestureRecognizer(supportedDevices: _touchKinds),
+      (recognizer) {
+        recognizer.onTapUp = (details) {
+          _touchInteractor.handleTap(details.globalPosition);
+        };
+      },
+    ),
+    LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+      LongPressGestureRecognizer
+    >(
+      () => LongPressGestureRecognizer(supportedDevices: _touchKinds),
+      (recognizer) {
+        recognizer
+          ..onLongPressStart = (details) {
+            _touchInteractor.handleLongPressStart(details.globalPosition);
+          }
+          ..onLongPressMoveUpdate = (details) {
+            _touchInteractor.handleLongPressMoveUpdate(details.globalPosition);
+          }
+          ..onLongPressEnd = (_) {
+            _touchInteractor.handleLongPressEnd();
+          };
+      },
+    ),
+  };
+
+  /// The touch interactor — exposed for handle/anchor geometry assertions in
+  /// widget tests (the same role `imeService` plays for IME-delta tests).
+  @visibleForTesting
+  TouchInteractor get touchInteractorForTest => _touchInteractor;
+
+  bool _isVoidBlock(String blockId) {
+    final block = widget.controller.document.blockById(blockId);
+    return block != null && widget.controller.schema.isVoid(block.blockType);
+  }
+
 
   /// Hardware-key matrix behind the composing gate (architecture §hardware
   /// keyboard), symmetric with [_mouseInteractor]. Reads the controller/IME
@@ -138,8 +214,6 @@ class BulletEditorState extends State<BulletEditor>
   FocusNode get _focusNode =>
       widget.focusNode ??
       (_ownedFocusNode ??= FocusNode(debugLabel: 'BulletEditor'));
-
-  Offset? _pointerDownPosition;
 
   /// The controller/focus-node pair is attached and detached symmetrically —
   /// one helper pair covers mount, every didUpdateWidget swap combination
@@ -202,6 +276,10 @@ class BulletEditorState extends State<BulletEditor>
     // GATE-K: schema validation at the editor boundary, debug-mode.
     assert(widget.controller.schema.validate());
     WidgetsBinding.instance.addObserver(this);
+    // Web: suppress the browser's own context menu over the page so our
+    // (never-cut) fallback toolbar shows (architecture §Gestures web). Global
+    // by API design — the editor is the page's primary text surface.
+    if (kIsWeb) BrowserContextMenu.disableContextMenu();
     _attach(widget.controller, _focusNode);
   }
 
@@ -301,13 +379,21 @@ class BulletEditorState extends State<BulletEditor>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (kIsWeb) BrowserContextMenu.enableContextMenu();
     _detach(widget.controller, _focusNode);
+    _touchInteractor.dispose();
     _ownedScrollController?.dispose();
     _ownedFocusNode?.dispose();
     super.dispose();
   }
 
-  void _onControllerChanged() => setState(() {});
+  void _onControllerChanged() {
+    // The selection may have moved by any path (gesture, keyboard, or an app
+    // call); the touch interactor is the overlays' source of truth, so poke it
+    // to recompute handle/toolbar geometry off the new selection.
+    _touchInteractor.onSelectionChanged();
+    setState(() {});
+  }
 
   void _onFocusChanged() {
     _syncImeAttachment();
@@ -315,19 +401,22 @@ class BulletEditorState extends State<BulletEditor>
   }
 
   // --- Pointer dispatch by kind (architecture §Gestures). Mouse/trackpad
-  // pointers drive the mouse interactor (click/drag/multi-click/shift-click +
-  // autoscroll); touch/stylus keep the slop-gated tap-to-caret until the
-  // touch interactor lands days 11–13. The raw Listener is arena-exempt, so
-  // both compose with the link-span recognizers — G11 invariant. Mouse drag
-  // does not fight the scrollable: the editor pins a ScrollBehavior whose
-  // dragDevices exclude mouse (see [build]). ---
+  // pointers drive the mouse interactor directly off the raw Listener
+  // (click/drag/multi-click/shift-click + autoscroll). Touch/stylus selection
+  // gestures go through the interactor-owned recognizers in the
+  // RawGestureDetector below (arena participation: a long-press win suppresses
+  // the scroll drag; a plain touch drag still scrolls) — the raw Listener
+  // ignores them. The raw Listener is arena-exempt, so both compose with the
+  // link-span recognizers — G11 invariant. Mouse drag does not fight the
+  // scrollable: the editor pins a ScrollBehavior whose dragDevices exclude
+  // mouse (see [build]). ---
 
   void _onPointerDown(PointerDownEvent event) {
     if (event.kind == PointerDeviceKind.mouse) {
       _mouseInteractor.handlePointerDown(event);
-      return;
     }
-    _pointerDownPosition = event.position;
+    // Touch/stylus downs are claimed by the RawGestureDetector's recognizers
+    // (per-kind via supportedDevices); the raw Listener ignores them here.
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -339,30 +428,13 @@ class BulletEditorState extends State<BulletEditor>
   void _onPointerUp(PointerUpEvent event) {
     if (event.kind == PointerDeviceKind.mouse) {
       _mouseInteractor.handlePointerUp(event);
-      return;
     }
-    final down = _pointerDownPosition;
-    _pointerDownPosition = null;
-    if (down == null) return;
-    if ((event.position - down).distance > kTouchSlop) return; // drag/scroll
-    _handleTap(event.position);
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     if (event.kind == PointerDeviceKind.mouse) {
       _mouseInteractor.handlePointerCancel(event);
     }
-    _pointerDownPosition = null;
-  }
-
-  void _handleTap(Offset globalPosition) {
-    final position = hitTestDocPosition(registry, globalPosition);
-    if (position != null) {
-      // setSelection normalizes a void hit (midpoint-resolved offset 0/1)
-      // to the [0,1) atomic selection.
-      widget.controller.setSelection(DocSelection.collapsed(position));
-    }
-    widget.controller.requestFocus();
   }
 
   @override
@@ -383,7 +455,7 @@ class BulletEditorState extends State<BulletEditor>
       sliver = SliverPadding(padding: widget.padding!, sliver: sliver);
     }
 
-    return EditorViewScope(
+    Widget editor = EditorViewScope(
       registry: registry,
       child: Focus(
         focusNode: _focusNode,
@@ -411,32 +483,51 @@ class BulletEditorState extends State<BulletEditor>
                 // While a drag is active, every scroll notification — wheel,
                 // trackpad, or the autoscroll ticker — schedules a post-frame
                 // re-hit-test under the stationary pointer so the extent
-                // tracks the pointer's visual position (G5).
+                // tracks the pointer's visual position (G5). The touch
+                // interactor's onScroll ALSO recomputes handle/toolbar
+                // visibility on every tick (the shared scroll tick), so it
+                // runs unconditionally.
                 if (_mouseInteractor.isDragging) _mouseInteractor.onScroll();
+                _touchInteractor.onScroll();
                 return false;
               },
-              child: ScrollConfiguration(
-                // Force mouse out of the scrollable's drag devices so mouse
-                // drag-select is never claimed by it (architecture §Gestures:
-                // the dragDevices-excludes-mouse invariant). The set is the
-                // framework default MINUS mouse only — trackpad must stay in,
-                // or two-finger (trackpad-pan) scrolling dies with it (the
-                // day-10 manual-test regression B1). We keep the ambient
-                // behavior's scrollbars/overscroll but override dragDevices,
-                // so an app that enabled mouse-drag scrolling (common on web)
-                // cannot reintroduce the two-writers pathology under the
-                // editor.
-                behavior: ScrollConfiguration.of(context).copyWith(
-                  dragDevices: const {
-                    PointerDeviceKind.touch,
-                    PointerDeviceKind.stylus,
-                    PointerDeviceKind.invertedStylus,
-                    PointerDeviceKind.trackpad,
-                  },
-                ),
-                child: CustomScrollView(
-                  controller: _scrollController,
-                  slivers: [sliver],
+              // Arena participation for touch (architecture §Gestures): the
+              // interactor's tap + long-press recognizers compete with the
+              // scrollable's drag recognizer, so a long-press win suppresses
+              // the scroll for that pointer (and drives word drag-extension)
+              // while a plain touch drag still scrolls. Mouse-kind never
+              // reaches these (supportedDevices), so the mouse path is
+              // unaffected. behavior: translucent so the detector adds its
+              // recognizers to the arena WITHOUT stealing the hit from the
+              // scrollable/content beneath — a plain touch drag still reaches
+              // the scrollable's drag recognizer (it competes, and wins absent
+              // a long-press).
+              child: RawGestureDetector(
+                gestures: _touchGestures,
+                behavior: HitTestBehavior.translucent,
+                child: ScrollConfiguration(
+                  // Force mouse out of the scrollable's drag devices so mouse
+                  // drag-select is never claimed by it (architecture
+                  // §Gestures: the dragDevices-excludes-mouse invariant). The
+                  // set is the framework default MINUS mouse only — trackpad
+                  // must stay in, or two-finger (trackpad-pan) scrolling dies
+                  // with it (the day-10 manual-test regression B1). We keep the
+                  // ambient behavior's scrollbars/overscroll but override
+                  // dragDevices, so an app that enabled mouse-drag scrolling
+                  // (common on web) cannot reintroduce the two-writers
+                  // pathology under the editor.
+                  behavior: ScrollConfiguration.of(context).copyWith(
+                    dragDevices: const {
+                      PointerDeviceKind.touch,
+                      PointerDeviceKind.stylus,
+                      PointerDeviceKind.invertedStylus,
+                      PointerDeviceKind.trackpad,
+                    },
+                  ),
+                  child: CustomScrollView(
+                    controller: _scrollController,
+                    slivers: [sliver],
+                  ),
                 ),
               ),
             ),
@@ -444,5 +535,47 @@ class BulletEditorState extends State<BulletEditor>
         ),
       ),
     );
+
+    // The fallback selection toolbar overlays the editor subtree (it mounts its
+    // menu into the ambient Overlay via a ContextMenuController; the editor is
+    // its anchor source). It coexists with the handle/magnifier overlay below.
+    editor = SelectionToolbar(
+      interactor: _touchInteractor,
+      controllerOf: () => widget.controller,
+      viewportRectOf: _editorGlobalRect,
+      child: editor,
+    );
+
+    // Selection handles + magnifier sit in a Stack SIBLING to the scrollable
+    // (not inside it), so they are NOT clipped by the scroll viewport while
+    // their in-code viewport predicate governs visibility. The bulbs position
+    // from global anchor rects converted to this Stack's local space via
+    // [_overlayOrigin] (the Stack's own global top-left), so they remain
+    // correct wherever the editor is placed in the app. A Stack here — rather
+    // than the app Overlay — keeps the handle bulbs' opaque Listeners reliably
+    // in the editor's hit-test path (G11 pointer-down exclusivity).
+    return Stack(
+      children: [
+        Positioned.fill(child: editor),
+        Positioned.fill(
+          child: SelectionHandles(
+            interactor: _touchInteractor,
+            viewportRectOf: _editorGlobalRect,
+            originOf: _overlayOrigin,
+          ),
+        ),
+        Positioned.fill(
+          child: SelectionMagnifier(
+            interactor: _touchInteractor,
+            originOf: _overlayOrigin,
+          ),
+        ),
+      ],
+    );
   }
+
+  /// The global top-left of the editor's render box — the origin the overlay
+  /// Stack's local coordinate space is measured from, so global anchor rects
+  /// can be converted to Stack-local positions. Zero before layout.
+  Offset _overlayOrigin() => _editorGlobalRect()?.topLeft ?? Offset.zero;
 }

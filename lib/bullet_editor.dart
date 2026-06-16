@@ -37,3 +37,5 @@ export 'src/view/components/divider_block.dart';
 export 'src/view/components/image_block.dart';
 export 'src/view/components/void_block_geometry.dart';
 export 'src/view/standard_prefixes.dart';
+export 'src/view/touch_interactor.dart'
+    show SelectionHandleKind, TouchInteractor;

@@ -1,5 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
-import 'package:flutter/services.dart' show TextRange;
+import 'package:flutter/services.dart' show SystemChannels, TextRange;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Day 3–4 controller skeleton suite (architecture plan row 3–4): batch loop
@@ -956,6 +956,122 @@ void main() {
       c.indent();
 
       expect(shape(c.document), before);
+    });
+  });
+
+  // --- Clipboard (architecture §Context menus) — the toolbar wires to these.
+  group('clipboard', () {
+    test('selectAll spans the whole document', () {
+      final c = controller([para('a', 'hello'), para('b', 'world')]);
+      c.selectAll();
+      final (start, end) = c.selection!.normalized(c.document);
+      expect(start, DocPosition('a', 0));
+      expect(end, DocPosition('b', 5));
+    });
+
+    test('selectAll on a blockless document is a no-op', () {
+      final c = controller([]);
+      c.selectAll();
+      expect(c.selection, isNull);
+    });
+
+    testWidgets('copySelectionAsMarkdown writes the selection markdown', (
+      tester,
+    ) async {
+      String? written;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            written = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      final c = controller([para('a', 'hello world')]);
+      c.setSelection(
+        DocSelection(base: DocPosition('a', 0), extent: DocPosition('a', 5)),
+      );
+      await c.copySelectionAsMarkdown();
+      expect(written, 'hello');
+    });
+
+    testWidgets('copy on a collapsed selection writes nothing', (tester) async {
+      var calls = 0;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') calls++;
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      final c = controller([para('a', 'hello')]);
+      c.setSelection(DocSelection.collapsed(DocPosition('a', 2)));
+      await c.copySelectionAsMarkdown();
+      expect(calls, 0);
+    });
+
+    testWidgets('cut copies then deletes the selection', (tester) async {
+      String? written;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            written = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      final c = controller([para('a', 'hello world')]);
+      c.setSelection(
+        DocSelection(base: DocPosition('a', 0), extent: DocPosition('a', 6)),
+      );
+      await c.cut();
+      expect(written, 'hello '); // markdown of "hello "
+      expect(c.document.blockById('a')!.plainText, 'world');
+    });
+
+    testWidgets('pasteMarkdown degrades to plain insertion (day 14 TODO)', (
+      tester,
+    ) async {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.getData') {
+            return <String, dynamic>{'text': 'pasted'};
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      final c = controller([para('a', 'hi ')]);
+      c.setSelection(DocSelection.collapsed(DocPosition('a', 3)));
+      await c.pasteMarkdown();
+      expect(c.document.blockById('a')!.plainText, 'hi pasted');
     });
   });
 }

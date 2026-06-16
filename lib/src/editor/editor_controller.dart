@@ -1,8 +1,9 @@
 import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show TextRange;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, TextRange;
 import 'package:flutter/widgets.dart' show FocusNode;
 
+import '../codec/markdown_codec.dart';
 import '../model/block.dart';
 import '../model/block_policies.dart';
 import '../model/doc_selection.dart';
@@ -1007,6 +1008,95 @@ class EditorController extends ChangeNotifier {
         );
       },
     );
+  }
+
+  // --- Clipboard (architecture §Context menus) ---
+  //
+  // The fallback toolbar (days 11–13) and Cmd/Ctrl+C/X/V/A wire to these.
+  // Copy/Cut/Select-All route through the single-writer queue and serialize
+  // the MODEL selection (never the windowed IME buffer — §Context menus: the
+  // 32-block IME cap stays a payload bound, never a clipboard truncation).
+  // Paste degrades to plain text for now (day-14 milestone owns full
+  // markdown→PasteBlocks fidelity, per §Context menus toolbar/keyboard paste).
+
+  /// The markdown codec for clipboard serialization — built once against this
+  /// controller's schema (round-trips block/inline types the schema knows).
+  late final MarkdownCodec _clipboardCodec = MarkdownCodec(schema: schema);
+
+  /// Serializes the current selection to markdown and writes it to the system
+  /// clipboard (architecture §Context menus: Copy → `copySelectionAsMarkdown`,
+  /// the clipboard source is always the model, never the IME window). A
+  /// collapsed or absent selection is a no-op. Clipboard writes never trigger
+  /// the iOS paste-permission popup, so this is safe from any menu.
+  Future<void> copySelectionAsMarkdown() async {
+    final markdown = _selectionAsMarkdown();
+    if (markdown == null) return;
+    await Clipboard.setData(ClipboardData(text: markdown));
+  }
+
+  /// Selects the whole document at the model level (architecture §Context
+  /// menus: Select-All is model-level, which then serializes the capped window
+  /// — the cap is an IME bound, not a clipboard one). From the first block's
+  /// start to the last block's end; a void last block selects its `[0,1)` via
+  /// `setSelection` normalization. A no-op on an empty document.
+  void selectAll() {
+    final flat = _document.allBlocks;
+    if (flat.isEmpty) return;
+    final first = flat.first;
+    final last = flat.last;
+    setSelection(
+      DocSelection(
+        base: DocPosition(first.id, 0),
+        extent: DocPosition(last.id, last.length),
+      ),
+    );
+  }
+
+  /// Copies the selection to the clipboard, then deletes it (architecture
+  /// §Context menus: Cut → copy + delete-selection). No-op when collapsed.
+  Future<void> cut() async {
+    final sel = _selection;
+    if (sel == null || sel.isCollapsed) return;
+    await copySelectionAsMarkdown();
+    deleteSelection();
+  }
+
+  /// Pastes clipboard text at the caret.
+  ///
+  /// Day 14: full markdown→`PasteBlocks` fidelity (split at the caret, insert
+  /// the decoded block list, merge text-y first block, caret to the last
+  /// pasted block — architecture §Context menus toolbar/keyboard paste) lands
+  /// with the day-14 clipboard milestone. Until then this degrades to a plain
+  /// [insertText] of the clipboard text — honest and correct for the common
+  /// single-line case, never a half-built block splice.
+  Future<void> pasteMarkdown() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    // Day 14: decode via the markdown codec → PasteBlocks instead of plain
+    // insertion (G12 block/void/list fidelity).
+    insertText(text);
+  }
+
+  /// Encodes the current selection as markdown, or null when there is nothing
+  /// to copy (collapsed/absent selection, or a gone-id endpoint). Extracts the
+  /// selected slice via `Document.extractRange` (tree structure preserved) and
+  /// runs the markdown codec over it.
+  String? _selectionAsMarkdown() {
+    final sel = _selection;
+    if (sel == null || sel.isCollapsed) return null;
+    final (start, end) = sel.normalized(_document);
+    final startIndex = _document.indexOfBlock(start.blockId);
+    final endIndex = _document.indexOfBlock(end.blockId);
+    if (startIndex < 0 || endIndex < 0) return null;
+    final blocks = _document.extractRange(
+      startIndex,
+      start.offset,
+      endIndex,
+      end.offset,
+    );
+    if (blocks.isEmpty) return null;
+    return _clipboardCodec.encode(Document(blocks));
   }
 
   // --- G13 group indent/outdent (architecture §Selection) ---
