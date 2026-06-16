@@ -6,7 +6,7 @@
 /// Future fields to add when needed:
 /// - allowedChildren: `Set<String>?` — restrict which types can nest under this
 /// - allowedInlineStyles: `Set<String>?` — restrict formatting (e.g. code blocks)
-/// See context/future-enhancements.md for details.
+/// See docs/archive/future-enhancements.md for details.
 class BlockPolicies {
   const BlockPolicies({
     this.canBeChild = true,
