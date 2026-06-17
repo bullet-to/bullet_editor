@@ -1,3 +1,5 @@
+import 'dart:ui' show BoxHeightStyle;
+
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
@@ -100,12 +102,17 @@ mixin BlockGeometryMixin<T extends StatefulWidget>
   }
 
   @override
-  List<Rect> rectsForRange(int start, int end) {
+  List<Rect> rectsForRange(
+    int start,
+    int end, {
+    BoxHeightStyle boxHeightStyle = BoxHeightStyle.tight,
+  }) {
     final paragraph = _paragraph;
     if (paragraph == null) return const [];
     return paragraph
         .getBoxesForSelection(
           TextSelection(baseOffset: start, extentOffset: end),
+          boxHeightStyle: boxHeightStyle,
         )
         .map((box) => box.toRect())
         .toList();

@@ -1,3 +1,5 @@
+import 'dart:ui' show BoxHeightStyle;
+
 import 'package:flutter/widgets.dart';
 
 import '../block_geometry_mixins.dart';
@@ -33,11 +35,15 @@ mixin VoidBlockGeometry<T extends StatefulWidget>
   }
 
   @override
-  List<Rect> rectsForRange(int start, int end) {
+  List<Rect> rectsForRange(
+    int start,
+    int end, {
+    BoxHeightStyle boxHeightStyle = BoxHeightStyle.tight,
+  }) {
     final box = _box;
     if (box == null) return const [];
     // The void is selected when its [0,1) lies inside the range — the
-    // highlight is the whole box.
+    // highlight is the whole box (height style is moot for a void box).
     return start <= 0 && end >= 1 ? [Offset.zero & box.size] : const [];
   }
 
