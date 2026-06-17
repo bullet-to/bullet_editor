@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart'
-    show AdaptiveTextSelectionToolbar, ContextMenuButtonItem, ContextMenuButtonType;
+    show
+        AdaptiveTextSelectionToolbar,
+        ContextMenuButtonItem,
+        ContextMenuButtonType;
 import 'package:flutter/widgets.dart';
 
 import '../../editor/editor_controller.dart';
@@ -53,6 +56,13 @@ class SelectionToolbar extends StatefulWidget {
 class _SelectionToolbarState extends State<SelectionToolbar> {
   final _menuController = ContextMenuController();
 
+  /// The anchor the toolbar is currently shown at — so a scroll tick that
+  /// leaves the anchor unchanged is a no-op instead of tearing down and
+  /// rebuilding the whole Overlay entry every frame (review M3; the same dedup
+  /// discipline the interactor's `_setSelection` and the handles' anchor cache
+  /// already follow). Null when the toolbar is hidden.
+  Offset? _shownAnchor;
+
   @override
   void initState() {
     super.initState();
@@ -93,20 +103,24 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
     // while a drag is live, no toolbar — the magnifier shows instead; it
     // settles when the drag ends.
     if (!interactor.touchSelectionActive || interactor.isDragging) {
-      _menuController.remove();
+      _hide();
       return;
     }
     final bounds = interactor.selectionBoundsGlobal();
     final viewport = widget.viewportRectOf();
     // Hide-on-fully-offscreen: no visible selection rect ⇒ no anchor.
     if (bounds == null || viewport == null || !viewport.overlaps(bounds)) {
-      _menuController.remove();
+      _hide();
       return;
     }
     final anchor = _clampAnchor(bounds, viewport);
-    // show() is idempotent-ish: re-showing rebuilds at the new anchor. Remove
-    // first so the toolbar re-anchors cleanly on a scroll tick.
+    // Dedup: the anchor hasn't moved since the last show ⇒ a scroll tick is a
+    // no-op, not a full Overlay teardown/rebuild every frame (M3).
+    if (_menuController.isShown && anchor == _shownAnchor) return;
+    // Re-anchoring: remove first so the toolbar re-mounts cleanly at the new
+    // anchor.
     _menuController.remove();
+    _shownAnchor = anchor;
     _menuController.show(
       context: context,
       contextMenuBuilder: (context) => AdaptiveTextSelectionToolbar.buttonItems(
@@ -114,6 +128,13 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
         buttonItems: _buttonItems(),
       ),
     );
+  }
+
+  /// Removes the toolbar and clears the shown-anchor cache so the next show
+  /// re-anchors. Idempotent.
+  void _hide() {
+    _shownAnchor = null;
+    _menuController.remove();
   }
 
   /// The primary anchor: the selection's top-center, lifted by the gap, clamped
@@ -131,28 +152,28 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
         type: ContextMenuButtonType.copy,
         onPressed: () {
           controller.copySelectionAsMarkdown();
-          _menuController.remove();
+          _hide();
         },
       ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.cut,
         onPressed: () {
           controller.cut();
-          _menuController.remove();
+          _hide();
         },
       ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.paste,
         onPressed: () {
           controller.pasteMarkdown();
-          _menuController.remove();
+          _hide();
         },
       ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.selectAll,
         onPressed: () {
           controller.selectAll();
-          _menuController.remove();
+          _hide();
         },
       ),
     ];

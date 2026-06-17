@@ -137,7 +137,11 @@ void main() {
       await tester.pump();
 
       expect(scroll.offset, greaterThan(0), reason: 'plain touch drag scrolls');
-      expect(controller.selection, isNull, reason: 'no selection from a scroll');
+      expect(
+        controller.selection,
+        isNull,
+        reason: 'no selection from a scroll',
+      );
     });
 
     testWidgets('a long-press-drag does NOT scroll the list', (tester) async {
@@ -193,11 +197,16 @@ void main() {
     testWidgets('dragging the end handle changes the extent', (tester) async {
       final scroll = ScrollController();
       addTearDown(scroll.dispose);
-      await pumpEditor(tester, [
-        for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
-        para('b', 'hello world foo'),
-        for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
-      ], scrollController: scroll, height: 600);
+      await pumpEditor(
+        tester,
+        [
+          for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+          para('b', 'hello world foo'),
+          for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+        ],
+        scrollController: scroll,
+        height: 600,
+      );
       scroll.jumpTo(60);
       await tester.pump();
       // Long-press "hello" to establish a touch selection.
@@ -237,11 +246,16 @@ void main() {
       (tester) async {
         final scroll = ScrollController();
         addTearDown(scroll.dispose);
-        await pumpEditor(tester, [
-          for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
-          para('b', 'hello world'),
-          for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
-        ], scrollController: scroll, height: 600);
+        await pumpEditor(
+          tester,
+          [
+            for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+            para('b', 'hello world'),
+            for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+          ],
+          scrollController: scroll,
+          height: 600,
+        );
         scroll.jumpTo(60);
         await tester.pump();
         await tester.longPressAt(pointFor(tester, 'b', 2)); // "hello"
@@ -258,11 +272,69 @@ void main() {
           kind: PointerDeviceKind.touch,
         );
         await tester.pump();
-        expect(interactor.isDragging, isTrue, reason: 'the handle drag started');
+        expect(
+          interactor.isDragging,
+          isTrue,
+          reason: 'the handle drag started',
+        );
         await gesture.up(); // released without moving
         await tester.pump();
 
         expect(controller.selection, before, reason: 'no-op grab');
+      },
+    );
+
+    testWidgets(
+      'a tap after a handle release is not suppressed (places a caret)',
+      (tester) async {
+        // The G11 tap-suppress flag (`_handleGestureActive`) outlives the drag
+        // by one frame to swallow the editor tap that fires on the same up;
+        // the NEXT independent tap must NOT be suppressed (review M1).
+        final scroll = ScrollController();
+        addTearDown(scroll.dispose);
+        await pumpEditor(
+          tester,
+          [
+            for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+            para('b', 'hello world foo'),
+            for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+          ],
+          scrollController: scroll,
+          height: 600,
+        );
+        scroll.jumpTo(60);
+        await tester.pump();
+        await tester.longPressAt(pointFor(tester, 'b', 2)); // "hello"
+        await tester.pump();
+        await tester.pump();
+        expect(controller.selection!.isCollapsed, isFalse);
+
+        final interactor = stateOf(tester).touchInteractorForTest;
+        final endRect = interactor.handleAnchorRectGlobal(
+          SelectionHandleKind.end,
+        )!;
+        // Grab + release the end handle without moving (sets the suppress flag).
+        final grab = await tester.startGesture(
+          endRect.bottomLeft + const Offset(0, 6),
+          kind: PointerDeviceKind.touch,
+        );
+        await tester.pump();
+        await grab.up();
+        await tester.pump(); // post-frame clears _handleGestureActive
+
+        // A subsequent independent tap must place a caret, not be swallowed.
+        await tester.tapAt(
+          pointFor(tester, 'b', 12),
+          kind: PointerDeviceKind.touch,
+        );
+        await tester.pump();
+
+        expect(
+          controller.selection!.isCollapsed,
+          isTrue,
+          reason: 'the post-handle tap was not suppressed',
+        );
+        expect(controller.selection!.extent.blockId, 'b');
       },
     );
 
@@ -303,20 +375,22 @@ void main() {
   });
 
   group('fallback toolbar (§Context menus)', () {
-    testWidgets('the toolbar shows on long-press with Copy/Cut/Paste/Select-all',
-        (tester) async {
-      await pumpEditor(tester, [para('a', 'hello world')]);
-      await tester.longPressAt(pointFor(tester, 'a', 2));
-      // long-press end → toolbar reconciles post-frame.
-      await tester.pump();
-      await tester.pump();
+    testWidgets(
+      'the toolbar shows on long-press with Copy/Cut/Paste/Select-all',
+      (tester) async {
+        await pumpEditor(tester, [para('a', 'hello world')]);
+        await tester.longPressAt(pointFor(tester, 'a', 2));
+        // long-press end → toolbar reconciles post-frame.
+        await tester.pump();
+        await tester.pump();
 
-      expect(find.text('Copy'), findsOneWidget);
-      expect(find.text('Cut'), findsOneWidget);
-      expect(find.text('Paste'), findsOneWidget);
-      // Select-all label varies by platform adaptive toolbar; assert via the
-      // copy/cut/paste presence which proves the button set wired through.
-    });
+        expect(find.text('Copy'), findsOneWidget);
+        expect(find.text('Cut'), findsOneWidget);
+        expect(find.text('Paste'), findsOneWidget);
+        // Select-all label varies by platform adaptive toolbar; assert via the
+        // copy/cut/paste presence which proves the button set wired through.
+      },
+    );
 
     testWidgets('Copy puts the selection markdown on the clipboard', (
       tester,

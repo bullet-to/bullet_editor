@@ -7,6 +7,7 @@ import '../model/document.dart';
 import 'block_layout_registry.dart';
 import 'editor_auto_scroller.dart';
 import 'editor_hit_tester.dart';
+import 'selection_drag.dart';
 
 /// Selection gestures for mouse/trackpad-kind pointers, on every platform
 /// (architecture §Gestures: per-kind dispatch, not platform-at-build — iPad
@@ -20,8 +21,8 @@ import 'editor_hit_tester.dart';
 /// edge zone, and — through [onScroll] — re-hit-tests under the stationary
 /// pointer on every scroll notification so wheel/trackpad scroll mid-drag
 /// tracks the pointer's visual position (G5). A swept void is selected the
-/// moment the drag enters its box (resolved by direction in
-/// [_resolveSweptVoid], the web feel — D6), not at its vertical midpoint. The
+/// moment the drag enters its box (resolved by direction in [resolveSweptVoid],
+/// the web feel — D6), not at its vertical midpoint. The
 /// final selection is exact by construction: a void-edge collapse normalizes
 /// to the atomic selection in `setSelection`.
 ///
@@ -44,6 +45,14 @@ class MouseInteractor {
       viewportRectOf: viewportRectOf,
       isActive: () => _dragging,
     );
+    _rehitScheduler = DragRehitScheduler(
+      isActive: () => _dragging,
+      focalPointOf: () => _dragPointer,
+      onRehit: (focal) {
+        final hit = hitTestDocPosition(registry, focal);
+        if (hit != null) _extendTo(hit);
+      },
+    );
   }
 
   final BlockLayoutRegistry registry;
@@ -58,6 +67,10 @@ class MouseInteractor {
 
   /// The edge-zone autoscroll ticker, shared with the touch interactor (D7).
   late final EditorAutoScroller _autoScroller;
+
+  /// The post-frame extent re-hit-test after a mid-drag scroll (G5), shared
+  /// implementation with the touch interactor (review H4).
+  late final DragRehitScheduler _rehitScheduler;
 
   /// The anchored selection a drag/shift-click extends from — the click point
   /// (collapsed), the double-clicked word, or the triple-clicked block. Never
@@ -90,8 +103,6 @@ class MouseInteractor {
   Duration? _lastDownTime;
   Offset? _lastDownPosition;
   int _clickCount = 0;
-
-  bool _rehitScheduled = false;
 
   Document get _doc => documentOf();
 
@@ -153,17 +164,7 @@ class MouseInteractor {
   /// content — scheduled post-frame so the hit always lands on laid-out
   /// content, never an estimate (G5). Called by the editor's scroll-
   /// notification listener while a drag is active.
-  void onScroll() {
-    if (!_dragging || _dragPointer == null || _rehitScheduled) return;
-    _rehitScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _rehitScheduled = false;
-      final pointer = _dragPointer;
-      if (!_dragging || pointer == null) return;
-      final hit = hitTestDocPosition(registry, pointer);
-      if (hit != null) _extendTo(hit);
-    });
-  }
+  void onScroll() => _rehitScheduler.schedule();
 
   bool _isConsecutive(Duration time, Offset position) {
     final lastTime = _lastDownTime;
@@ -202,47 +203,17 @@ class MouseInteractor {
     }
   }
 
-  /// Extends the current drag/shift selection to [point], oriented in
-  /// document order against the anchor and never shrinking the anchor's own
-  /// word/block span (native multi-click-drag behavior).
+  /// Extends the current drag/shift selection to [point], oriented in document
+  /// order against the anchor and never shrinking the anchor's own word/block
+  /// span — the shared [extendSelection] math (mouse lands raw: no word snap).
   void _extendTo(DocPosition point) {
-    final anchor = _expandBase;
-    if (anchor == null) {
-      _setSelection(DocSelection.collapsed(point));
-      return;
-    }
-    final (start, end) = anchor.normalized(_doc);
-    point = _resolveSweptVoid(point, start);
-    final DocSelection extended;
-    if (_compare(point, start) < 0) {
-      extended = DocSelection(base: end, extent: point);
-    } else if (_compare(point, end) > 0) {
-      extended = DocSelection(base: start, extent: point);
-    } else {
-      extended = anchor;
-    }
-    _setSelection(extended);
-  }
-
-  /// Selects a swept void the moment the drag enters its box (D6, web feel),
-  /// not at its vertical midpoint: resolve the void edge by drag direction so
-  /// its `[0,1)` is covered — downstream (`1`) when it sits at/after the
-  /// anchor (dragging down onto it), upstream (`0`) when before (dragging up).
-  /// The geometry's midpoint rule still answers a plain click (which
-  /// normalizes to the atomic selection either way). A void that IS the anchor
-  /// passes through untouched.
-  DocPosition _resolveSweptVoid(DocPosition point, DocPosition anchorStart) {
-    if (!isVoid(point.blockId)) return point;
-    final voidIndex = _doc.indexOfBlock(point.blockId);
-    final anchorIndex = _doc.indexOfBlock(anchorStart.blockId);
-    return DocPosition(point.blockId, voidIndex >= anchorIndex ? 1 : 0);
-  }
-
-  /// Document order of two positions: by flat block index, then offset.
-  int _compare(DocPosition a, DocPosition b) {
-    final ia = _doc.indexOfBlock(a.blockId);
-    final ib = _doc.indexOfBlock(b.blockId);
-    if (ia != ib) return ia.compareTo(ib);
-    return a.offset.compareTo(b.offset);
+    _setSelection(
+      extendSelection(
+        anchor: _expandBase,
+        point: point,
+        doc: _doc,
+        isVoid: isVoid,
+      ),
+    );
   }
 }

@@ -10,10 +10,8 @@ import 'block_layout_registry.dart';
 import 'block_list_view.dart';
 import 'editor_view_scope.dart';
 import 'keyboard_interactor.dart';
-import 'menus/context_menus.dart';
 import 'mouse_interactor.dart';
-import 'selection_handles.dart';
-import 'selection_magnifier.dart';
+import 'selection_overlay_host.dart';
 import 'touch_interactor.dart';
 
 /// The v3 editor root widget: lazy render through the component registry,
@@ -24,9 +22,10 @@ import 'touch_interactor.dart';
 /// and the hardware-key matrix the IME doesn't own behind the full composing
 /// gate — Enter, Backspace, Tab, undo/redo, ←/→ grapheme movement, ↑/↓
 /// vertical movement, Cmd/Ctrl line/document boundaries, Shift extension, and
-/// Alt+↑/↓ `MoveBlock`. Selection gestures route to [MouseInteractor] and key
-/// events to [KeyboardInteractor] (symmetric per-concern extraction); touch
-/// gestures arrive days 11–13.
+/// Alt+↑/↓ `MoveBlock`. Selection gestures route per `PointerDeviceKind` to
+/// [MouseInteractor] (mouse/trackpad) and [TouchInteractor] (touch/stylus:
+/// long-press, handles, magnifier, fallback toolbar — days 11–13), and key
+/// events to [KeyboardInteractor] (symmetric per-concern extraction).
 class BulletEditor extends StatefulWidget {
   const BulletEditor({
     super.key,
@@ -140,33 +139,33 @@ class BulletEditorState extends State<BulletEditor>
   /// under the live selection. Hosted by the [RawGestureDetector] in [build]
   /// (the mechanism of Flutter's own `TextSelectionGestureDetector`).
   late final Map<Type, GestureRecognizerFactory> _touchGestures = {
-    TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<
-      TapGestureRecognizer
-    >(
-      () => TapGestureRecognizer(supportedDevices: _touchKinds),
-      (recognizer) {
-        recognizer.onTapUp = (details) {
-          _touchInteractor.handleTap(details.globalPosition);
-        };
-      },
-    ),
-    LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<
-      LongPressGestureRecognizer
-    >(
-      () => LongPressGestureRecognizer(supportedDevices: _touchKinds),
-      (recognizer) {
-        recognizer
-          ..onLongPressStart = (details) {
-            _touchInteractor.handleLongPressStart(details.globalPosition);
-          }
-          ..onLongPressMoveUpdate = (details) {
-            _touchInteractor.handleLongPressMoveUpdate(details.globalPosition);
-          }
-          ..onLongPressEnd = (_) {
-            _touchInteractor.handleLongPressEnd();
-          };
-      },
-    ),
+    TapGestureRecognizer:
+        GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          () => TapGestureRecognizer(supportedDevices: _touchKinds),
+          (recognizer) {
+            recognizer.onTapUp = (details) {
+              _touchInteractor.handleTap(details.globalPosition);
+            };
+          },
+        ),
+    LongPressGestureRecognizer:
+        GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          () => LongPressGestureRecognizer(supportedDevices: _touchKinds),
+          (recognizer) {
+            recognizer
+              ..onLongPressStart = (details) {
+                _touchInteractor.handleLongPressStart(details.globalPosition);
+              }
+              ..onLongPressMoveUpdate = (details) {
+                _touchInteractor.handleLongPressMoveUpdate(
+                  details.globalPosition,
+                );
+              }
+              ..onLongPressEnd = (_) {
+                _touchInteractor.handleLongPressEnd();
+              };
+          },
+        ),
   };
 
   /// The touch interactor — exposed for handle/anchor geometry assertions in
@@ -178,7 +177,6 @@ class BulletEditorState extends State<BulletEditor>
     final block = widget.controller.document.blockById(blockId);
     return block != null && widget.controller.schema.isVoid(block.blockType);
   }
-
 
   /// Hardware-key matrix behind the composing gate (architecture §hardware
   /// keyboard), symmetric with [_mouseInteractor]. Reads the controller/IME
@@ -455,7 +453,7 @@ class BulletEditorState extends State<BulletEditor>
       sliver = SliverPadding(padding: widget.padding!, sliver: sliver);
     }
 
-    Widget editor = EditorViewScope(
+    final Widget editorCore = EditorViewScope(
       registry: registry,
       child: Focus(
         focusNode: _focusNode,
@@ -536,46 +534,15 @@ class BulletEditorState extends State<BulletEditor>
       ),
     );
 
-    // The fallback selection toolbar overlays the editor subtree (it mounts its
-    // menu into the ambient Overlay via a ContextMenuController; the editor is
-    // its anchor source). It coexists with the handle/magnifier overlay below.
-    editor = SelectionToolbar(
+    // The touch-selection overlays (fallback toolbar + handles + magnifier)
+    // surround the editor core; the host owns their layout (G11 hit-test
+    // placement, viewport-predicate visibility) so build() stays gesture/
+    // scroll/IME wiring.
+    return SelectionOverlayHost(
       interactor: _touchInteractor,
       controllerOf: () => widget.controller,
-      viewportRectOf: _editorGlobalRect,
-      child: editor,
-    );
-
-    // Selection handles + magnifier sit in a Stack SIBLING to the scrollable
-    // (not inside it), so they are NOT clipped by the scroll viewport while
-    // their in-code viewport predicate governs visibility. The bulbs position
-    // from global anchor rects converted to this Stack's local space via
-    // [_overlayOrigin] (the Stack's own global top-left), so they remain
-    // correct wherever the editor is placed in the app. A Stack here — rather
-    // than the app Overlay — keeps the handle bulbs' opaque Listeners reliably
-    // in the editor's hit-test path (G11 pointer-down exclusivity).
-    return Stack(
-      children: [
-        Positioned.fill(child: editor),
-        Positioned.fill(
-          child: SelectionHandles(
-            interactor: _touchInteractor,
-            viewportRectOf: _editorGlobalRect,
-            originOf: _overlayOrigin,
-          ),
-        ),
-        Positioned.fill(
-          child: SelectionMagnifier(
-            interactor: _touchInteractor,
-            originOf: _overlayOrigin,
-          ),
-        ),
-      ],
+      editorRectOf: _editorGlobalRect,
+      child: editorCore,
     );
   }
-
-  /// The global top-left of the editor's render box — the origin the overlay
-  /// Stack's local coordinate space is measured from, so global anchor rects
-  /// can be converted to Stack-local positions. Zero before layout.
-  Offset _overlayOrigin() => _editorGlobalRect()?.topLeft ?? Offset.zero;
 }

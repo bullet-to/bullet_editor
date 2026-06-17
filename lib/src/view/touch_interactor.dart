@@ -7,10 +7,41 @@ import '../model/document.dart';
 import 'block_layout_registry.dart';
 import 'editor_auto_scroller.dart';
 import 'editor_hit_tester.dart';
+import 'selection_drag.dart';
+import 'selection_geometry.dart';
 
-/// Which selection endpoint a handle drives — the document-order start
-/// (upstream bulb) or end (downstream bulb).
-enum SelectionHandleKind { start, end }
+export 'selection_geometry.dart' show SelectionHandleKind;
+
+/// The active touch drag, or null when none is live. A sealed hierarchy so the
+/// illegal combinations a flat set of booleans allowed (a handle drag with no
+/// active handle, a "moved" flag on a handle drag) are unrepresentable, and
+/// "which kind of drag" is a pattern match, not a derivation from boolean pairs
+/// (review H5). Each variant carries its own [focalPoint] — the last
+/// (compensated) point it resolved at, the magnifier focal point and the scroll
+/// re-hit-test position.
+sealed class _DragSession {
+  _DragSession(this.focalPoint);
+  Offset focalPoint;
+}
+
+/// A long-press word drag: extends [wordAnchor] by word. [moved] gates the
+/// scroll re-hit-test — a stationary long-press must NOT re-extend under an
+/// incidental focus-driven `scrollTo(caret)`, which would otherwise drag the
+/// selection to whatever now sits under the stationary press point.
+class _LongPressDrag extends _DragSession {
+  _LongPressDrag(super.focalPoint, this.wordAnchor);
+  final DocSelection wordAnchor;
+  bool moved = false;
+}
+
+/// A handle drag: moves the [kind] endpoint, hit-testing at finger +
+/// [fingerToAnchorDelta] (grab-offset compensation — the bulb hangs a line off
+/// the anchor).
+class _HandleDrag extends _DragSession {
+  _HandleDrag(super.focalPoint, this.kind, this.fingerToAnchorDelta);
+  final SelectionHandleKind kind;
+  final Offset fingerToAnchorDelta;
+}
 
 /// Selection gestures for touch/stylus-kind pointers, on every platform
 /// (architecture §Gestures: per-kind dispatch, not platform-at-build — Android
@@ -23,8 +54,8 @@ enum SelectionHandleKind { start, end }
 ///   selection); voids atomic-select `[0,1)` via `setSelection` normalization.
 ///   (Gutter/prefix-tap and link-tap ride existing recognizers — day 14.)
 /// - **Long-press** word-selects via `wordBoundaryAt`, records the anchored
-///   word (mirror of the mouse `expandBase`), fires haptic feedback, and — via
-///   [notifyListeners] — surfaces the handles, magnifier, and toolbar.
+///   word, fires haptic feedback, and — via [notifyListeners] — surfaces the
+///   handles, magnifier, and toolbar.
 /// - **Long-press drag** extends the selection BY WORD from the anchor (never
 ///   shrinking below the anchored word), through the shared hit tester, driving
 ///   the shared autoscroller (D7) and the post-frame re-hit-test on scroll
@@ -33,6 +64,11 @@ enum SelectionHandleKind { start, end }
 ///   is visual-only and routes its pointer to this always-mounted object via
 ///   `pointerRouter`, so it survives the handle unmounting mid-drag. Grab-offset
 ///   compensation keeps the hit-test on the anchor, not the finger.
+///
+/// The selection-math (swept-void resolution, word-granular extension,
+/// document order) and the post-frame re-hit scheduling are the SHARED
+/// [extendSelection] / [resolveSweptVoid] / [DragRehitScheduler] helpers, one
+/// implementation with the mouse interactor (review H1–H4).
 ///
 /// A [ChangeNotifier] so the overlay widgets (handles, magnifier, toolbar)
 /// rebuild from one source of truth as the selection/drag/scroll state moves.
@@ -50,7 +86,22 @@ class TouchInteractor extends ChangeNotifier {
     _autoScroller = EditorAutoScroller(
       scrollPositionOf: scrollPositionOf,
       viewportRectOf: viewportRectOf,
-      isActive: () => _dragging,
+      isActive: () => _session != null,
+    );
+    _rehitScheduler = DragRehitScheduler(
+      isActive: () => _isActiveRehitDrag,
+      focalPointOf: () => _session?.focalPoint,
+      onRehit: (focal) {
+        final hit = hitTestDocPosition(registry, focal);
+        if (hit == null) return;
+        final session = _session;
+        if (session is _HandleDrag) {
+          _moveActiveEndpointTo(hit);
+        } else if (session is _LongPressDrag) {
+          _extendWordTo(hit);
+        }
+        notifyListeners();
+      },
     );
   }
 
@@ -72,6 +123,10 @@ class TouchInteractor extends ChangeNotifier {
   /// The edge-zone autoscroll ticker, shared with the mouse interactor (D7).
   late final EditorAutoScroller _autoScroller;
 
+  /// The post-frame extent re-hit-test after a mid-drag scroll (G5), shared
+  /// implementation with the mouse interactor (review H4).
+  late final DragRehitScheduler _rehitScheduler;
+
   Document get _doc => documentOf();
 
   // -- Dedup wrapper (mirror of the mouse interactor's): a drag re-hit-tests
@@ -84,46 +139,23 @@ class TouchInteractor extends ChangeNotifier {
     _rawSetSelection(selection);
   }
 
-  /// The anchored word a long-press drag extends from (never shrunk below its
-  /// own word while extending — native word-drag). Survives across edits only
-  /// as data: every use routes back through [setSelection], which clamps stale
-  /// offsets and rejects gone ids.
-  DocSelection? _wordAnchor;
+  /// The active touch drag (long-press or handle), or null when none is live.
+  _DragSession? _session;
 
-  // -- Active-drag bookkeeping (one of: long-press drag, or a handle drag) --
-  bool _dragging = false;
-
-  /// True while a handle drag is live (vs. a long-press drag). Handle drags
-  /// move the named endpoint; long-press drags extend the anchored word.
-  bool _draggingHandle = false;
-  SelectionHandleKind? _activeHandle;
-
-  /// Whether the active long-press has actually moved (a drag-extension is
-  /// under way). Until the finger moves, the long-press is a stationary
-  /// word-select and a scroll re-hit-test must NOT re-extend it — an incidental
-  /// focus-driven `scrollTo(caret)` would otherwise drag the selection to
-  /// whatever now sits under the stationary press point.
-  bool _longPressMoved = false;
-
-  /// The vector from the anchor's on-screen position to the finger at handle
-  /// pointer-down: every hit-test during the drag adds it back so we resolve
-  /// at the anchor, not a line away under the bulb (architecture §Gestures
-  /// grab-offset compensation).
-  Offset _fingerToAnchorDelta = Offset.zero;
-
-  /// The last (compensated) global point a drag resolved at — the magnifier's
-  /// focal point and the scroll re-hit-test position.
-  Offset? _dragFocalPoint;
-
-  /// The active drag's compensated focal point, or null when no drag is live —
-  /// the magnifier reads this (architecture §Gestures: the magnifier follows
-  /// the compensated finger point, surviving the extent block leaving the
-  /// viewport).
-  Offset? get dragFocalPoint => _dragging ? _dragFocalPoint : null;
-
-  /// Whether a selection drag (long-press or handle) is live — the magnifier
-  /// shows iff this is true.
-  bool get isDragging => _dragging;
+  /// True from a handle pointer-down until just after its up — the handle's
+  /// opaque `Listener` stops the hit-test within the overlay subtree, but the
+  /// editor's tap/long-press recognizers sit in a SEPARATE Overlay entry below
+  /// and still see the pointer (per-widget `HitTestBehavior` does not absorb
+  /// across Overlay entries). Without this, releasing a handle without moving
+  /// would also fire the editor's tap → a collapsed caret (arch 1427 violated).
+  /// It outlives the drag [_session] by one frame (the editor's recognizers
+  /// fire their up on the same frame as the handle's), so it is a separate flag,
+  /// not part of the session: the interactor owns both the handle route and the
+  /// editor recognizers, so it suppresses its own tap/long-press while a handle
+  /// gesture owns the pointer — the G11 "pointer that goes down on a handle
+  /// never seeds the scrollable/caret" invariant, enforced at the one place that
+  /// knows both.
+  bool _handleGestureActive = false;
 
   /// Whether the live selection was made by a TOUCH gesture (long-press or a
   /// handle drag) — handles, magnifier, and the fallback toolbar are touch
@@ -135,19 +167,24 @@ class TouchInteractor extends ChangeNotifier {
   bool get touchSelectionActive => _touchSelectionActive;
   bool _touchSelectionActive = false;
 
-  bool _rehitScheduled = false;
+  /// The active drag's compensated focal point, or null when no drag is live —
+  /// the magnifier reads this (architecture §Gestures: the magnifier follows
+  /// the compensated finger point, surviving the extent block leaving the
+  /// viewport).
+  Offset? get dragFocalPoint => _session?.focalPoint;
 
-  /// True from a handle pointer-down until just after its up — the handle's
-  /// opaque `Listener` stops the hit-test within the overlay subtree, but the
-  /// editor's tap/long-press recognizers sit in a SEPARATE Overlay entry below
-  /// and still see the pointer (per-widget `HitTestBehavior` does not absorb
-  /// across Overlay entries). Without this, releasing a handle without moving
-  /// would also fire the editor's tap → a collapsed caret (arch 1427 violated).
-  /// The interactor owns both the handle route and the editor recognizers, so
-  /// it suppresses its own tap/long-press while a handle gesture owns the
-  /// pointer — the G11 "pointer that goes down on a handle never seeds the
-  /// scrollable/caret" invariant, enforced at the one place that knows both.
-  bool _handleGestureActive = false;
+  /// Whether a selection drag (long-press or handle) is live — the magnifier
+  /// shows iff this is true.
+  bool get isDragging => _session != null;
+
+  /// Whether a re-hit-applicable drag is live: a handle drag, or a long-press
+  /// that has actually moved. A stationary long-press (or a mouse-path scroll)
+  /// must not re-extend under an incidental focus-driven scroll.
+  bool get _isActiveRehitDrag {
+    final session = _session;
+    return session is _HandleDrag ||
+        (session is _LongPressDrag && session.moved);
+  }
 
   // ===========================================================================
   // Tap & long-press (driven by the interactor-owned recognizers in
@@ -182,12 +219,8 @@ class TouchInteractor extends ChangeNotifier {
     final hit = hitTestDocPosition(registry, globalPosition);
     if (hit == null) return;
     final word = _wordSelectionAt(hit);
-    _wordAnchor = word;
+    _session = _LongPressDrag(globalPosition, word);
     _touchSelectionActive = true;
-    _dragging = true;
-    _draggingHandle = false;
-    _longPressMoved = false;
-    _dragFocalPoint = globalPosition;
     HapticFeedback.selectionClick(); // feel-tunable; device-verified later
     _setSelection(word);
     notifyListeners();
@@ -199,17 +232,18 @@ class TouchInteractor extends ChangeNotifier {
   /// at the raw finger (the magnifier hangs the loupe above it); only handle
   /// drags compensate (the bulb hangs off the anchor).
   void handleLongPressMoveUpdate(Offset globalPosition) {
-    if (!_dragging || _draggingHandle) return;
-    _longPressMoved = true;
-    _dragFocalPoint = globalPosition;
+    final session = _session;
+    if (session is! _LongPressDrag) return;
+    session.moved = true;
+    session.focalPoint = globalPosition;
     final hit = hitTestDocPosition(registry, globalPosition);
     if (hit != null) _extendWordTo(hit);
     _autoScroller.update(globalPosition);
     notifyListeners(); // magnifier focal point moved
   }
 
-  /// Long-press / handle drag ended: stop autoscroll, drop the drag flag, and
-  /// refresh overlays (magnifier hides, toolbar re-anchors to the final
+  /// Long-press / handle drag ended: stop autoscroll, drop the drag session,
+  /// and refresh overlays (magnifier hides, toolbar re-anchors to the final
   /// selection). The selection itself is already committed by the last move.
   void handleLongPressEnd() => _endDrag();
 
@@ -239,13 +273,9 @@ class TouchInteractor extends ChangeNotifier {
     final anchorGlobal = kind == SelectionHandleKind.start
         ? rect.topLeft
         : rect.bottomLeft;
-    _fingerToAnchorDelta = anchorGlobal - event.position;
+    _session = _HandleDrag(anchorGlobal, kind, anchorGlobal - event.position);
     _handleGestureActive = true;
     _touchSelectionActive = true;
-    _activeHandle = kind;
-    _draggingHandle = true;
-    _dragging = true;
-    _dragFocalPoint = anchorGlobal;
     GestureBinding.instance.pointerRouter.addRoute(
       event.pointer,
       _onHandlePointerEvent,
@@ -277,11 +307,12 @@ class TouchInteractor extends ChangeNotifier {
   }
 
   void _moveHandleTo(Offset fingerPosition) {
-    if (!_draggingHandle) return;
+    final session = _session;
+    if (session is! _HandleDrag) return;
     // Grab-offset compensation: hit-test at the anchor's projected position,
     // not the raw finger (the bulb hangs a line off the anchor).
-    final compensated = fingerPosition + _fingerToAnchorDelta;
-    _dragFocalPoint = compensated;
+    final compensated = fingerPosition + session.fingerToAnchorDelta;
+    session.focalPoint = compensated;
     final hit = hitTestDocPosition(registry, compensated);
     if (hit != null) _moveActiveEndpointTo(hit);
     _autoScroller.update(compensated);
@@ -294,7 +325,7 @@ class TouchInteractor extends ChangeNotifier {
   /// poke listeners. A drag's own pushes don't route here (they notify inline),
   /// so this never double-fires mid-drag.
   void onSelectionChanged() {
-    if (_dragging) return; // a live drag already notifies on each move
+    if (_session != null) return; // a live drag already notifies on each move
     // A selection change from a non-touch path (mouse drag-select, keyboard,
     // an app call) is not touch chrome's selection — drop the flag so handles /
     // magnifier / toolbar don't appear over it.
@@ -303,42 +334,22 @@ class TouchInteractor extends ChangeNotifier {
   }
 
   // ===========================================================================
-  // Scroll re-hit-test (G5) — identical mechanics to the mouse interactor.
+  // Scroll re-hit-test (G5) — the shared [DragRehitScheduler], plus the overlay
+  // visibility recompute every tick.
   // ===========================================================================
 
-  /// Re-hit-test under the stationary (compensated) drag point after a scroll
-  /// committed and the sliver re-laid the revealed content — scheduled
-  /// post-frame so the hit always lands on laid-out content (G5). Called by the
-  /// editor's scroll-notification listener while a drag is active; this is also
-  /// the tick that recomputes handle/toolbar visibility (the shared scroll tick
-  /// — §Gestures handle visibility / §Context menus hide-on-offscreen).
+  /// Called by the editor's scroll-notification listener. Recomputes overlay
+  /// visibility (handles/toolbar) on EVERY tick — the shared scroll tick
+  /// (§Gestures handle visibility / §Context menus hide-on-offscreen) — and, for
+  /// an active drag, schedules the post-frame extent re-hit-test (G5).
   void onScroll() {
-    // Recompute overlay visibility (handles/toolbar) on every scroll tick.
     notifyListeners();
-    // Re-hit only for an ACTIVE drag: a handle drag, or a long-press that has
-    // actually moved. A stationary long-press (or a mouse-path scroll) must not
-    // re-extend under an incidental focus-driven scroll.
-    final reHits = _draggingHandle || _longPressMoved;
-    final focal = _dragFocalPoint;
-    if (!_dragging || !reHits || focal == null || _rehitScheduled) return;
-    _rehitScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _rehitScheduled = false;
-      final point = _dragFocalPoint;
-      if (!_dragging || point == null) return;
-      final hit = hitTestDocPosition(registry, point);
-      if (hit == null) return;
-      if (_draggingHandle) {
-        _moveActiveEndpointTo(hit);
-      } else {
-        _extendWordTo(hit);
-      }
-      notifyListeners();
-    });
+    _rehitScheduler.schedule();
   }
 
   // ===========================================================================
-  // Selection math.
+  // Selection math (shared helpers; the touch interactor only supplies the
+  // word-granular snap the mouse interactor omits).
   // ===========================================================================
 
   /// The word selection at [hit]: the `wordBoundaryAt` span for a text block,
@@ -357,34 +368,21 @@ class TouchInteractor extends ChangeNotifier {
     );
   }
 
-  /// Extends the long-press selection to the WORD at [point], oriented in
-  /// document order against the anchored word and never shrinking below it
-  /// (native word-drag: both ends snap to word boundaries). Mirrors the mouse
-  /// interactor's `_extendTo`, but the moving end snaps to the word containing
-  /// the drag point rather than landing mid-word.
+  /// Extends the long-press selection to the WORD at [point] via the shared
+  /// [extendSelection] math, supplying [_wordEdgeAt] as the snap so the moving
+  /// end lands on a word boundary rather than mid-word (native word-drag).
   void _extendWordTo(DocPosition point) {
-    final anchor = _wordAnchor;
-    if (anchor == null) {
-      _setSelection(DocSelection.collapsed(point));
-      return;
-    }
-    final (start, end) = anchor.normalized(_doc);
-    point = _resolveSweptVoid(point, start);
-    final DocSelection extended;
-    if (_compare(point, start) < 0) {
-      // Dragging upstream: the moving end snaps to the START of the word at the
-      // point; the anchor's downstream end stays fixed.
-      final wordStart = _wordEdgeAt(point, toStart: true);
-      extended = DocSelection(base: end, extent: wordStart);
-    } else if (_compare(point, end) > 0) {
-      // Dragging downstream: the moving end snaps to the END of the word at the
-      // point; the anchor's upstream start stays fixed.
-      final wordEnd = _wordEdgeAt(point, toStart: false);
-      extended = DocSelection(base: start, extent: wordEnd);
-    } else {
-      extended = anchor;
-    }
-    _setSelection(extended);
+    final session = _session;
+    final anchor = session is _LongPressDrag ? session.wordAnchor : null;
+    _setSelection(
+      extendSelection(
+        anchor: anchor,
+        point: point,
+        doc: _doc,
+        isVoid: isVoid,
+        snap: _wordEdgeAt,
+      ),
+    );
   }
 
   /// The start (or end) of the word containing [point], for word-granular drag
@@ -401,106 +399,35 @@ class TouchInteractor extends ChangeNotifier {
   /// fixed (the model selection is the source of truth for the fixed end). A
   /// handle drag moves by character, not word (native handle behavior).
   void _moveActiveEndpointTo(DocPosition point) {
+    final session = _session;
     final selection = selectionOf();
-    final handle = _activeHandle;
-    if (selection == null || handle == null) return;
+    if (session is! _HandleDrag || selection == null) return;
     final (start, end) = selection.normalized(_doc);
     // The fixed endpoint is the OTHER document-order end; resolve a swept void
     // by direction against it so a handle dragged onto an image covers it.
-    final fixed = handle == SelectionHandleKind.start ? end : start;
-    point = _resolveSweptVoid(point, fixed);
+    final fixed = session.kind == SelectionHandleKind.start ? end : start;
+    point = resolveSweptVoid(point, fixed, _doc, isVoid);
     _setSelection(DocSelection(base: fixed, extent: point));
   }
 
-  /// Selects a swept void the moment the drag enters its box (D6, web feel),
-  /// resolving the void edge by direction against [anchorStart] so its `[0,1)`
-  /// is covered. Identical rule to the mouse interactor.
-  DocPosition _resolveSweptVoid(DocPosition point, DocPosition anchorStart) {
-    if (!isVoid(point.blockId)) return point;
-    final voidIndex = _doc.indexOfBlock(point.blockId);
-    final anchorIndex = _doc.indexOfBlock(anchorStart.blockId);
-    return DocPosition(point.blockId, voidIndex >= anchorIndex ? 1 : 0);
-  }
-
-  int _compare(DocPosition a, DocPosition b) {
-    final ia = _doc.indexOfBlock(a.blockId);
-    final ib = _doc.indexOfBlock(b.blockId);
-    if (ia != ib) return ia.compareTo(ib);
-    return a.offset.compareTo(b.offset);
-  }
-
   // ===========================================================================
-  // Handle anchor geometry (also the handle widgets' positioning source).
+  // Handle / menu anchor geometry — thin bindings of this interactor's state to
+  // the pure [selection_geometry] helpers (review M4): the widgets read these,
+  // and a handle drag start reads [handleAnchorRectGlobal].
   // ===========================================================================
 
-  /// The caret rect of [kind]'s endpoint in global coordinates — the single
-  /// source for both handle positioning (the widget) and grab-offset
-  /// compensation (the drag start). Null when that block is not laid out
-  /// (scrolled out of the lazy viewport); a handle drag refuses to start on
-  /// null (the drag-start race, consistent with GATE-L).
-  Rect? handleAnchorRectGlobal(SelectionHandleKind kind) {
-    final selection = selectionOf();
-    if (selection == null || selection.isCollapsed) return null;
-    final (start, end) = selection.normalized(_doc);
-    final position = kind == SelectionHandleKind.start ? start : end;
-    final geometry = registry.geometryOf(position.blockId);
-    if (geometry == null) return null;
-    final rect = geometry.rectForOffset(position.offset);
-    final box = geometry.renderBox;
-    if (rect == null || !box.attached || !box.hasSize) return null;
-    return box.localToGlobal(rect.topLeft) & rect.size;
-  }
+  /// The caret rect of [kind]'s endpoint (global), or null when not laid out.
+  Rect? handleAnchorRectGlobal(SelectionHandleKind kind) =>
+      handleAnchorRect(registry, _doc, selectionOf(), kind);
 
   /// The bounding box (global) of the selection's laid-out block rects — the
-  /// context-menu anchor (architecture §Context menus G14: first/last visible
-  /// block rects, clamped to the viewport by the caller). Null when NO selected
-  /// block has a visible rect (every endpoint and the interior scrolled off):
-  /// the menu hides on that tick (§Context menus zero-visible-rects case).
-  Rect? selectionBoundsGlobal() {
-    final selection = selectionOf();
-    if (selection == null || selection.isCollapsed) return null;
-    final (start, end) = selection.normalized(_doc);
-    final startIndex = _doc.indexOfBlock(start.blockId);
-    final endIndex = _doc.indexOfBlock(end.blockId);
-    if (startIndex < 0 || endIndex < 0) return null;
-
-    Rect? bounds;
-    for (var i = startIndex; i <= endIndex; i++) {
-      final block = _doc.allBlocks[i];
-      final geometry = registry.geometryOf(block.id);
-      if (geometry == null) continue; // not laid out — skip (lazy-safe)
-      final box = geometry.renderBox;
-      if (!box.attached || !box.hasSize) continue;
-      // The selected slice within this block: [start.offset, end.offset] at
-      // the endpoints, the whole block in the interior.
-      final localStart = i == startIndex ? start.offset : 0;
-      final localEnd = i == endIndex ? end.offset : block.length;
-      final rects = isVoid(block.id)
-          ? [Offset.zero & box.size]
-          : geometry.rectsForRange(localStart, localEnd);
-      for (final r in rects) {
-        final global = box.localToGlobal(r.topLeft) & r.size;
-        bounds = bounds == null ? global : bounds.expandToInclude(global);
-      }
-      // An empty endpoint slice (caret-at-start) yields no rects; fall back to
-      // the caret rect so a one-block selection edge still anchors the menu.
-      if (rects.isEmpty) {
-        final caret = geometry.rectForOffset(localStart);
-        if (caret != null) {
-          final global = box.localToGlobal(caret.topLeft) & caret.size;
-          bounds = bounds == null ? global : bounds.expandToInclude(global);
-        }
-      }
-    }
-    return bounds;
-  }
+  /// context-menu anchor — or null when no selected block is visible.
+  Rect? selectionBoundsGlobal() =>
+      selectionBoundsRect(registry, _doc, selectionOf(), isVoid);
 
   void _endDrag() {
-    final wasDragging = _dragging;
-    _dragging = false;
-    _draggingHandle = false;
-    _activeHandle = null;
-    _dragFocalPoint = null;
+    final wasDragging = _session != null;
+    _session = null;
     _autoScroller.stop();
     if (wasDragging) notifyListeners();
   }
