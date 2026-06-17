@@ -34,14 +34,16 @@ class _LongPressDrag extends _DragSession {
   bool moved = false;
 }
 
-/// A handle drag: moves the grabbed endpoint, hit-testing at finger +
+/// A handle drag: moves the grabbed [kind] endpoint, hit-testing at finger +
 /// [fingerToAnchorDelta] (grab-offset compensation — the bulb hangs a line off
 /// the anchor). [anchor] is the OPPOSITE endpoint, captured at drag-start and
-/// held FIXED for the whole drag: the grabbed handle is always the moving
-/// `extent` against this `base`, so it can cross [anchor] and invert the
-/// selection (native handle-swap) without the anchor walking with the finger.
+/// held FIXED for the whole drag (so it never walks with the finger). The
+/// grabbed handle stays on its own side of [anchor]: it clamps to a one-
+/// character minimum and never crosses or inverts (native handle behavior);
+/// [kind] tells which side it is.
 class _HandleDrag extends _DragSession {
-  _HandleDrag(super.focalPoint, this.anchor, this.fingerToAnchorDelta);
+  _HandleDrag(super.focalPoint, this.kind, this.anchor, this.fingerToAnchorDelta);
+  final SelectionHandleKind kind;
   final DocPosition anchor;
   final Offset fingerToAnchorDelta;
 }
@@ -344,9 +346,9 @@ class TouchInteractor extends ChangeNotifier {
     }
 
     // Lock the OPPOSITE endpoint as the fixed anchor for the whole drag — the
-    // grabbed handle moves against it and may cross it (inverting the
-    // selection). Reading it once here, not per-move from the live selection, is
-    // what keeps it from walking with the finger once the handles swap order.
+    // grabbed handle moves against it (and is clamped so it never crosses it).
+    // Reading it once here, not per-move from the live selection, is what keeps
+    // it from walking with the finger as the selection shrinks.
     final (start, end) = selection.normalized(_doc);
     final fixedAnchor = kind == SelectionHandleKind.start ? end : start;
 
@@ -357,7 +359,12 @@ class TouchInteractor extends ChangeNotifier {
     // endpoint's own line. bottomLeft is inside the endpoint's block (it is that
     // block's own caret-rect bottom), so the hit clamps onto the right line.
     final glyphGlobal = rect.bottomLeft;
-    _session = _HandleDrag(glyphGlobal, fixedAnchor, glyphGlobal - event.position);
+    _session = _HandleDrag(
+      glyphGlobal,
+      kind,
+      fixedAnchor,
+      glyphGlobal - event.position,
+    );
     _handleGestureActive = true;
     _touchSelectionActive = true;
     GestureBinding.instance.pointerRouter.addRoute(
@@ -480,16 +487,40 @@ class TouchInteractor extends ChangeNotifier {
   }
 
   /// Moves the grabbed handle to [point] against the session's FIXED [anchor]
-  /// (captured at drag-start, never re-derived — so the dragged handle can cross
-  /// the anchor and invert the selection without the anchor walking). A handle
-  /// drag moves by character, not word (native handle behavior). A swept void is
-  /// resolved by direction against the anchor so a handle dragged onto an image
-  /// covers it.
+  /// (captured at drag-start, never re-derived — so the anchor never walks with
+  /// the finger). A handle drag moves by character, not word (native handle
+  /// behavior). A swept void is resolved by direction against the anchor so a
+  /// handle dragged onto an image covers it. The grabbed handle is CLAMPED to
+  /// its own side of the anchor with a one-character minimum: native handles
+  /// stop at one character, they do not cross or invert (device finding).
   void _moveActiveEndpointTo(DocPosition point) {
     final session = _session;
     if (session is! _HandleDrag) return;
     point = resolveSweptVoid(point, session.anchor, _doc, isVoid);
+
+    final draggedIsEnd = session.kind == SelectionHandleKind.end;
+    final cmp = point.compareInDocument(session.anchor, _doc);
+    // End handle must stay strictly AFTER the anchor; start handle strictly
+    // BEFORE. On reaching or crossing it, clamp to a one-character selection.
+    if (draggedIsEnd ? cmp <= 0 : cmp >= 0) {
+      point = _oneCharFromAnchor(session.anchor, draggedIsEnd: draggedIsEnd);
+    }
     _setSelection(DocSelection(base: session.anchor, extent: point));
+  }
+
+  /// The position one character to the [draggedIsEnd] side of [anchor], within
+  /// the anchor's block (the one-character clamp floor). For a word/block
+  /// selection the anchor is never at the block edge on the dragged side, so a
+  /// one-char span always exists; the `clamp` guards the degenerate edge.
+  DocPosition _oneCharFromAnchor(
+    DocPosition anchor, {
+    required bool draggedIsEnd,
+  }) {
+    final length = _doc.blockById(anchor.blockId)?.length ?? anchor.offset;
+    final offset = draggedIsEnd
+        ? (anchor.offset + 1).clamp(0, length)
+        : (anchor.offset - 1).clamp(0, length);
+    return DocPosition(anchor.blockId, offset);
   }
 
   // ===========================================================================

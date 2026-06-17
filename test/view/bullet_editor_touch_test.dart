@@ -296,12 +296,13 @@ void main() {
       expect(end.offset, greaterThan(5), reason: 'the extent extended');
     });
 
-    // Device finding: dragging a handle PAST the opposite endpoint must invert
-    // the selection (native handle-swap), not clamp to one character. The bug:
-    // the fixed end was re-derived from the live (re-normalized) selection each
-    // move, so once the handles crossed, the anchor walked with the finger and
-    // the selection stayed ~1 char wide. The anchor is now locked at drag-start.
-    testWidgets('dragging a handle past the anchor inverts the selection', (
+    // Device finding: dragging a handle toward/past the opposite endpoint must
+    // CLAMP to a one-character selection and stop — native handles do not cross
+    // or invert. (The earlier bug was the anchor WALKING with the finger because
+    // the fixed end was re-derived from the live, re-normalized selection each
+    // move; the anchor is now locked at drag-start AND the dragged handle is
+    // clamped to its own side.)
+    testWidgets('dragging a handle past the anchor clamps to one char', (
       tester,
     ) async {
       final scroll = ScrollController();
@@ -346,14 +347,14 @@ void main() {
       await gesture.up();
       await tester.pump();
 
-      // The anchor (start of "world", offset 6) stayed fixed; the dragged handle
-      // crossed it, so the live selection now spans [2, 6] — not clamped to one
-      // character around 6.
+      // The anchor (start of "world", offset 6) stayed fixed and the dragged END
+      // handle clamped to one character after it — the selection is "w" ([6,7]),
+      // NOT inverted into "hello".
       final (start, end) = controller.selection!.normalized(
         controller.document,
       );
-      expect(end, DocPosition('b', 6), reason: 'the anchor stayed locked');
-      expect(start.offset, lessThanOrEqualTo(3), reason: 'crossed into "hello"');
+      expect(start, DocPosition('b', 6), reason: 'the anchor stayed locked');
+      expect(end, DocPosition('b', 7), reason: 'clamped to one char — no invert');
     });
 
     // The hit region pads the small glyph to a finger-sized (≈48px) target — a
