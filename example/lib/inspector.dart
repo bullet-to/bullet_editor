@@ -595,9 +595,30 @@ class _LazinessFooterState extends State<_LazinessFooter> {
 
 /// A vanilla [TextField] for A/B comparison during the day-9 gate: type the
 /// same sequence here and in the editor to confirm the editor matches stock
-/// Flutter IME behavior.
-class _VanillaTextFieldPane extends StatelessWidget {
+/// Flutter IME behavior. Pre-filled with sample text so selection handles /
+/// the edit menu can be exercised without retyping each time; Reset restores
+/// the sample, Clear empties it for a fresh IME session.
+class _VanillaTextFieldPane extends StatefulWidget {
   const _VanillaTextFieldPane();
+
+  @override
+  State<_VanillaTextFieldPane> createState() => _VanillaTextFieldPaneState();
+}
+
+class _VanillaTextFieldPaneState extends State<_VanillaTextFieldPane> {
+  static const _sample =
+      'The quick brown fox jumps over the lazy dog. '
+      'Pack my box with five dozen liquor jugs.';
+
+  late final TextEditingController _controller = TextEditingController(
+    text: _sample,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -606,9 +627,25 @@ class _VanillaTextFieldPane extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Vanilla TextField (comparison)',
-            style: Theme.of(context).textTheme.titleSmall,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Vanilla TextField (comparison)',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _controller.text = _sample,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Reset'),
+              ),
+              TextButton.icon(
+                onPressed: _controller.clear,
+                icon: const Icon(Icons.clear, size: 18),
+                label: const Text('Clear'),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
@@ -617,9 +654,10 @@ class _VanillaTextFieldPane extends StatelessWidget {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 16),
-          const TextField(
+          TextField(
+            controller: _controller,
             maxLines: null,
-            decoration: InputDecoration(
+            decoration: const InputDecoration(
               border: OutlineInputBorder(),
               hintText: 'Type here...',
             ),
