@@ -1,17 +1,25 @@
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart' show cupertinoTextSelectionControls;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'touch_interactor.dart';
 
 /// Touch target floor for a handle — the platform handle glyph is small (~22px
 /// for Material), so we pad the interactive region out to this so a finger
-/// reliably grabs it (and, critically, the opaque Listener over that region
-/// stops the pointer reaching the scrollable beneath — device finding: a 22px
-/// hit region let a near-miss fall through and scroll the list mid-grab). Native
-/// `TextSelectionOverlay` expands handles to the same `kMinInteractiveDimension`.
+/// reliably grabs it. Native `TextSelectionOverlay` expands handles to the same
+/// `kMinInteractiveDimension`.
 const double _kMinTouchTarget = 48.0;
+
+/// Touch-class devices whose pointer-down on a handle must win the gesture
+/// arena outright (below): mouse is excluded — a mouse drag-select never shows
+/// handles in the first place (arch 1248).
+const Set<PointerDeviceKind> _kHandleDevices = {
+  PointerDeviceKind.touch,
+  PointerDeviceKind.stylus,
+  PointerDeviceKind.invertedStylus,
+};
 
 /// The platform's selection controls — Material on Android/desktop (bottom-
 /// corner teardrops), Cupertino on iOS/macOS (bar + knob). Rendering through the
@@ -45,12 +53,16 @@ TextSelectionControls _controlsFor(BuildContext context) {
 /// bar as its anchor scrolls past the edge (the sliver's cacheExtent keeps it
 /// laid out beyond the visible viewport). [viewportRectOf] supplies the bounds.
 ///
-/// **G11 pointer-down exclusivity**: the interactive region's `Listener` is
-/// `HitTestBehavior.opaque` over a full [_kMinTouchTarget] so a pointer that
-/// goes down on (or near) a handle never seeds the scrollable. **G11 drag
-/// continuity**: the down only *starts* the drag in the interactor (which owns
-/// the pointer route); the handle never owns the active gesture, so it may
-/// unmount mid-drag.
+/// **G11 pointer-down exclusivity**: opacity alone is NOT enough — a raw
+/// `Listener` does not enter the gesture arena, so an ancestor drag recognizer
+/// (the editor's own scrollable, *or* a host `TabBarView`/`PageView` the editor
+/// is nested in) wins the arena uncontested and drags the thing underneath
+/// while the finger is on the handle (device finding). So the region also mounts
+/// an [EagerGestureRecognizer], which claims victory the instant the pointer
+/// goes down — defeating every ancestor recognizer for that pointer. **G11 drag
+/// continuity**: the `Listener`'s down only *starts* the drag in the interactor
+/// (which owns the pointer route); pointer routes deliver events independently
+/// of the arena, so the drag survives even after this widget unmounts.
 ///
 /// Anchor rects are read POST-FRAME (the interactor can notify mid-build — e.g.
 /// from a scroll tick fired during another block's layout — and querying a
@@ -213,46 +225,51 @@ class _SelectionHandle extends StatelessWidget {
     final endpointGlobal = anchorRect.bottomLeft;
     final topLeft = endpointGlobal - handleAnchor - origin;
 
-    // The interactive region is deliberately generous, and extends UPWARD a
-    // full line: a finger aiming at a handle naturally lands on the selection
-    // CORNER (where the teardrop attaches to the text), a line above the glyph
-    // that hangs below. A region hugging only the glyph let that aim miss and
-    // fall through to the list, which then scrolled (device finding). It is
-    // opaque over the whole region so the pointer never seeds the scrollable
-    // (G11). Width is the touch-target floor centered on the glyph; height runs
-    // from the line top, through the glyph, to the floor below it.
+    // A touch-target-floor region centered on the glyph (the native handle
+    // expands the same way to kMinInteractiveDimension). The glyph is painted at
+    // its true position within the (possibly larger) region.
     final hitWidth = math.max(_kMinTouchTarget, size.width);
+    final hitHeight = math.max(_kMinTouchTarget, size.height);
     final hpad = (hitWidth - size.width) / 2;
-    final upPad = lineHeight;
-    final downPad = math.max(0.0, _kMinTouchTarget - size.height);
-    final hitHeight = upPad + size.height + downPad;
+    final vpad = (hitHeight - size.height) / 2;
 
     return Positioned(
       left: topLeft.dx - hpad,
-      top: topLeft.dy - upPad,
+      top: topLeft.dy - vpad,
       width: hitWidth,
       height: hitHeight,
-      child: Listener(
-        // G11 pointer-down exclusivity: opaque over the whole region so a
-        // pointer down here never appears in the viewport's hit-test path.
+      // RawGestureDetector mounts an EagerGestureRecognizer so a pointer-down on
+      // the handle wins the gesture arena outright — no ancestor scrollable or
+      // TabBarView can snipe the drag (see class doc, G11). Opaque so the down
+      // also never reaches anything below in the hit-test path.
+      child: RawGestureDetector(
         behavior: HitTestBehavior.opaque,
-        onPointerDown: (event) =>
-            interactor.handleHandlePointerDown(event, kind),
-        // No move/up handlers: the interactor owns the pointer route from the
-        // down, so move/up arrive there even after this widget unmounts (G11).
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // The glyph painted at its true position within the larger region.
-            Positioned(
-              left: hpad,
-              top: upPad,
-              child: SizedBox.fromSize(
-                size: size,
-                child: controls.buildHandle(context, type, lineHeight),
+        gestures: <Type, GestureRecognizerFactory>{
+          EagerGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<EagerGestureRecognizer>(
+                () => EagerGestureRecognizer(supportedDevices: _kHandleDevices),
+                (instance) {},
               ),
-            ),
-          ],
+        },
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: (event) =>
+              interactor.handleHandlePointerDown(event, kind),
+          // No move/up handlers: the interactor owns the pointer route from the
+          // down, so move/up arrive there even after this widget unmounts (G11).
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                left: hpad,
+                top: vpad,
+                child: SizedBox.fromSize(
+                  size: size,
+                  child: controls.buildHandle(context, type, lineHeight),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

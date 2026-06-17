@@ -240,10 +240,10 @@ void main() {
       expect(end.offset, greaterThan(5), reason: 'the extent extended');
     });
 
-    // Device finding (G11): a 22px handle hit region let a near-miss grab fall
-    // through and scroll the list mid-drag. The hit-slop pads the opaque region
-    // to a finger-sized target — a grab OFF the glyph centre (but within the
-    // slop) must still start the handle drag and must NOT scroll the list.
+    // The hit region pads the small glyph to a finger-sized (≈48px) target — a
+    // grab OFF the glyph centre (but within the pad) must still start the handle
+    // drag, and the handle's arena claim (EagerGestureRecognizer) must keep the
+    // editor's own scrollable from scrolling under the finger.
     testWidgets('an off-centre grab within the hit-slop drags, never scrolls', (
       tester,
     ) async {
@@ -294,6 +294,72 @@ void main() {
         reason: 'the handle drag did not scroll the list under it',
       );
       expect(controller.selection!.extent.offset, greaterThan(5));
+    });
+
+    // Device finding (G11): the editor is commonly nested in a horizontally-
+    // swipeable ancestor — a `TabBarView`/`PageView`. A raw Listener does not
+    // enter the gesture arena, so the ancestor's horizontal drag recognizer won
+    // it uncontested and swiped the page while the finger was on a handle. The
+    // handle's EagerGestureRecognizer must claim the arena so the ancestor never
+    // moves during a handle drag.
+    testWidgets('a handle drag does not swipe an ancestor PageView', (
+      tester,
+    ) async {
+      final pages = PageController();
+      addTearDown(pages.dispose);
+      controller = EditorController(
+        document: Document([para('b', 'hello world foo')]),
+        schema: EditorSchema.standard(),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PageView(
+              controller: pages,
+              children: [
+                BulletEditor(
+                  controller: controller,
+                  textStyle: const TextStyle(
+                    fontSize: 16,
+                    color: Color(0xFF000000),
+                  ),
+                ),
+                const ColoredBox(color: Color(0xFF00FF00)),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.longPressAt(pointFor(tester, 'b', 2)); // "hello"
+      await tester.pump();
+      await tester.pump();
+
+      final interactor = stateOf(tester).touchInteractorForTest;
+      final endRect = interactor.handleAnchorRectGlobal(
+        SelectionHandleKind.end,
+      )!;
+      final gesture = await tester.startGesture(
+        endRect.bottomLeft,
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      // A decidedly horizontal drag — exactly what would swipe the PageView.
+      await gesture.moveBy(const Offset(-120, 0));
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(
+        pages.page,
+        0.0,
+        reason: 'the handle drag must not swipe the ancestor PageView',
+      );
+      expect(
+        interactor.isDragging || controller.selection != null,
+        isTrue,
+        reason: 'the gesture went to the handle, not the page',
+      );
     });
 
     testWidgets(
