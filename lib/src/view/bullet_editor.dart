@@ -143,6 +143,10 @@ class BulletEditorState extends State<BulletEditor>
         GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
           () => TapGestureRecognizer(supportedDevices: _touchKinds),
           (recognizer) {
+            // The consecutive-tap COUNT (caret / word / select-all) is tracked
+            // by the interactor from the raw pointer-down stream (see
+            // [_onPointerDown] → registerTapDown); this only reports the tap up,
+            // at which point the count for this tap is already known.
             recognizer.onTapUp = (details) {
               _touchInteractor.handleTap(details.globalPosition);
             };
@@ -412,9 +416,19 @@ class BulletEditorState extends State<BulletEditor>
   void _onPointerDown(PointerDownEvent event) {
     if (event.kind == PointerDeviceKind.mouse) {
       _mouseInteractor.handlePointerDown(event);
+      return;
     }
-    // Touch/stylus downs are claimed by the RawGestureDetector's recognizers
-    // (per-kind via supportedDevices); the raw Listener ignores them here.
+    // Touch/stylus downs are otherwise claimed by the RawGestureDetector's
+    // recognizers, but the arena-exempt raw Listener still sees them here —
+    // first, before any recognizer resolves. We use that to count consecutive
+    // taps (caret / word-select / select-all) from event timestamps, so the
+    // tap recognizer's `onTapUp` already knows this tap's count. (A timer-based
+    // multi-tap recognizer would trip the test binding's pending-timer check on
+    // every editor tap; this is timer-free.) Handle downs land on the overlay's
+    // own opaque Listener, not this one, so they never pollute the count.
+    if (_touchKinds.contains(event.kind)) {
+      _touchInteractor.registerTapDown(event.position, event.timeStamp);
+    }
   }
 
   void _onPointerMove(PointerMoveEvent event) {

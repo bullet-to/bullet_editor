@@ -75,6 +75,36 @@ void main() {
       expect(controller.selection!.extent.blockId, 'b');
       expect(controller.hasFocus, isTrue);
     });
+
+    testWidgets('a double-tap selects the word under the finger', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello world foo')]);
+      final p = pointFor(tester, 'a', 7); // inside "world"
+      // Space the taps in time: the interactor counts consecutive taps from
+      // their event timestamps (within kDoubleTapTimeout / kDoubleTapSlop), so
+      // two taps at the same instant would not register as a double-tap.
+      await tester.tapAt(p, kind: PointerDeviceKind.touch);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(p, kind: PointerDeviceKind.touch);
+      await tester.pump();
+
+      final (start, end) = controller.selection!.normalized(controller.document);
+      expect(start.offset, 6); // "world" start
+      expect(end.offset, 11); // "world" end
+    });
+
+    testWidgets('a triple-tap selects the whole document', (tester) async {
+      await pumpEditor(tester, [para('a', 'hello world'), para('b', 'foo bar')]);
+      final p = pointFor(tester, 'a', 2);
+      for (var i = 0; i < 3; i++) {
+        await tester.tapAt(p, kind: PointerDeviceKind.touch);
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      final (start, end) = controller.selection!.normalized(controller.document);
+      expect(start, DocPosition('a', 0));
+      expect(end, DocPosition('b', 7)); // end of "foo bar"
+    });
   });
 
   group('long-press (touch-kind)', () {
@@ -238,6 +268,66 @@ void main() {
       );
       expect(start, DocPosition('b', 0));
       expect(end.offset, greaterThan(5), reason: 'the extent extended');
+    });
+
+    // Device finding: dragging a handle PAST the opposite endpoint must invert
+    // the selection (native handle-swap), not clamp to one character. The bug:
+    // the fixed end was re-derived from the live (re-normalized) selection each
+    // move, so once the handles crossed, the anchor walked with the finger and
+    // the selection stayed ~1 char wide. The anchor is now locked at drag-start.
+    testWidgets('dragging a handle past the anchor inverts the selection', (
+      tester,
+    ) async {
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      // Mid-document (like the extent test) so the toolbar sits clear above the
+      // selection and does not overlap the END handle below it.
+      await pumpEditor(
+        tester,
+        [
+          for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+          para('b', 'hello world foo'),
+          for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+        ],
+        scrollController: scroll,
+        height: 600,
+      );
+      scroll.jumpTo(60);
+      await tester.pump();
+      // Select "world" (offsets 6..11) by double-tap.
+      final mid = pointFor(tester, 'b', 8);
+      await tester.tapAt(mid, kind: PointerDeviceKind.touch);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(mid, kind: PointerDeviceKind.touch);
+      await tester.pump();
+      await tester.pump(); // let the handle overlay lay out post-frame
+      expect(controller.selection!.normalized(controller.document).$1.offset, 6);
+
+      final interactor = stateOf(tester).touchInteractorForTest;
+      // Grab the END handle (right of "world") and drag it left, past the start
+      // of "world" and into "hello".
+      final endRect = interactor.handleAnchorRectGlobal(
+        SelectionHandleKind.end,
+      )!;
+      final gesture = await tester.startGesture(
+        endRect.bottomLeft + const Offset(0, 6),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      expect(interactor.isDragging, isTrue, reason: 'handle grab started');
+      await gesture.moveTo(pointFor(tester, 'b', 2)); // inside "hello"
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      // The anchor (start of "world", offset 6) stayed fixed; the dragged handle
+      // crossed it, so the live selection now spans [2, 6] — not clamped to one
+      // character around 6.
+      final (start, end) = controller.selection!.normalized(
+        controller.document,
+      );
+      expect(end, DocPosition('b', 6), reason: 'the anchor stayed locked');
+      expect(start.offset, lessThanOrEqualTo(3), reason: 'crossed into "hello"');
     });
 
     // The hit region pads the small glyph to a finger-sized (≈48px) target — a

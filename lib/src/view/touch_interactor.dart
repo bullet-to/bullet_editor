@@ -34,12 +34,15 @@ class _LongPressDrag extends _DragSession {
   bool moved = false;
 }
 
-/// A handle drag: moves the [kind] endpoint, hit-testing at finger +
+/// A handle drag: moves the grabbed endpoint, hit-testing at finger +
 /// [fingerToAnchorDelta] (grab-offset compensation — the bulb hangs a line off
-/// the anchor).
+/// the anchor). [anchor] is the OPPOSITE endpoint, captured at drag-start and
+/// held FIXED for the whole drag: the grabbed handle is always the moving
+/// `extent` against this `base`, so it can cross [anchor] and invert the
+/// selection (native handle-swap) without the anchor walking with the finger.
 class _HandleDrag extends _DragSession {
-  _HandleDrag(super.focalPoint, this.kind, this.fingerToAnchorDelta);
-  final SelectionHandleKind kind;
+  _HandleDrag(super.focalPoint, this.anchor, this.fingerToAnchorDelta);
+  final DocPosition anchor;
   final Offset fingerToAnchorDelta;
 }
 
@@ -191,21 +194,94 @@ class TouchInteractor extends ChangeNotifier {
   // BulletEditorState — architecture §Gestures arena participation).
   // ===========================================================================
 
-  /// A tap (the `TapGestureRecognizer` won the arena — the scrollable lost):
-  /// place a collapsed caret + focus; the editor opens IME on the resulting
-  /// selection. A void hit (midpoint-resolved 0/1) collapses onto the void,
-  /// which `setSelection` normalizes to the atomic `[0,1)` selection.
+  /// Consecutive-tap tracking (timer-free, native multi-tap). The editor's
+  /// arena-exempt raw `Listener` calls [registerTapDown] on every touch/stylus
+  /// down — first, before the tap recognizer resolves — so [handleTap] knows the
+  /// count without a lingering double-tap timer (which would trip the test
+  /// binding's pending-timer check on every editor tap).
+  int _tapCount = 0;
+  Duration _lastTapDownTime = Duration.zero;
+  Offset? _lastTapDownPosition;
+
+  /// Records a touch/stylus pointer-down for consecutive-tap counting: a down
+  /// within [kDoubleTapTimeout] AND [kDoubleTapSlop] of the previous one
+  /// increments the count, otherwise it resets to 1. Computed at down-time so
+  /// the count is ready when the tap's up fires.
+  void registerTapDown(Offset position, Duration timeStamp) {
+    final last = _lastTapDownPosition;
+    final withinTime =
+        (timeStamp - _lastTapDownTime).abs() <= kDoubleTapTimeout;
+    final withinSlop =
+        last != null && (position - last).distance <= kDoubleTapSlop;
+    _tapCount = (withinTime && withinSlop) ? _tapCount + 1 : 1;
+    _lastTapDownTime = timeStamp;
+    _lastTapDownPosition = position;
+  }
+
+  /// A tap (the `TapGestureRecognizer` won the arena — the scrollable lost),
+  /// dispatched by the consecutive-tap count tracked in [registerTapDown]
+  /// (native multi-tap, mirroring the vanilla `TextField`):
+  /// - **1** — place a collapsed caret + focus; the editor opens IME on it. A
+  ///   void hit (midpoint-resolved 0/1) collapses onto the void, which
+  ///   `setSelection` normalizes to the atomic `[0,1)` selection.
+  /// - **2** — select the word under the finger (same as a long-press, minus the
+  ///   drag-to-extend); surfaces the handles/toolbar.
+  /// - **3 or more** — select the whole document.
   ///
   /// Gutter/prefix-tap (checkbox toggle) and link-tap are day-14 surfaces
   /// owned by their own recognizers, not this method.
   void handleTap(Offset globalPosition) {
     if (_handleGestureActive) return; // a handle owns this pointer (G11)
-    _touchSelectionActive = false; // a tap collapses to a caret: no chrome
+    final count = _tapCount;
     requestFocus();
     _lastPushed = null; // a keyboard/programmatic move may have changed it
+
+    if (count >= 3) {
+      _selectAll();
+      return;
+    }
+
     final hit = hitTestDocPosition(registry, globalPosition);
-    if (hit != null) _setSelection(DocSelection.collapsed(hit));
+    if (hit == null) {
+      notifyListeners();
+      return;
+    }
+
+    if (count == 2) {
+      // Word-select like a long-press: this IS touch chrome, so show handles.
+      // Push FIRST — the controller's selection-change callback runs
+      // synchronously and (no live drag session to shield it) would otherwise
+      // reset `_touchSelectionActive`; set the flag after so the chrome stays.
+      HapticFeedback.selectionClick();
+      _setSelection(_wordSelectionAt(hit));
+      _touchSelectionActive = true;
+      notifyListeners();
+      return;
+    }
+
+    _touchSelectionActive = false; // a single tap collapses to a caret: no chrome
+    _setSelection(DocSelection.collapsed(hit));
     // The selection changed under the model, not us: refresh overlays.
+    notifyListeners();
+  }
+
+  /// Selects the whole document (triple-tap). Touch chrome, so the handles and
+  /// toolbar appear. No-op (just a focus/caret refresh) on an empty document.
+  void _selectAll() {
+    final blocks = _doc.allBlocks;
+    if (blocks.isEmpty) {
+      notifyListeners();
+      return;
+    }
+    // Push first, set the chrome flag after — see the count==2 path above.
+    HapticFeedback.selectionClick();
+    _setSelection(
+      DocSelection(
+        base: DocPosition(blocks.first.id, 0),
+        extent: DocPosition(blocks.last.id, blocks.last.length),
+      ),
+    );
+    _touchSelectionActive = true;
     notifyListeners();
   }
 
@@ -263,8 +339,18 @@ class TouchInteractor extends ChangeNotifier {
     PointerDownEvent event,
     SelectionHandleKind kind,
   ) {
+    final selection = selectionOf();
     final rect = handleAnchorRectGlobal(kind);
-    if (rect == null) return false; // null geometry ⇒ refuse the drag
+    if (rect == null || selection == null) {
+      return false; // null geometry/selection ⇒ refuse the drag
+    }
+
+    // Lock the OPPOSITE endpoint as the fixed anchor for the whole drag — the
+    // grabbed handle moves against it and may cross it (inverting the
+    // selection). Reading it once here, not per-move from the live selection, is
+    // what keeps it from walking with the finger once the handles swap order.
+    final (start, end) = selection.normalized(_doc);
+    final fixedAnchor = kind == SelectionHandleKind.start ? end : start;
 
     // The compensation target is the endpoint the handle glyph attaches to —
     // the bottom of the caret line (both native handles, Material and Cupertino,
@@ -272,8 +358,8 @@ class TouchInteractor extends ChangeNotifier {
     // finger would land a line low; finger + delta resolves back on the
     // endpoint's own line. bottomLeft is inside the endpoint's block (it is that
     // block's own caret-rect bottom), so the hit clamps onto the right line.
-    final anchorGlobal = rect.bottomLeft;
-    _session = _HandleDrag(anchorGlobal, kind, anchorGlobal - event.position);
+    final glyphGlobal = rect.bottomLeft;
+    _session = _HandleDrag(glyphGlobal, fixedAnchor, glyphGlobal - event.position);
     _handleGestureActive = true;
     _touchSelectionActive = true;
     GestureBinding.instance.pointerRouter.addRoute(
@@ -395,19 +481,17 @@ class TouchInteractor extends ChangeNotifier {
     return DocPosition(point.blockId, toStart ? word.start : word.end);
   }
 
-  /// Moves the active handle's endpoint to [point], keeping the OTHER endpoint
-  /// fixed (the model selection is the source of truth for the fixed end). A
-  /// handle drag moves by character, not word (native handle behavior).
+  /// Moves the grabbed handle to [point] against the session's FIXED [anchor]
+  /// (captured at drag-start, never re-derived — so the dragged handle can cross
+  /// the anchor and invert the selection without the anchor walking). A handle
+  /// drag moves by character, not word (native handle behavior). A swept void is
+  /// resolved by direction against the anchor so a handle dragged onto an image
+  /// covers it.
   void _moveActiveEndpointTo(DocPosition point) {
     final session = _session;
-    final selection = selectionOf();
-    if (session is! _HandleDrag || selection == null) return;
-    final (start, end) = selection.normalized(_doc);
-    // The fixed endpoint is the OTHER document-order end; resolve a swept void
-    // by direction against it so a handle dragged onto an image covers it.
-    final fixed = session.kind == SelectionHandleKind.start ? end : start;
-    point = resolveSweptVoid(point, fixed, _doc, isVoid);
-    _setSelection(DocSelection(base: fixed, extent: point));
+    if (session is! _HandleDrag) return;
+    point = resolveSweptVoid(point, session.anchor, _doc, isVoid);
+    _setSelection(DocSelection(base: session.anchor, extent: point));
   }
 
   // ===========================================================================
