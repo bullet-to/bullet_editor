@@ -152,6 +152,31 @@ class BulletEditorState extends State<BulletEditor>
             };
           },
         ),
+    // Double-tap-and-drag (the second tap held + dragged): extends the
+    // selection by word immediately, with no 500ms long-press wait and no
+    // chance for the scrollable to snipe the drag (the recognizer engages only
+    // for the 2nd+ tap and claims the arena eagerly — see
+    // [_MultiTapDragGestureRecognizer]). A single tap leaves it out of the
+    // arena, so a plain touch drag still scrolls.
+    _MultiTapDragGestureRecognizer:
+        GestureRecognizerFactoryWithHandlers<_MultiTapDragGestureRecognizer>(
+          () => _MultiTapDragGestureRecognizer(
+            supportedDevices: _touchKinds,
+            shouldEngage: () => _touchInteractor.tapCount >= 2,
+          ),
+          (recognizer) {
+            recognizer
+              ..onUpdate = (details) {
+                _touchInteractor.handleMultiTapDragUpdate(details.globalPosition);
+              }
+              ..onEnd = (_) {
+                _touchInteractor.handleMultiTapDragEnd();
+              }
+              ..onCancel = () {
+                _touchInteractor.handleMultiTapDragEnd();
+              };
+          },
+        ),
     LongPressGestureRecognizer:
         GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
           () => LongPressGestureRecognizer(supportedDevices: _touchKinds),
@@ -416,16 +441,21 @@ class BulletEditorState extends State<BulletEditor>
   void _onPointerDown(PointerDownEvent event) {
     if (event.kind == PointerDeviceKind.mouse) {
       _mouseInteractor.handlePointerDown(event);
-      return;
     }
-    // Touch/stylus downs are otherwise claimed by the RawGestureDetector's
-    // recognizers, but the arena-exempt raw Listener still sees them here —
-    // first, before any recognizer resolves. We use that to count consecutive
-    // taps (caret / word-select / select-all) from event timestamps, so the
-    // tap recognizer's `onTapUp` already knows this tap's count. (A timer-based
-    // multi-tap recognizer would trip the test binding's pending-timer check on
-    // every editor tap; this is timer-free.) Handle downs land on the overlay's
-    // own opaque Listener, not this one, so they never pollute the count.
+    // Touch/stylus downs are claimed by the RawGestureDetector's recognizers
+    // (per-kind via supportedDevices); the raw Listener ignores them here. The
+    // consecutive-tap count is recorded by a SEPARATE Listener nested INSIDE the
+    // detector (see [build]) so it runs before the recognizers' addPointer.
+  }
+
+  /// Records a touch/stylus pointer-down for the interactor's consecutive-tap
+  /// counter. Wired to a `Listener` nested inside the `RawGestureDetector` (and
+  /// thus deeper in the hit-test path than the detector's own pointer listener),
+  /// so the count is already fresh when the gesture recognizers' `addPointer`
+  /// runs — the double-tap-drag recognizer reads it there to decide whether to
+  /// engage. (Counting is timer-free, so it never leaves a pending double-tap
+  /// timer for the test binding to flag.)
+  void _onTapCountPointerDown(PointerDownEvent event) {
     if (_touchKinds.contains(event.kind)) {
       _touchInteractor.registerTapDown(event.position, event.timeStamp);
     }
@@ -536,9 +566,16 @@ class BulletEditorState extends State<BulletEditor>
                       PointerDeviceKind.trackpad,
                     },
                   ),
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    slivers: [sliver],
+                  // Nested INSIDE the RawGestureDetector so its onPointerDown
+                  // runs before the detector's recognizers' addPointer (deeper
+                  // in the hit-test path): the tap count is fresh when the
+                  // double-tap-drag recognizer decides whether to engage.
+                  child: Listener(
+                    onPointerDown: _onTapCountPointerDown,
+                    child: CustomScrollView(
+                      controller: _scrollController,
+                      slivers: [sliver],
+                    ),
                   ),
                 ),
               ),
@@ -558,5 +595,38 @@ class BulletEditorState extends State<BulletEditor>
       editorRectOf: _editorGlobalRect,
       child: editorCore,
     );
+  }
+}
+
+/// A pan recognizer for the double-tap-and-drag (the second tap of a multi-tap
+/// held and dragged): it extends the selection by word the instant the finger
+/// moves, with no long-press wait.
+///
+/// Two properties make it behave natively:
+/// - **Engages only for the 2nd+ tap.** [shouldEngage] reads the interactor's
+///   live consecutive-tap count; for a single tap the recognizer stays out of
+///   the arena entirely, so a plain touch drag still scrolls. The count is
+///   updated by a `Listener` nested inside the host `RawGestureDetector` (deeper
+///   in the hit-test path), so it is already fresh when [addAllowedPointer]
+///   runs here.
+/// - **Claims the arena eagerly.** When it does engage it resolves to accepted
+///   immediately, so an ancestor/descendant scrollable can never win the drag —
+///   even a fast flick right after the second tap extends instead of scrolling
+///   (device finding: a fast tap-tap-hold-drag used to drag the document).
+class _MultiTapDragGestureRecognizer extends PanGestureRecognizer {
+  _MultiTapDragGestureRecognizer({
+    required this.shouldEngage,
+    super.supportedDevices,
+  });
+
+  /// Whether this drag should engage for the pointer going down now (true iff a
+  /// multi-tap is in progress — read at down-time, see class doc).
+  final bool Function() shouldEngage;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    if (!shouldEngage()) return; // a single tap: leave the drag to the scrollable
+    super.addAllowedPointer(event);
+    resolve(GestureDisposition.accepted); // win outright so scroll can't snipe it
   }
 }

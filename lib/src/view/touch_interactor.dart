@@ -205,6 +205,11 @@ class TouchInteractor extends ChangeNotifier {
   Duration _lastTapDownTime = Duration.zero;
   Offset? _lastTapDownPosition;
 
+  /// The live consecutive-tap count (1 = first tap of a series). Read by the
+  /// editor's double-tap-drag recognizer at pointer-down to decide whether to
+  /// engage (≥2 ⇒ a multi-tap is in progress).
+  int get tapCount => _tapCount;
+
   /// Records a touch/stylus pointer-down for consecutive-tap counting: a down
   /// within [kDoubleTapTimeout] AND [kDoubleTapSlop] of the previous one
   /// increments the count, otherwise it resets to 1. Computed at down-time so
@@ -322,6 +327,34 @@ class TouchInteractor extends ChangeNotifier {
   /// and refresh overlays (magnifier hides, toolbar re-anchors to the final
   /// selection). The selection itself is already committed by the last move.
   void handleLongPressEnd() => _endDrag();
+
+  // ===========================================================================
+  // Double-tap-(or-triple)-and-drag: the multi-tap already selected a word/block
+  // (on the down, [registerTapDown]); holding the second tap and dragging
+  // extends BY WORD immediately — the same machinery as a long-press drag, but
+  // with no 500ms wait and guaranteed to beat the scrollable (the recognizer
+  // claims the arena eagerly). Driven by [_MultiTapDragGestureRecognizer].
+  // ===========================================================================
+
+  /// A move during a double-tap-and-drag. The drag session is created LAZILY on
+  /// the first move (anchored on the already-selected word/block), so a plain
+  /// double-tap with no drag never starts a session — hence shows no magnifier
+  /// and leaves the word simply selected.
+  void handleMultiTapDragUpdate(Offset globalPosition) {
+    if (_handleGestureActive) return; // a handle owns this pointer (G11)
+    if (_session is! _LongPressDrag) {
+      final selection = selectionOf();
+      if (selection == null) return; // nothing to anchor on
+      _session = _LongPressDrag(globalPosition, selection);
+      _touchSelectionActive = true;
+    }
+    // Reuse the long-press word-drag move (extend by word, autoscroll, magnifier
+    // focal point, scroll re-hit) — the session type is identical.
+    handleLongPressMoveUpdate(globalPosition);
+  }
+
+  /// A double-tap-and-drag ended (or was cancelled): same teardown as any drag.
+  void handleMultiTapDragEnd() => _endDrag();
 
   // ===========================================================================
   // Handle drag (G11 — pointer routing by registration, grab-offset

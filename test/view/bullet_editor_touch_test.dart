@@ -118,6 +118,57 @@ void main() {
       },
     );
 
+    // Device finding: a FAST tap-tap-hold-drag dragged the document (the
+    // scrollable sniped the gesture before the 500ms long-press could win). The
+    // double-tap-drag recognizer now engages on the second tap and claims the
+    // arena eagerly, so the drag extends by word with NO scroll, immediately.
+    testWidgets(
+      'a fast double-tap-hold-drag extends by word and does not scroll',
+      (tester) async {
+        final scroll = ScrollController();
+        addTearDown(scroll.dispose);
+        await pumpEditor(
+          tester,
+          [
+            for (var i = 0; i < 3; i++) para('p$i', 'filler line $i'),
+            para('b', 'hello world foo bar'),
+            for (var i = 0; i < 30; i++) para('q$i', 'filler line $i'),
+          ],
+          scrollController: scroll,
+          height: 400,
+        );
+        await tester.pump();
+        final scrollBefore = scroll.offset;
+
+        // Double-tap "hello" then, with NO wait, hold and drag DOWN (the
+        // direction that would scroll the vertical list) into a lower block.
+        final p = pointFor(tester, 'b', 2);
+        await tester.tapAt(p, kind: PointerDeviceKind.touch);
+        await tester.pump(const Duration(milliseconds: 50));
+        final g = await tester.startGesture(p, kind: PointerDeviceKind.touch);
+        await tester.pump(); // fast — far under the long-press timeout
+        await g.moveTo(pointFor(tester, 'q1', 2));
+        await tester.pump();
+        await g.up();
+        await tester.pump();
+
+        expect(
+          scroll.offset,
+          scrollBefore,
+          reason: 'the word-drag claimed the arena — no document scroll',
+        );
+        final (start, end) = controller.selection!.normalized(
+          controller.document,
+        );
+        expect(start, DocPosition('b', 0), reason: 'anchored on the word "hello"');
+        expect(
+          end.blockId,
+          'q1',
+          reason: 'the selection extended down to the drag point',
+        );
+      },
+    );
+
     testWidgets('a triple-tap selects the whole block (not the document)', (
       tester,
     ) async {
