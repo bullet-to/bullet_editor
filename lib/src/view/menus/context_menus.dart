@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart'
     show
         AdaptiveTextSelectionToolbar,
         ContextMenuButtonItem,
         ContextMenuButtonType;
+import 'package:flutter/services.dart'
+    show DefaultProcessTextService, ProcessTextAction, ProcessTextService;
 import 'package:flutter/widgets.dart';
 
 import '../../editor/editor_controller.dart';
@@ -63,10 +67,31 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
   /// already follow). Null when the toolbar is hidden.
   Offset? _shownAnchor;
 
+  /// Android ProcessText actions (share, translate, dictionary, web search,
+  /// "Ask Claude" …) — the system `PROCESS_TEXT` activities the stock text
+  /// field shows. Queried once at mount; empty on platforms without the service
+  /// (iOS/desktop/web/tests). Appended to the core verbs for native parity.
+  final ProcessTextService _processText = DefaultProcessTextService();
+  List<ProcessTextAction> _processActions = const [];
+
   @override
   void initState() {
     super.initState();
     widget.interactor.addListener(_sync);
+    unawaited(_loadProcessActions());
+  }
+
+  /// Loads the system ProcessText actions once. Tolerant of platforms that don't
+  /// implement the channel (the query throws there) — the list stays empty.
+  Future<void> _loadProcessActions() async {
+    try {
+      final actions = await _processText.queryTextActions();
+      if (mounted && actions.isNotEmpty) {
+        setState(() => _processActions = actions);
+      }
+    } catch (_) {
+      // No ProcessText service (iOS/desktop/web/tests) — leave the list empty.
+    }
   }
 
   @override
@@ -176,7 +201,33 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
           _hide();
         },
       ),
+      // Native parity: the system ProcessText actions (share, dictionary, web
+      // search, translate, "Ask Claude" …), in the overflow on Android.
+      for (final action in _processActions)
+        ContextMenuButtonItem(
+          label: action.label,
+          onPressed: () {
+            final text = controller.selectedPlainText();
+            _hide();
+            if (text != null) unawaited(_runProcessAction(action.id, text));
+          },
+        ),
     ];
+  }
+
+  /// Runs an Android ProcessText action on the selected [text]. A non-null
+  /// result is the transformed text (e.g. translate) and replaces the selection;
+  /// a null result means the action handled itself (share, web search, "Ask
+  /// Claude" — they open elsewhere) and the selection is left untouched.
+  Future<void> _runProcessAction(String id, String text) async {
+    try {
+      // readOnly: false — the editor is editable, so transform actions may
+      // return replacement text. (A read-only host is a future refinement.)
+      final result = await _processText.processTextAction(id, text, false);
+      if (result != null && mounted) widget.controllerOf().insertText(result);
+    } catch (_) {
+      // Action unavailable or cancelled — no-op.
+    }
   }
 
   @override

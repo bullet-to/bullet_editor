@@ -266,13 +266,13 @@ class TouchInteractor extends ChangeNotifier {
     final rect = handleAnchorRectGlobal(kind);
     if (rect == null) return false; // null geometry ⇒ refuse the drag
 
-    // The compensation target is where the bulb visually attaches to the text:
-    // the caret rect's top for the start handle (bulb above), its bottom for
-    // the end handle (bulb below). Hit-testing at finger + delta then lands on
-    // the anchor line, not a line away under the bulb.
-    final anchorGlobal = kind == SelectionHandleKind.start
-        ? rect.topLeft
-        : rect.bottomLeft;
+    // The compensation target is the endpoint the handle glyph attaches to —
+    // the bottom of the caret line (both native handles, Material and Cupertino,
+    // anchor there). The glyph hangs below the line, so hit-testing the raw
+    // finger would land a line low; finger + delta resolves back on the
+    // endpoint's own line. bottomLeft is inside the endpoint's block (it is that
+    // block's own caret-rect bottom), so the hit clamps onto the right line.
+    final anchorGlobal = rect.bottomLeft;
     _session = _HandleDrag(anchorGlobal, kind, anchorGlobal - event.position);
     _handleGestureActive = true;
     _touchSelectionActive = true;

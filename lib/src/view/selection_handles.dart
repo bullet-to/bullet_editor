@@ -1,31 +1,56 @@
-import 'package:flutter/widgets.dart';
+import 'dart:math' as math;
+
+import 'package:flutter/cupertino.dart' show cupertinoTextSelectionControls;
+import 'package:flutter/material.dart';
 
 import 'touch_interactor.dart';
 
-/// Feel-tunable visual constants for the selection handle bulbs. Device-feel
-/// (exact dimensions, color) is verified on-device later; these are sensible
-/// defaults marked tunable, not final values.
-const double _kBulbDiameter = 12.0;
-const double _kStemWidth = 2.0;
-const Color _kHandleColor = Color(0xFF2196F3);
+/// Touch target floor for a handle — the platform handle glyph is small (~22px
+/// for Material), so we pad the interactive region out to this so a finger
+/// reliably grabs it (and, critically, the opaque Listener over that region
+/// stops the pointer reaching the scrollable beneath — device finding: a 22px
+/// hit region let a near-miss fall through and scroll the list mid-grab). Native
+/// `TextSelectionOverlay` expands handles to the same `kMinInteractiveDimension`.
+const double _kMinTouchTarget = 48.0;
 
-/// The two text-selection handles (architecture §Gestures): one bulb per
-/// endpoint, positioned from `geometryOf(blockId)?.rectForOffset(...)` via the
-/// interactor's `handleAnchorRectGlobal`.
+/// The platform's selection controls — Material on Android/desktop (bottom-
+/// corner teardrops), Cupertino on iOS/macOS (bar + knob). Rendering through the
+/// framework's own controls keeps the handles native per platform (device
+/// finding: the hand-drawn iOS-style bulb+stem was wrong on Android) and correct
+/// as the OS evolves.
+TextSelectionControls _controlsFor(BuildContext context) {
+  switch (Theme.of(context).platform) {
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+      return cupertinoTextSelectionControls;
+    case TargetPlatform.android:
+    case TargetPlatform.fuchsia:
+    case TargetPlatform.linux:
+    case TargetPlatform.windows:
+      return materialTextSelectionControls;
+  }
+}
+
+/// The two text-selection handles (architecture §Gestures), rendered with the
+/// platform's native [TextSelectionControls] and positioned from the
+/// interactor's `handleAnchorRectGlobal`. Each handle attaches at the bottom
+/// corner of its endpoint's caret line (the native convention both Material and
+/// Cupertino use): the start endpoint takes the `left` handle, the end the
+/// `right`.
 ///
 /// **Visibility is a viewport predicate, not a layout predicate** (arch
 /// 1377-1386): a handle shows iff its anchor rect exists AND intersects the
-/// scroll viewport's visible bounds. This overlay paints in the app Overlay,
-/// which the viewport does NOT clip, so a handle keyed only to "laid out" would
-/// draw over the app bar as its anchor scrolls past the edge (the sliver's
-/// cacheExtent keeps it laid out beyond the visible viewport). [viewportRectOf]
-/// supplies the visible bounds.
+/// scroll viewport's visible bounds. This overlay paints in a Stack the viewport
+/// does NOT clip, so a handle keyed only to "laid out" would draw over the app
+/// bar as its anchor scrolls past the edge (the sliver's cacheExtent keeps it
+/// laid out beyond the visible viewport). [viewportRectOf] supplies the bounds.
 ///
-/// **G11 pointer-down exclusivity**: each bulb's `Listener` is
-/// `HitTestBehavior.opaque` over its whole hit region so a pointer that goes
-/// down on a handle never seeds the scrollable. **G11 drag continuity**: the
-/// down only *starts* the drag in the interactor (which owns the pointer route);
-/// the handle never owns the active gesture, so it may unmount mid-drag.
+/// **G11 pointer-down exclusivity**: the interactive region's `Listener` is
+/// `HitTestBehavior.opaque` over a full [_kMinTouchTarget] so a pointer that
+/// goes down on (or near) a handle never seeds the scrollable. **G11 drag
+/// continuity**: the down only *starts* the drag in the interactor (which owns
+/// the pointer route); the handle never owns the active gesture, so it may
+/// unmount mid-drag.
 ///
 /// Anchor rects are read POST-FRAME (the interactor can notify mid-build — e.g.
 /// from a scroll tick fired during another block's layout — and querying a
@@ -110,10 +135,23 @@ class _SelectionHandlesState extends State<SelectionHandles> {
   Widget build(BuildContext context) {
     final viewport = widget.viewportRectOf();
     final origin = widget.originOf();
+    final controls = _controlsFor(context);
     return Stack(
       children: [
-        _handle(SelectionHandleKind.start, _startAnchor, viewport, origin),
-        _handle(SelectionHandleKind.end, _endAnchor, viewport, origin),
+        _handle(
+          SelectionHandleKind.start,
+          _startAnchor,
+          viewport,
+          origin,
+          controls,
+        ),
+        _handle(
+          SelectionHandleKind.end,
+          _endAnchor,
+          viewport,
+          origin,
+          controls,
+        ),
       ],
     );
   }
@@ -123,6 +161,7 @@ class _SelectionHandlesState extends State<SelectionHandles> {
     Rect? anchor,
     Rect? viewport,
     Offset origin,
+    TextSelectionControls controls,
   ) {
     // Touch chrome only: a mouse drag-select shows no handles (arch 1248).
     // Viewport predicate (global coords): hide unless laid out AND the anchor
@@ -135,87 +174,69 @@ class _SelectionHandlesState extends State<SelectionHandles> {
     }
     return _SelectionHandle(
       kind: kind,
-      // Convert the global anchor to this Stack's local space.
-      anchorRect: anchor.shift(-origin),
+      anchorRect: anchor,
+      origin: origin,
+      controls: controls,
       interactor: widget.interactor,
     );
   }
 }
 
-/// A single positioned handle: a stem at the text edge + a draggable bulb. The
-/// start handle's bulb hangs above the line, the end handle's below — the iOS
-/// convention, and the full-line-height hang the grab-offset compensation is
-/// calibrated against.
+/// A single positioned native handle plus its padded, opaque touch target.
 class _SelectionHandle extends StatelessWidget {
   const _SelectionHandle({
     required this.kind,
     required this.anchorRect,
+    required this.origin,
+    required this.controls,
     required this.interactor,
   });
 
-  final SelectionHandleKind kind;
+  /// The endpoint's caret rect in GLOBAL coordinates.
   final Rect anchorRect;
+  final Offset origin;
+  final SelectionHandleKind kind;
+  final TextSelectionControls controls;
   final TouchInteractor interactor;
 
   @override
   Widget build(BuildContext context) {
-    final isStart = kind == SelectionHandleKind.start;
-    final stemHeight = anchorRect.height;
-    final bulbTop = isStart ? anchorRect.top - _kBulbDiameter : anchorRect.top;
-    final left = anchorRect.left - _kBulbDiameter / 2 + _kStemWidth / 2;
+    // Start endpoint → left handle, end → right (LTR; RTL flip is a follow-up).
+    final type = kind == SelectionHandleKind.start
+        ? TextSelectionHandleType.left
+        : TextSelectionHandleType.right;
+    final lineHeight = anchorRect.height;
+    final size = controls.getHandleSize(lineHeight);
+    final handleAnchor = controls.getHandleAnchor(type, lineHeight);
+    // Both handles attach at the bottom of the endpoint's line; the platform
+    // anchor places the glyph's hot-spot there.
+    final endpointGlobal = anchorRect.bottomLeft;
+    final topLeft = endpointGlobal - handleAnchor - origin;
+
+    // Pad the interactive region out to the touch-target floor, centered on the
+    // glyph, so the opaque Listener reliably catches the grab (G11).
+    final padX = math.max(0.0, (_kMinTouchTarget - size.width) / 2);
+    final padY = math.max(0.0, (_kMinTouchTarget - size.height) / 2);
 
     return Positioned(
-      left: left,
-      top: bulbTop,
+      left: topLeft.dx - padX,
+      top: topLeft.dy - padY,
       child: Listener(
-        // G11 pointer-down exclusivity: opaque over the whole hit region so a
-        // pointer down here never appears in the viewport's hit-test path.
+        // G11 pointer-down exclusivity: opaque over the whole padded region so
+        // a pointer down here never appears in the viewport's hit-test path.
         behavior: HitTestBehavior.opaque,
         onPointerDown: (event) =>
             interactor.handleHandlePointerDown(event, kind),
         // No move/up handlers: the interactor owns the pointer route from the
         // down, so move/up arrive there even after this widget unmounts (G11).
-        child: SizedBox(
-          width: _kBulbDiameter,
-          height: stemHeight + _kBulbDiameter,
-          child: CustomPaint(
-            painter: _HandlePainter(isStart: isStart, stemHeight: stemHeight),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: padX, vertical: padY),
+          child: SizedBox.fromSize(
+            size: size,
+            child: controls.buildHandle(context, type, lineHeight),
           ),
         ),
       ),
     );
   }
-}
-
-class _HandlePainter extends CustomPainter {
-  _HandlePainter({required this.isStart, required this.stemHeight});
-
-  final bool isStart;
-  final double stemHeight;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = _kHandleColor;
-    final centerX = size.width / 2;
-    final radius = _kBulbDiameter / 2;
-    if (isStart) {
-      // Bulb on top, stem descending to the text line.
-      canvas.drawCircle(Offset(centerX, radius), radius, paint);
-      canvas.drawRect(
-        Rect.fromLTWH(centerX - _kStemWidth / 2, radius, _kStemWidth, stemHeight),
-        paint,
-      );
-    } else {
-      // Stem from the text line down to the bulb at the bottom.
-      canvas.drawRect(
-        Rect.fromLTWH(centerX - _kStemWidth / 2, 0, _kStemWidth, stemHeight),
-        paint,
-      );
-      canvas.drawCircle(Offset(centerX, stemHeight + radius), radius, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_HandlePainter oldDelegate) =>
-      oldDelegate.isStart != isStart || oldDelegate.stemHeight != stemHeight;
 }

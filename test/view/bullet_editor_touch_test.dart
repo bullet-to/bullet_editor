@@ -240,6 +240,62 @@ void main() {
       expect(end.offset, greaterThan(5), reason: 'the extent extended');
     });
 
+    // Device finding (G11): a 22px handle hit region let a near-miss grab fall
+    // through and scroll the list mid-drag. The hit-slop pads the opaque region
+    // to a finger-sized target — a grab OFF the glyph centre (but within the
+    // slop) must still start the handle drag and must NOT scroll the list.
+    testWidgets('an off-centre grab within the hit-slop drags, never scrolls', (
+      tester,
+    ) async {
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await pumpEditor(
+        tester,
+        [
+          for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+          para('b', 'hello world foo'),
+          for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+        ],
+        scrollController: scroll,
+        height: 600,
+      );
+      scroll.jumpTo(60);
+      await tester.pump();
+      await tester.longPressAt(pointFor(tester, 'b', 2)); // "hello"
+      await tester.pump();
+      await tester.pump();
+      final scrollBefore = scroll.offset;
+
+      final interactor = stateOf(tester).touchInteractorForTest;
+      final endRect = interactor.handleAnchorRectGlobal(
+        SelectionHandleKind.end,
+      )!;
+      // Off the glyph centre — a few px left and below the endpoint, inside the
+      // padded touch target (≈48px) but outside the ~22px glyph.
+      final grabPoint = endRect.bottomLeft + const Offset(-10, 10);
+      final gesture = await tester.startGesture(
+        grabPoint,
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      expect(
+        interactor.isDragging,
+        isTrue,
+        reason: 'the off-centre grab still started the handle drag',
+      );
+      await gesture.moveTo(pointFor(tester, 'b', 9)); // inside "world"
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(
+        scroll.offset,
+        scrollBefore,
+        reason: 'the handle drag did not scroll the list under it',
+      );
+      expect(controller.selection!.extent.offset, greaterThan(5));
+    });
+
     testWidgets(
       'grabbing a handle without moving leaves the selection unchanged '
       '(arch 1427)',

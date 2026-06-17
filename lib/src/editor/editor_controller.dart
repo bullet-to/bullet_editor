@@ -1078,6 +1078,27 @@ class EditorController extends ChangeNotifier {
     insertText(text);
   }
 
+  /// The plain text of the current selection (newline-joined across blocks), or
+  /// null when collapsed/absent — the text handed to Android ProcessText actions
+  /// (share, translate, dictionary, web search, "Ask Claude" …), which operate
+  /// on plain text, not markdown.
+  String? selectedPlainText() {
+    final sel = _selection;
+    if (sel == null || sel.isCollapsed) return null;
+    final (start, end) = sel.normalized(_document);
+    final startIndex = _document.indexOfBlock(start.blockId);
+    final endIndex = _document.indexOfBlock(end.blockId);
+    if (startIndex < 0 || endIndex < 0) return null;
+    final blocks = _document.extractRange(
+      startIndex,
+      start.offset,
+      endIndex,
+      end.offset,
+    );
+    if (blocks.isEmpty) return null;
+    return blocks.map((b) => b.plainText).join('\n');
+  }
+
   /// Encodes the current selection as markdown, or null when there is nothing
   /// to copy (collapsed/absent selection, or a gone-id endpoint). Extracts the
   /// selected slice via `Document.extractRange` (tree structure preserved) and
