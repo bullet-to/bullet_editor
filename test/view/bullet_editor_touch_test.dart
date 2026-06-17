@@ -94,7 +94,33 @@ void main() {
       expect(end.offset, 11); // "world" end
     });
 
-    testWidgets('a triple-tap selects the whole document', (tester) async {
+    testWidgets(
+      'a double-tap-and-hold selects the word immediately (no long-press wait)',
+      (tester) async {
+        await pumpEditor(tester, [para('a', 'hello world foo')]);
+        final p = pointFor(tester, 'a', 7); // inside "world"
+        await tester.tapAt(p, kind: PointerDeviceKind.touch);
+        await tester.pump(const Duration(milliseconds: 50));
+        // The second tap is a HOLD: press and do NOT release.
+        final hold = await tester.startGesture(p, kind: PointerDeviceKind.touch);
+        await tester.pump(); // one frame — far under the long-press timeout
+
+        final (start, end) = controller.selection!.normalized(
+          controller.document,
+        );
+        expect(
+          (start.offset, end.offset),
+          (6, 11),
+          reason: 'word selected on the down, not after the long-press timeout',
+        );
+        await hold.up();
+        await tester.pump();
+      },
+    );
+
+    testWidgets('a triple-tap selects the whole block (not the document)', (
+      tester,
+    ) async {
       await pumpEditor(tester, [para('a', 'hello world'), para('b', 'foo bar')]);
       final p = pointFor(tester, 'a', 2);
       for (var i = 0; i < 3; i++) {
@@ -103,7 +129,7 @@ void main() {
       }
       final (start, end) = controller.selection!.normalized(controller.document);
       expect(start, DocPosition('a', 0));
-      expect(end, DocPosition('b', 7)); // end of "foo bar"
+      expect(end, DocPosition('a', 11)); // end of "hello world" — block 'a' only
     });
   });
 

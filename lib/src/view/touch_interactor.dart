@@ -216,73 +216,71 @@ class TouchInteractor extends ChangeNotifier {
     _tapCount = (withinTime && withinSlop) ? _tapCount + 1 : 1;
     _lastTapDownTime = timeStamp;
     _lastTapDownPosition = position;
+
+    // A multi-tap acts on the DOWN, not the up: a double-tap that becomes a HOLD
+    // must select the word IMMEDIATELY (native feel), not wait for the finger to
+    // lift or for the long-press timeout to elapse (device finding). A single
+    // tap still resolves on the up (in [handleTap]) so it can be told apart from
+    // the start of a scroll drag.
+    if (_tapCount >= 2) _selectByTapCount(position);
   }
 
-  /// A tap (the `TapGestureRecognizer` won the arena — the scrollable lost),
-  /// dispatched by the consecutive-tap count tracked in [registerTapDown]
-  /// (native multi-tap, mirroring the vanilla `TextField`):
-  /// - **1** — place a collapsed caret + focus; the editor opens IME on it. A
-  ///   void hit (midpoint-resolved 0/1) collapses onto the void, which
-  ///   `setSelection` normalizes to the atomic `[0,1)` selection.
-  /// - **2** — select the word under the finger (same as a long-press, minus the
-  ///   drag-to-extend); surfaces the handles/toolbar.
-  /// - **3 or more** — select the whole document.
+  /// A tap UP (the `TapGestureRecognizer` won the arena — the scrollable lost).
+  /// A SINGLE tap places a collapsed caret + focus here; the editor opens IME on
+  /// it. (A void hit, midpoint-resolved 0/1, collapses onto the void, which
+  /// `setSelection` normalizes to the atomic `[0,1)` selection.) A double/triple
+  /// tap already selected on the down (see [registerTapDown]), so it is a no-op
+  /// here.
   ///
   /// Gutter/prefix-tap (checkbox toggle) and link-tap are day-14 surfaces
   /// owned by their own recognizers, not this method.
   void handleTap(Offset globalPosition) {
     if (_handleGestureActive) return; // a handle owns this pointer (G11)
-    final count = _tapCount;
+    if (_tapCount >= 2) return; // the multi-tap already acted on the down
     requestFocus();
     _lastPushed = null; // a keyboard/programmatic move may have changed it
+    final hit = hitTestDocPosition(registry, globalPosition);
+    _touchSelectionActive = false; // a single tap collapses to a caret: no chrome
+    if (hit != null) _setSelection(DocSelection.collapsed(hit));
+    // The selection changed under the model, not us: refresh overlays.
+    notifyListeners();
+  }
 
-    if (count >= 3) {
-      _selectAll();
-      return;
-    }
-
+  /// Selects per the current [_tapCount] at [globalPosition] (a multi-tap, on
+  /// the down): **2** → the word under the finger; **3 or more** → the whole
+  /// block under the finger (NOT the document — native paragraph select). Both
+  /// are touch chrome, so the handles/toolbar surface.
+  void _selectByTapCount(Offset globalPosition) {
+    if (_handleGestureActive) return; // a handle owns this pointer (G11)
+    requestFocus();
+    _lastPushed = null;
     final hit = hitTestDocPosition(registry, globalPosition);
     if (hit == null) {
       notifyListeners();
       return;
     }
-
-    if (count == 2) {
-      // Word-select like a long-press: this IS touch chrome, so show handles.
-      // Push FIRST — the controller's selection-change callback runs
-      // synchronously and (no live drag session to shield it) would otherwise
-      // reset `_touchSelectionActive`; set the flag after so the chrome stays.
-      HapticFeedback.selectionClick();
-      _setSelection(_wordSelectionAt(hit));
-      _touchSelectionActive = true;
-      notifyListeners();
-      return;
-    }
-
-    _touchSelectionActive = false; // a single tap collapses to a caret: no chrome
-    _setSelection(DocSelection.collapsed(hit));
-    // The selection changed under the model, not us: refresh overlays.
+    final selection = _tapCount >= 3 ? _blockSelectionAt(hit) : _wordSelectionAt(hit);
+    // Push FIRST — the controller's selection-change callback runs synchronously
+    // and (no live drag session to shield it) would otherwise reset
+    // `_touchSelectionActive`; set the flag after so the chrome stays.
+    HapticFeedback.selectionClick();
+    _setSelection(selection);
+    _touchSelectionActive = true;
     notifyListeners();
   }
 
-  /// Selects the whole document (triple-tap). Touch chrome, so the handles and
-  /// toolbar appear. No-op (just a focus/caret refresh) on an empty document.
-  void _selectAll() {
-    final blocks = _doc.allBlocks;
-    if (blocks.isEmpty) {
-      notifyListeners();
-      return;
+  /// The whole block containing [hit] — `[0, length)` of that block (triple-tap
+  /// paragraph select). Voids fall back to their collapsed hit (normalized to
+  /// the atomic `[0,1)` by `setSelection`).
+  DocSelection _blockSelectionAt(DocPosition hit) {
+    final block = _doc.blockById(hit.blockId);
+    if (block == null || isVoid(hit.blockId)) {
+      return DocSelection.collapsed(hit);
     }
-    // Push first, set the chrome flag after — see the count==2 path above.
-    HapticFeedback.selectionClick();
-    _setSelection(
-      DocSelection(
-        base: DocPosition(blocks.first.id, 0),
-        extent: DocPosition(blocks.last.id, blocks.last.length),
-      ),
+    return DocSelection(
+      base: DocPosition(hit.blockId, 0),
+      extent: DocPosition(hit.blockId, block.length),
     );
-    _touchSelectionActive = true;
-    notifyListeners();
   }
 
   /// A long-press started (the `LongPressGestureRecognizer` won the arena,
