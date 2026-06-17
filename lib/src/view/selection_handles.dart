@@ -213,28 +213,46 @@ class _SelectionHandle extends StatelessWidget {
     final endpointGlobal = anchorRect.bottomLeft;
     final topLeft = endpointGlobal - handleAnchor - origin;
 
-    // Pad the interactive region out to the touch-target floor, centered on the
-    // glyph, so the opaque Listener reliably catches the grab (G11).
-    final padX = math.max(0.0, (_kMinTouchTarget - size.width) / 2);
-    final padY = math.max(0.0, (_kMinTouchTarget - size.height) / 2);
+    // The interactive region is deliberately generous, and extends UPWARD a
+    // full line: a finger aiming at a handle naturally lands on the selection
+    // CORNER (where the teardrop attaches to the text), a line above the glyph
+    // that hangs below. A region hugging only the glyph let that aim miss and
+    // fall through to the list, which then scrolled (device finding). It is
+    // opaque over the whole region so the pointer never seeds the scrollable
+    // (G11). Width is the touch-target floor centered on the glyph; height runs
+    // from the line top, through the glyph, to the floor below it.
+    final hitWidth = math.max(_kMinTouchTarget, size.width);
+    final hpad = (hitWidth - size.width) / 2;
+    final upPad = lineHeight;
+    final downPad = math.max(0.0, _kMinTouchTarget - size.height);
+    final hitHeight = upPad + size.height + downPad;
 
     return Positioned(
-      left: topLeft.dx - padX,
-      top: topLeft.dy - padY,
+      left: topLeft.dx - hpad,
+      top: topLeft.dy - upPad,
+      width: hitWidth,
+      height: hitHeight,
       child: Listener(
-        // G11 pointer-down exclusivity: opaque over the whole padded region so
-        // a pointer down here never appears in the viewport's hit-test path.
+        // G11 pointer-down exclusivity: opaque over the whole region so a
+        // pointer down here never appears in the viewport's hit-test path.
         behavior: HitTestBehavior.opaque,
         onPointerDown: (event) =>
             interactor.handleHandlePointerDown(event, kind),
         // No move/up handlers: the interactor owns the pointer route from the
         // down, so move/up arrive there even after this widget unmounts (G11).
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: padX, vertical: padY),
-          child: SizedBox.fromSize(
-            size: size,
-            child: controls.buildHandle(context, type, lineHeight),
-          ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // The glyph painted at its true position within the larger region.
+            Positioned(
+              left: hpad,
+              top: upPad,
+              child: SizedBox.fromSize(
+                size: size,
+                child: controls.buildHandle(context, type, lineHeight),
+              ),
+            ),
+          ],
         ),
       ),
     );

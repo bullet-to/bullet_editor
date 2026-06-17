@@ -174,10 +174,10 @@ void main() {
     // Handles are TOUCH chrome: they appear only for a touch-originated
     // selection (long-press / handle drag), never over a programmatic or mouse
     // selection (arch 1248). These tests therefore make the selection via a
-    // real long-press. The bulbs are the non-origin Positioned widgets (the
-    // editor's own overlay slots are Positioned.fill at the origin).
+    // real long-press. One private `_SelectionHandle` is built per visible
+    // handle (none when hidden), so counting them counts the visible handles.
     Finder bulbs() => find.byWidgetPredicate(
-      (w) => w is Positioned && (w.left != 0 || w.top != 0),
+      (w) => w.runtimeType.toString() == '_SelectionHandle',
     );
 
     testWidgets('two handles render on a long-press word selection', (

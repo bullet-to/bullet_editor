@@ -522,9 +522,24 @@ class BulletEditorState extends State<BulletEditor>
                       PointerDeviceKind.trackpad,
                     },
                   ),
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    slivers: [sliver],
+                  // While a touch selection drag is live (handle or
+                  // long-press), the list must not scroll under the finger —
+                  // only the autoscroller may move it, and it does so via
+                  // `jumpTo`, which `NeverScrollableScrollPhysics` still allows.
+                  // This is belt-and-suspenders over the handle's opaque
+                  // hit-absorption (G11): even a stray pointer that reached the
+                  // scrollable cannot scroll it mid-drag (device finding). Keyed
+                  // to the interactor so it engages at handle pointer-down,
+                  // before any selection change rebuilds the editor.
+                  child: ListenableBuilder(
+                    listenable: _touchInteractor,
+                    builder: (context, _) => CustomScrollView(
+                      controller: _scrollController,
+                      physics: _touchInteractor.isDragging
+                          ? const NeverScrollableScrollPhysics()
+                          : null,
+                      slivers: [sliver],
+                    ),
                   ),
                 ),
               ),
