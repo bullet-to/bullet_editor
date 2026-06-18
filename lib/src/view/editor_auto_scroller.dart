@@ -40,10 +40,12 @@ class EditorAutoScroller {
   /// per-frame step, so the physical scroll speed is identical at 60Hz and
   /// 120Hz and doesn't stutter when frame delivery is uneven — the tick scales
   /// it by real elapsed time (manual-test B5: fixed-per-frame steps jittered
-  /// under ProMotion's variable refresh). Tuned for a snappy full-depth scroll
-  /// (the ramp keeps it gentle near the boundary). Feel-tunable; identical for
-  /// mouse and touch (the edge-zone behavior is the same gesture).
-  static const _autoScrollMaxVelocity = 1800.0;
+  /// under ProMotion's variable refresh). Calibrated to the framework's own
+  /// select-to-scroll feel (~600 px/s: `EdgeDraggingAutoScroller` advances up to
+  /// `overDragMax`=20px per ~33ms step) — 1800 read as runaway-fast on device
+  /// (device finding). The ramp keeps it gentle near the boundary. Feel-tunable;
+  /// identical for mouse and touch (the edge-zone behavior is the same gesture).
+  static const _autoScrollMaxVelocity = 600.0;
 
   // Velocity is in pixels/second (signed); the tick scales it by the real
   // interval since [_lastTick] so speed is frame-rate independent.
