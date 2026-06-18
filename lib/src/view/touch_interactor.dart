@@ -591,6 +591,12 @@ class TouchInteractor extends ChangeNotifier {
   Rect? selectionBoundsGlobal() =>
       selectionBoundsRect(registry, _doc, selectionOf(), isVoid);
 
+  /// The loupe geometry (extent caret rect + its block bounds, global) for the
+  /// live drag — what the magnifier centers on. Null when no drag is active or
+  /// the extent isn't laid out, so the magnifier shows iff a drag is live.
+  ({Rect caret, Rect block})? dragLoupeRects() =>
+      _session == null ? null : extentLoupeRects(registry, _doc, selectionOf());
+
   void _endDrag() {
     final wasDragging = _session != null;
     _session = null;

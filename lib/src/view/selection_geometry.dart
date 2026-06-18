@@ -36,6 +36,29 @@ Rect? handleAnchorRect(
   return box.localToGlobal(rect.topLeft) & rect.size;
 }
 
+/// The loupe geometry for the selection's EXTENT (the endpoint a drag moves):
+/// the extent's caret rect and its block's bounds, both global. The selection
+/// magnifier centers its lens on [caret] (so it shows the line being selected,
+/// not whatever sits below-right of the finger) and clamps horizontally to
+/// [block]. Null when there's no selection or the extent's block isn't laid out.
+({Rect caret, Rect block})? extentLoupeRects(
+  BlockLayoutRegistry registry,
+  Document doc,
+  DocSelection? selection,
+) {
+  if (selection == null) return null;
+  final extent = selection.extent;
+  final geometry = registry.geometryOf(extent.blockId);
+  if (geometry == null) return null;
+  final rect = geometry.rectForOffset(extent.offset);
+  final box = geometry.renderBox;
+  if (rect == null || !box.attached || !box.hasSize) return null;
+  return (
+    caret: box.localToGlobal(rect.topLeft) & rect.size,
+    block: box.localToGlobal(Offset.zero) & box.size,
+  );
+}
+
 /// The bounding box (global) of the selection's laid-out block rects — the
 /// context-menu anchor (architecture §Context menus G14: first/last visible
 /// block rects, clamped to the viewport by the caller). Null when NO selected

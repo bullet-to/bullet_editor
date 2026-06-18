@@ -62,7 +62,10 @@ class SelectionOverlayHost extends StatelessWidget {
           ),
         ),
         Positioned.fill(
-          child: SelectionMagnifier(interactor: interactor, originOf: _origin),
+          child: SelectionMagnifier(
+            interactor: interactor,
+            fieldBoundsOf: editorRectOf,
+          ),
         ),
       ],
     );

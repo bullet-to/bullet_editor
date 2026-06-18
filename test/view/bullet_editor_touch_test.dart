@@ -261,6 +261,41 @@ void main() {
       expect(start, DocPosition('a', 0));
       expect(end.offset, greaterThanOrEqualTo(15)); // through "foo"
     });
+
+    // Device finding: the loupe magnified whatever sat below-right of the finger.
+    // The native magnifier is driven by MagnifierInfo.caretRect — which must be
+    // the EXTENT's caret rect (the line being selected), not the finger point.
+    // The lens rendering is device-feel (untested headlessly); this asserts the
+    // geometry feeding it.
+    testWidgets('the magnifier loupe centers on the drag extent', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello world foo bar')]);
+      final gesture = await tester.startGesture(
+        pointFor(tester, 'a', 2),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 10));
+      await gesture.moveTo(pointFor(tester, 'a', 13)); // into "foo"
+      await tester.pump();
+
+      final interactor = stateOf(tester).touchInteractorForTest;
+      final loupe = interactor.dragLoupeRects();
+      expect(loupe, isNotNull, reason: 'a live drag exposes loupe geometry');
+
+      // The loupe's caret == the global caret rect of the selection extent, NOT
+      // the raw finger / something below-right of it.
+      final extent = controller.selection!.extent;
+      final geo = stateOf(tester).registry.geometryOf(extent.blockId)!;
+      final expectedTopLeft = geo.renderBox.localToGlobal(
+        geo.rectForOffset(extent.offset)!.topLeft,
+      );
+      expect(loupe!.caret.topLeft, expectedTopLeft);
+
+      await gesture.up();
+      await tester.pump();
+      expect(interactor.dragLoupeRects(), isNull, reason: 'hidden after drag');
+    });
   });
 
   group('arena (plain drag scrolls, long-press-drag does not)', () {
