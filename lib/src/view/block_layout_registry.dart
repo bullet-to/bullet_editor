@@ -1,3 +1,5 @@
+import 'dart:ui' show BoxHeightStyle;
+
 import 'package:flutter/rendering.dart';
 
 /// Per-block geometry queries (GATE-L). Implemented by component States —
@@ -11,7 +13,16 @@ abstract interface class BlockGeometry {
   Rect? rectForOffset(int offset);
 
   /// Highlight rects covering the block-local range `[start, end)`.
-  List<Rect> rectsForRange(int start, int end);
+  ///
+  /// [boxHeightStyle] controls vertical extent: [BoxHeightStyle.tight] (glyph
+  /// height) by default; the selection highlight requests [BoxHeightStyle.max]
+  /// so the band fills the full line (native depth), meeting the handles whose
+  /// bottom-corner anchor sits at the line bottom.
+  List<Rect> rectsForRange(
+    int start,
+    int end, {
+    BoxHeightStyle boxHeightStyle = BoxHeightStyle.tight,
+  });
 
   /// The block-local text offset nearest to a point in [renderBox] space.
   int offsetForLocalPoint(Offset point);

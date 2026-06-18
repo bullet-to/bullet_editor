@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show BoxHeightStyle;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
@@ -299,7 +300,15 @@ class _SelectionHighlightPainter extends CustomPainter {
       );
       return;
     }
-    for (final rect in geometry.rectsForRange(range.start, range.end)) {
+    // Fill the full line height (native Android selection depth) so the band
+    // meets the handles' bottom-corner anchor — the default tight glyph box is
+    // shorter than the line when the text style carries line spacing, leaving
+    // the teardrop below the highlight (device finding).
+    for (final rect in geometry.rectsForRange(
+      range.start,
+      range.end,
+      boxHeightStyle: BoxHeightStyle.max,
+    )) {
       canvas.drawRect(rect, paint);
     }
   }

@@ -35,6 +35,20 @@ class DocPosition {
     );
   }
 
+  /// Document order against [other], resolved via [doc]: by flat block index,
+  /// then by offset. Negative if this precedes [other], positive if it
+  /// follows, zero if equal — the canonical comparison every interactor's
+  /// drag-extension math uses (no per-interactor copy). Gone ids resolve to
+  /// `indexOfBlock`'s `-1`; callers compare live positions during a drag, so
+  /// that case does not arise in practice (and is a separate concern from
+  /// [DocSelection.normalized]'s gone-id-sorts-last fallback).
+  int compareInDocument(DocPosition other, Document doc) {
+    final ia = doc.indexOfBlock(blockId);
+    final ib = doc.indexOfBlock(other.blockId);
+    if (ia != ib) return ia.compareTo(ib);
+    return offset.compareTo(other.offset);
+  }
+
   /// Equality ignores [affinity] — two positions at the same model location
   /// are the same position; affinity only disambiguates rendering.
   @override
