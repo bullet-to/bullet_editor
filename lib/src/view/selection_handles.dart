@@ -141,6 +141,10 @@ class _SelectionHandlesState extends State<SelectionHandles> {
         });
       }
     });
+    // Request the frame the callback rides on, so a notify that dirties nothing
+    // (e.g. a drag END) still recomputes promptly instead of waiting for an
+    // unrelated frame. No-op mid-frame / during a drag.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   @override

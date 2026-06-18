@@ -81,6 +81,10 @@ class _SelectionMagnifierState extends State<SelectionMagnifier> {
       if (!mounted) return;
       _apply();
     });
+    // Request the frame the callback rides on: a notify at DRAG END dirties
+    // nothing on its own, so without this the loupe would stay up until some
+    // unrelated event produced a frame (device finding). No-op mid-frame.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _apply() {

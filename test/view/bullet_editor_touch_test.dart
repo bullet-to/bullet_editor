@@ -296,6 +296,39 @@ void main() {
       await tester.pump();
       expect(interactor.dragLoupeRects(), isNull, reason: 'hidden after drag');
     });
+
+    // Device finding: on long-press release the loupe stayed up and the toolbar
+    // didn't show until some unrelated event (focus/keyboard). Cause: the
+    // overlays update in a post-frame callback, but the drag-end notify dirties
+    // nothing, so no frame was scheduled to run it. The schedulers now request a
+    // frame (ensureVisualUpdate). Tested via hasScheduledFrame — pump() forces a
+    // frame, so the "stuck" state can only be seen as a MISSING scheduled frame.
+    testWidgets('a long-press release requests a frame (loupe/toolbar settle)', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello world')]);
+      final gesture = await tester.startGesture(
+        pointFor(tester, 'a', 2),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 10));
+      await tester.pumpAndSettle(); // drag-start overlays settled → idle
+      expect(
+        tester.binding.hasScheduledFrame,
+        isFalse,
+        reason: 'precondition: nothing pending before release',
+      );
+
+      await gesture.up(); // onLongPressEnd → _endDrag → notify (dirties nothing)
+
+      expect(
+        tester.binding.hasScheduledFrame,
+        isTrue,
+        reason: 'the release auto-requested a frame, so the loupe hides and the '
+            'toolbar shows without waiting for an unrelated event',
+      );
+      await tester.pumpAndSettle();
+    });
   });
 
   group('arena (plain drag scrolls, long-press-drag does not)', () {

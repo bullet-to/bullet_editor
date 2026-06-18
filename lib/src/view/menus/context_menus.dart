@@ -118,6 +118,12 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
       if (!mounted) return;
       _reconcile();
     });
+    // Request the frame the callback rides on. A notify at DRAG END (the loupe
+    // hiding, the toolbar settling) dirties nothing on its own, so without this
+    // the post-frame callback would not run until some unrelated event produced
+    // a frame — the toolbar would appear only after, say, a focus change (device
+    // finding). No-op mid-frame / during an active drag (a frame is already due).
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _reconcile() {
