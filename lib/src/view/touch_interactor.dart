@@ -49,13 +49,17 @@ class _HandleDrag extends _DragSession {
   final Offset fingerToAnchorDelta;
 }
 
-/// A caret (collapsed-handle) drag: the Android caret drag-handle moves the
-/// COLLAPSED caret to the (grab-compensated) finger — no anchor, the whole
-/// selection stays collapsed at the hit. [fingerToAnchorDelta] keeps the
-/// hit-test on the caret line, not a line below where the teardrop hangs.
+/// A caret (collapsed-handle) gesture: a TAP on the Android caret handle toggles
+/// its context menu; a DRAG moves the COLLAPSED caret to the (grab-compensated)
+/// finger. The two are told apart by movement past [kTouchSlop] from
+/// [downPosition] — until then it may still be a tap. [fingerToAnchorDelta]
+/// projects the finger back onto the caret's line centre (not the bottom edge,
+/// which resolves to the line below). The whole selection stays collapsed.
 class _CaretDrag extends _DragSession {
-  _CaretDrag(super.focalPoint, this.fingerToAnchorDelta);
+  _CaretDrag(super.focalPoint, this.downPosition, this.fingerToAnchorDelta);
+  final Offset downPosition;
   final Offset fingerToAnchorDelta;
+  bool moved = false;
 }
 
 /// Selection gestures for touch/stylus-kind pointers, on every platform
@@ -266,27 +270,19 @@ class TouchInteractor extends ChangeNotifier {
     if (_tapCount >= 2) return; // the multi-tap already acted on the down
     requestFocus();
     _lastPushed = null; // a keyboard/programmatic move may have changed it
+    // A tap on the TEXT places/moves the caret and dismisses any caret menu (the
+    // menu is summoned by tapping the caret handle, not the text — device
+    // finding). The Android caret drag-handle shows for the touch caret.
+    _caretMenuShown = false;
     final hit = hitTestDocPosition(registry, globalPosition);
     if (hit == null) {
       _touchSelectionActive = false;
       notifyListeners();
       return;
     }
-    // Re-tap ON the existing collapsed caret → toggle its context menu (native
-    // Android: tap the caret for Paste / Select-all), leaving the caret put.
-    final current = selectionOf();
-    if (current != null && current.isCollapsed && current.extent == hit) {
-      _touchSelectionActive = true;
-      _caretMenuShown = !_caretMenuShown;
-      notifyListeners();
-      return;
-    }
-    // Otherwise place/move the caret. Touch-driven, so the Android caret
-    // drag-handle shows. Push FIRST — the controller's synchronous
-    // selection-change callback runs `onSelectionChanged`, which (no live drag to
-    // shield it) resets the touch-chrome flag; set it after so the caret handle
-    // stays. `onSelectionChanged` also clears the caret menu, which is what we
-    // want when the caret moves.
+    // Push FIRST — the controller's synchronous selection-change callback runs
+    // `onSelectionChanged`, which (no live drag to shield it) resets the
+    // touch-chrome flag; set it after so the caret handle stays.
     _setSelection(DocSelection.collapsed(hit));
     _touchSelectionActive = true;
     notifyListeners();
@@ -474,13 +470,14 @@ class TouchInteractor extends ChangeNotifier {
   bool handleCaretHandlePointerDown(PointerDownEvent event) {
     final rect = collapsedCaretRectGlobal();
     if (rect == null) return false;
-    // The collapsed teardrop attaches at the caret's bottom-center; compensate
-    // so the hit-test lands on the caret line, not the line the glyph hangs into.
-    final glyphGlobal = rect.bottomCenter;
-    _session = _CaretDrag(glyphGlobal, glyphGlobal - event.position);
+    // Compensate to the caret's LINE CENTRE: the teardrop hangs below the line,
+    // and hit-testing the bottom edge resolves to the line below (device finding:
+    // the caret jumped down a line). Whether this becomes a tap (→ menu) or a
+    // drag (→ move) is decided on move/up, so don't touch the menu flag yet.
+    final caretCentre = rect.center;
+    _session = _CaretDrag(caretCentre, event.position, caretCentre - event.position);
     _handleGestureActive = true;
     _touchSelectionActive = true;
-    _caretMenuShown = false; // dragging the caret dismisses its menu
     GestureBinding.instance.pointerRouter.addRoute(
       event.pointer,
       _onHandlePointerEvent,
@@ -501,6 +498,13 @@ class TouchInteractor extends ChangeNotifier {
         event.pointer,
         _onHandlePointerEvent,
       );
+      // A TAP on the caret handle (down + up, no drag) toggles its context menu
+      // — the native Android trigger (tap the teardrop, not the text). A drag
+      // already moved the caret and left the menu dismissed.
+      final session = _session;
+      if (event is PointerUpEvent && session is _CaretDrag && !session.moved) {
+        _caretMenuShown = !_caretMenuShown;
+      }
       _endDrag();
       // Keep suppressing the editor's tap/long-press until the same pointer's
       // arena resolves (the editor's recognizers fire their up on this frame);
@@ -525,6 +529,13 @@ class TouchInteractor extends ChangeNotifier {
       _autoScroller.update(compensated);
       notifyListeners();
     } else if (session is _CaretDrag) {
+      // Below the slop it might still be a tap (→ menu on up); don't move yet.
+      if (!session.moved &&
+          (fingerPosition - session.downPosition).distance <= kTouchSlop) {
+        return;
+      }
+      session.moved = true;
+      _caretMenuShown = false; // a drag dismisses any menu
       final compensated = fingerPosition + session.fingerToAnchorDelta;
       session.focalPoint = compensated;
       final hit = hitTestDocPosition(registry, compensated);

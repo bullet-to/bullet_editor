@@ -889,36 +889,69 @@ void main() {
       },
     );
 
-    // Native Android: re-tapping a collapsed caret (a separate single tap, NOT a
-    // double-tap) toggles a Paste / Select-all menu — no Copy/Cut (nothing
-    // selected). Tap counting keys off the pointer-down's timeStamp, which
-    // tester gestures leave at zero; drive raw events with explicit, far-apart
-    // timestamps so each is a fresh single tap, not a word-selecting double-tap.
-    testWidgets('re-tapping the caret toggles the paste menu', (tester) async {
-      await pumpEditor(tester, [para('a', 'hello world')]);
-      final p = pointFor(tester, 'a', 4);
+    // Native Android: tapping the caret HANDLE (the teardrop below the caret —
+    // not the text) toggles a Paste / Select-all menu; no Copy/Cut (nothing
+    // selected). Mid-document so the menu sits ABOVE the caret, clear of the
+    // handle (and the point below it) the test taps.
+    testWidgets('tapping the caret handle toggles the paste menu', (
+      tester,
+    ) async {
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await pumpEditor(
+        tester,
+        [
+          for (var i = 0; i < 10; i++) para('p$i', 'filler line $i'),
+          para('b', 'hello world'),
+          for (var i = 0; i < 10; i++) para('q$i', 'filler line $i'),
+        ],
+        scrollController: scroll,
+        height: 600,
+      );
+      scroll.jumpTo(60);
+      await tester.pump();
+      await tester.tapAt(
+        pointFor(tester, 'b', 4),
+        kind: PointerDeviceKind.touch,
+      ); // place caret
+      await tester.pump();
+      await tester.pump(); // caret handle lays out
       final interactor = stateOf(tester).touchInteractorForTest;
+      final caret = interactor.collapsedCaretRectGlobal()!;
+      final handlePoint = caret.bottomCenter + const Offset(0, 10);
 
-      Future<void> singleTapAt(Duration when) async {
-        final pointer = TestPointer(1, PointerDeviceKind.touch);
-        await tester.sendEventToBinding(pointer.down(p, timeStamp: when));
-        await tester.sendEventToBinding(
-          pointer.up(timeStamp: when + const Duration(milliseconds: 1)),
-        );
-        await tester.pump();
-        await tester.pump();
-      }
-
-      await singleTapAt(Duration.zero); // place caret
       expect(interactor.caretMenuShown, isFalse);
       expect(find.text('Paste'), findsNothing);
 
-      await singleTapAt(const Duration(seconds: 1)); // re-tap → menu
+      await tester.tapAt(handlePoint, kind: PointerDeviceKind.touch); // tap handle → menu
+      await tester.pump();
+      await tester.pump();
       expect(interactor.caretMenuShown, isTrue);
       expect(find.text('Paste'), findsOneWidget);
       expect(find.text('Copy'), findsNothing, reason: 'nothing selected to copy');
 
-      await singleTapAt(const Duration(seconds: 2)); // re-tap again → hide
+      await tester.tapAt(handlePoint, kind: PointerDeviceKind.touch); // tap again → hide
+      await tester.pump();
+      await tester.pump();
+      expect(interactor.caretMenuShown, isFalse);
+      expect(find.text('Paste'), findsNothing);
+    });
+
+    // A tap on the TEXT (not the handle) places a caret and never opens the menu
+    // — the menu is a handle-tap affordance, not a text-tap one.
+    testWidgets('tapping the text places a caret and shows no menu', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello world')]);
+      await tester.tapAt(
+        pointFor(tester, 'a', 8),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      await tester.pump();
+      final interactor = stateOf(tester).touchInteractorForTest;
+      expect(controller.selection!.isCollapsed, isTrue);
+      expect(controller.selection!.extent.offset, 8);
       expect(interactor.caretMenuShown, isFalse);
       expect(find.text('Paste'), findsNothing);
     });
