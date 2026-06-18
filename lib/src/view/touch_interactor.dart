@@ -188,15 +188,24 @@ class TouchInteractor extends ChangeNotifier {
   bool get touchSelectionActive => _touchSelectionActive;
   bool _touchSelectionActive = false;
 
-  /// The active drag's compensated focal point, or null when no drag is live —
-  /// the magnifier reads this (architecture §Gestures: the magnifier follows
-  /// the compensated finger point, surviving the extent block leaving the
+  /// The active drag's compensated focal point, or null when the magnifier
+  /// should not show — it follows this (architecture §Gestures: the magnifier
+  /// tracks the compensated finger point, surviving the extent block leaving the
   /// viewport).
-  Offset? get dragFocalPoint => _session?.focalPoint;
+  Offset? get dragFocalPoint => _loupeActive ? _session?.focalPoint : null;
 
   /// Whether a selection drag (long-press or handle) is live — the magnifier
   /// shows iff this is true.
   bool get isDragging => _session != null;
+
+  /// Whether the loupe should show: a live drag, EXCEPT a caret-handle press
+  /// that hasn't moved yet (it may resolve to a tap → menu; showing the loupe
+  /// and then flashing it away on the up reads as a glitch — device finding).
+  bool get _loupeActive {
+    final session = _session;
+    if (session is _CaretDrag) return session.moved;
+    return session != null;
+  }
 
   /// Whether a re-hit-applicable drag is live: a handle drag, or a long-press
   /// that has actually moved. A stationary long-press (or a mouse-path scroll)
@@ -681,10 +690,10 @@ class TouchInteractor extends ChangeNotifier {
       collapsedCaretRect(registry, _doc, selectionOf());
 
   /// The loupe geometry (extent caret rect + its block bounds, global) for the
-  /// live drag — what the magnifier centers on. Null when no drag is active or
-  /// the extent isn't laid out, so the magnifier shows iff a drag is live.
+  /// live drag — what the magnifier centers on. Null when the loupe should not
+  /// show (no drag, an unmoved caret press, or the extent isn't laid out).
   ({Rect caret, Rect block})? dragLoupeRects() =>
-      _session == null ? null : extentLoupeRects(registry, _doc, selectionOf());
+      _loupeActive ? extentLoupeRects(registry, _doc, selectionOf()) : null;
 
   void _endDrag() {
     final wasDragging = _session != null;

@@ -457,6 +457,45 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
+    // Device finding: pressing the caret handle flashed the loupe for a frame
+    // before the menu. The loupe must stay hidden until the press actually moves
+    // (an unmoved press is a tap → menu, not a drag).
+    testWidgets('no loupe on a caret-handle press until it moves', (
+      tester,
+    ) async {
+      await pumpEditor(tester, [para('a', 'hello world foo')]);
+      await tester.tapAt(
+        pointFor(tester, 'a', 2),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      await tester.pump();
+      final interactor = stateOf(tester).touchInteractorForTest;
+      final caret = interactor.collapsedCaretRectGlobal()!;
+
+      final grab = await tester.startGesture(
+        caret.bottomCenter + const Offset(0, 10),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      expect(interactor.isDragging, isTrue, reason: 'caret press started');
+      expect(
+        interactor.dragLoupeRects(),
+        isNull,
+        reason: 'no loupe before the press moves (it may be a tap)',
+      );
+
+      await grab.moveBy(const Offset(40, 0)); // now a drag
+      await tester.pump();
+      expect(
+        interactor.dragLoupeRects(),
+        isNotNull,
+        reason: 'the loupe shows once the caret is actually dragged',
+      );
+      await grab.up();
+      await tester.pump();
+    });
+
     // A mid-document line keeps the toolbar (above the selection) clear of the
     // END handle (below it) — a headless layout-collision avoidance.
     testWidgets('dragging the end handle changes the extent', (tester) async {
