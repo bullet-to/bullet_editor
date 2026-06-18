@@ -662,6 +662,55 @@ void main() {
       expect(bulbs(), findsNothing, reason: 'no bulb when the anchor is off');
       expect(controller.selection!.isCollapsed, isFalse);
     });
+
+    // Device finding: rotating portrait↔landscape with an active selection
+    // crashed — the relayout rebuilt the handles overlay inside a sliver's
+    // layout callback, and the overlay's `localToGlobal` walked an ancestor
+    // sliver child that had no position yet. The editor's rect probe now
+    // tolerates a non-walkable transform (returns null that frame).
+    //
+    // Smoke test only: the precise build-during-layout race (the handles
+    // element dirty at the exact moment the sliver creates children) is a
+    // device-timing condition we can't force headlessly, so this exercises the
+    // rotation path with a live selection and asserts no exception escapes.
+    testWidgets('rotating with an active selection does not crash', (
+      tester,
+    ) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.binding.setSurfaceSize(const Size(400, 800)); // portrait
+      controller = EditorController(
+        document: Document([
+          for (var i = 0; i < 60; i++) para('b$i', 'line number $i with words'),
+        ]),
+        schema: EditorSchema.standard(),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BulletEditor(
+              controller: controller,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF000000),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.longPressAt(pointFor(tester, 'b2', 4)); // handles live
+      await tester.pump();
+      await tester.pump();
+      expect(controller.selection, isNotNull);
+
+      // Rotate to landscape and back; the crash happened on the relayout.
+      await tester.binding.setSurfaceSize(const Size(800, 400));
+      await tester.pump();
+      await tester.binding.setSurfaceSize(const Size(400, 800));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('fallback toolbar (§Context menus)', () {

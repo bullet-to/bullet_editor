@@ -223,12 +223,24 @@ class BulletEditorState extends State<BulletEditor>
   ScrollPosition? _scrollPosition() =>
       _scrollController.hasClients ? _scrollController.position : null;
 
-  /// The editor's global rect — the autoscroll edge zone (mouse interactor)
-  /// and the keyboard ensure-visible margin (B4) both measure against it.
+  /// The editor's global rect — the autoscroll edge zone (mouse interactor),
+  /// the keyboard ensure-visible margin (B4), and every selection overlay
+  /// (handles/toolbar/magnifier origin + viewport predicate) measure against it.
   Rect? _editorGlobalRect() {
     final renderObject = context.findRenderObject();
     if (renderObject is! RenderBox || !renderObject.hasSize) return null;
-    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    // `localToGlobal` walks ancestor paint transforms. Mid-layout — e.g. an
+    // orientation change that rebuilds an overlay inside a sliver's layout
+    // callback (createChild → buildScope flushes the dirty overlay element while
+    // the sliver is still positioning its children) — an ancestor sliver child
+    // has no main-axis position yet and the walk throws. This rect only feeds
+    // overlay/edge-zone positioning, which recomputes next frame, so a transform
+    // that isn't walkable this frame is simply "no rect".
+    try {
+      return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    } on Object {
+      return null;
+    }
   }
 
   ScrollController? _ownedScrollController;
