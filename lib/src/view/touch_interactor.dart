@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -302,9 +303,28 @@ class TouchInteractor extends ChangeNotifier {
     final word = _wordSelectionAt(hit);
     _session = _LongPressDrag(globalPosition, word);
     _touchSelectionActive = true;
-    HapticFeedback.selectionClick(); // feel-tunable; device-verified later
+    _longPressHaptic();
     _setSelection(word);
     notifyListeners();
+  }
+
+  /// The haptic when a long-press grabs a selection — matched to the vanilla
+  /// field. Android/Fuchsia fire the native LONG_PRESS feedback (a clearly-felt
+  /// buzz via [HapticFeedback.vibrate], exactly what the framework's
+  /// `Feedback.forLongPress` does there); the plain selection tick is too subtle
+  /// to read as "I grabbed a selection" on Android (device finding). Other
+  /// platforms keep the lighter tick.
+  void _longPressHaptic() {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.fuchsia:
+        HapticFeedback.vibrate();
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+      case TargetPlatform.linux:
+      case TargetPlatform.windows:
+        HapticFeedback.selectionClick();
+    }
   }
 
   /// Long-press drag move: extend BY WORD from the anchor through the shared

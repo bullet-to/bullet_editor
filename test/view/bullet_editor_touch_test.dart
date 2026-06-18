@@ -1,4 +1,5 @@
 import 'package:bullet_editor/bullet_editor.dart';
+import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -198,6 +199,43 @@ void main() {
       );
       expect(start, DocPosition('a', 0));
       expect(end, DocPosition('a', 5)); // "hello"
+    });
+
+    // On Android a long-press fires the native LONG_PRESS haptic (vanilla feel),
+    // which the framework's Feedback.forLongPress maps to HapticFeedback.vibrate
+    // — over the platform channel that is `HapticFeedback.vibrate` with a NULL
+    // argument (selectionClick uses the same method with an argument string).
+    testWidgets('a long-press fires the native long-press haptic on Android', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final haptics = <Object?>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'HapticFeedback.vibrate') haptics.add(call.arguments);
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      await pumpEditor(tester, [para('a', 'hello world foo')]);
+      await tester.longPressAt(pointFor(tester, 'a', 2));
+      await tester.pump();
+      // Reset inline (not addTearDown): the binding's foundation-debug-var check
+      // runs at the end of the test body, before tear-downs.
+      debugDefaultTargetPlatformOverride = null;
+
+      expect(
+        haptics.contains(null),
+        isTrue,
+        reason: 'vibrate() (native LONG_PRESS), not the lighter selection tick',
+      );
     });
 
     testWidgets('a long-press-drag extends the selection by word', (
