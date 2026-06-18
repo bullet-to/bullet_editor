@@ -137,9 +137,15 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
       _hide();
       return;
     }
-    final bounds = interactor.selectionBoundsGlobal();
+    // A range selection always settles into a toolbar once the drag ends; a
+    // COLLAPSED caret shows one only on a deliberate re-tap (caretMenuShown) —
+    // anchored on the caret, with the caret-appropriate verbs (Paste / Select).
+    final collapsedMenu = interactor.caretMenuShown;
+    final bounds = collapsedMenu
+        ? interactor.collapsedCaretRectGlobal()
+        : interactor.selectionBoundsGlobal();
     final viewport = widget.viewportRectOf();
-    // Hide-on-fully-offscreen: no visible selection rect ⇒ no anchor.
+    // Hide-on-fully-offscreen: no visible rect ⇒ no anchor.
     if (bounds == null || viewport == null || !viewport.overlaps(bounds)) {
       _hide();
       return;
@@ -156,7 +162,7 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
       context: context,
       contextMenuBuilder: (context) => AdaptiveTextSelectionToolbar.buttonItems(
         anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
-        buttonItems: _buttonItems(),
+        buttonItems: _buttonItems(collapsed: collapsedMenu),
       ),
     );
   }
@@ -176,8 +182,28 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
     return Offset(x, y);
   }
 
-  List<ContextMenuButtonItem> _buttonItems() {
+  List<ContextMenuButtonItem> _buttonItems({bool collapsed = false}) {
     final controller = widget.controllerOf();
+    // A collapsed caret has nothing to copy/cut and no text for ProcessText —
+    // native shows only Paste + Select-all.
+    if (collapsed) {
+      return [
+        ContextMenuButtonItem(
+          type: ContextMenuButtonType.paste,
+          onPressed: () {
+            controller.pasteMarkdown();
+            _hide();
+          },
+        ),
+        ContextMenuButtonItem(
+          type: ContextMenuButtonType.selectAll,
+          onPressed: () {
+            controller.selectAll();
+            _hide();
+          },
+        ),
+      ];
+    }
     return [
       ContextMenuButtonItem(
         type: ContextMenuButtonType.copy,

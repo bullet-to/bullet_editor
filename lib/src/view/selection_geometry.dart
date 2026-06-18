@@ -36,6 +36,24 @@ Rect? handleAnchorRect(
   return box.localToGlobal(rect.topLeft) & rect.size;
 }
 
+/// The caret rect (global) of a COLLAPSED selection — the anchor for the
+/// Android caret drag-handle (the teardrop below the caret you drag to reposition
+/// it). Null when the selection is absent, a range, or the block isn't laid out.
+Rect? collapsedCaretRect(
+  BlockLayoutRegistry registry,
+  Document doc,
+  DocSelection? selection,
+) {
+  if (selection == null || !selection.isCollapsed) return null;
+  final position = selection.extent;
+  final geometry = registry.geometryOf(position.blockId);
+  if (geometry == null) return null;
+  final rect = geometry.rectForOffset(position.offset);
+  final box = geometry.renderBox;
+  if (rect == null || !box.attached || !box.hasSize) return null;
+  return box.localToGlobal(rect.topLeft) & rect.size;
+}
+
 /// The loupe geometry for the selection's EXTENT (the endpoint a drag moves):
 /// the extent's caret rect and its block's bounds, both global. The selection
 /// magnifier centers its lens on [caret] (so it shows the line being selected,

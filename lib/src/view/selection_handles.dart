@@ -95,6 +95,7 @@ class SelectionHandles extends StatefulWidget {
 class _SelectionHandlesState extends State<SelectionHandles> {
   Rect? _startAnchor;
   Rect? _endAnchor;
+  Rect? _caretAnchor; // collapsed caret (Android caret drag-handle)
   bool _scheduled = false;
 
   @override
@@ -134,10 +135,12 @@ class _SelectionHandlesState extends State<SelectionHandles> {
       final end = widget.interactor.handleAnchorRectGlobal(
         SelectionHandleKind.end,
       );
-      if (start != _startAnchor || end != _endAnchor) {
+      final caret = widget.interactor.collapsedCaretRectGlobal();
+      if (start != _startAnchor || end != _endAnchor || caret != _caretAnchor) {
         setState(() {
           _startAnchor = start;
           _endAnchor = end;
+          _caretAnchor = caret;
         });
       }
     });
@@ -152,32 +155,58 @@ class _SelectionHandlesState extends State<SelectionHandles> {
     final viewport = widget.viewportRectOf();
     final origin = widget.originOf();
     final controls = _controlsFor(context);
+    final interactor = widget.interactor;
+    // The collapsed-caret drag-handle is an Android (Material) affordance —
+    // iOS/desktop don't show a persistent caret handle. The range handles show
+    // on every platform.
+    final platform = Theme.of(context).platform;
+    final showsCaretHandle =
+        platform == TargetPlatform.android ||
+        platform == TargetPlatform.fuchsia;
     return Stack(
       children: [
         _handle(
-          SelectionHandleKind.start,
+          TextSelectionHandleType.left,
           _startAnchor,
           viewport,
           origin,
           controls,
+          (event) => interactor.handleHandlePointerDown(
+            event,
+            SelectionHandleKind.start,
+          ),
         ),
         _handle(
-          SelectionHandleKind.end,
+          TextSelectionHandleType.right,
           _endAnchor,
           viewport,
           origin,
           controls,
+          (event) => interactor.handleHandlePointerDown(
+            event,
+            SelectionHandleKind.end,
+          ),
         ),
+        if (showsCaretHandle)
+          _handle(
+            TextSelectionHandleType.collapsed,
+            _caretAnchor,
+            viewport,
+            origin,
+            controls,
+            interactor.handleCaretHandlePointerDown,
+          ),
       ],
     );
   }
 
   Widget _handle(
-    SelectionHandleKind kind,
+    TextSelectionHandleType type,
     Rect? anchor,
     Rect? viewport,
     Offset origin,
     TextSelectionControls controls,
+    void Function(PointerDownEvent) onPointerDown,
   ) {
     // Touch chrome only: a mouse drag-select shows no handles (arch 1248).
     // Viewport predicate (global coords): hide unless laid out AND the anchor
@@ -189,11 +218,11 @@ class _SelectionHandlesState extends State<SelectionHandles> {
       return const SizedBox.shrink();
     }
     return _SelectionHandle(
-      kind: kind,
+      type: type,
       anchorRect: anchor,
       origin: origin,
       controls: controls,
-      interactor: widget.interactor,
+      onPointerDown: onPointerDown,
     );
   }
 }
@@ -201,45 +230,53 @@ class _SelectionHandlesState extends State<SelectionHandles> {
 /// A single positioned native handle plus its padded, opaque touch target.
 class _SelectionHandle extends StatelessWidget {
   const _SelectionHandle({
-    required this.kind,
+    required this.type,
     required this.anchorRect,
     required this.origin,
     required this.controls,
-    required this.interactor,
+    required this.onPointerDown,
   });
 
-  /// The endpoint's caret rect in GLOBAL coordinates.
+  /// The endpoint's (or caret's) rect in GLOBAL coordinates.
   final Rect anchorRect;
   final Offset origin;
-  final SelectionHandleKind kind;
+
+  /// left/right for the selection endpoints, collapsed for the caret handle.
+  final TextSelectionHandleType type;
   final TextSelectionControls controls;
-  final TouchInteractor interactor;
+  final void Function(PointerDownEvent) onPointerDown;
 
   @override
   Widget build(BuildContext context) {
-    // Start endpoint → left handle, end → right (LTR; RTL flip is a follow-up).
-    final type = kind == SelectionHandleKind.start
-        ? TextSelectionHandleType.left
-        : TextSelectionHandleType.right;
     final lineHeight = anchorRect.height;
     final size = controls.getHandleSize(lineHeight);
     final handleAnchor = controls.getHandleAnchor(type, lineHeight);
-    // Both handles attach at the bottom of the endpoint's line; the platform
-    // anchor places the glyph's hot-spot there.
-    final endpointGlobal = anchorRect.bottomLeft;
+    // The handle attaches at the bottom of its line: the collapsed caret teardrop
+    // hangs from the caret's bottom-CENTER, the left/right bulbs from the
+    // endpoint's bottom corner. The platform anchor places the glyph's hot-spot
+    // there.
+    final endpointGlobal = type == TextSelectionHandleType.collapsed
+        ? anchorRect.bottomCenter
+        : anchorRect.bottomLeft;
     final topLeft = endpointGlobal - handleAnchor - origin;
 
-    // A touch-target-floor region centered on the glyph (the native handle
-    // expands the same way to kMinInteractiveDimension). The glyph is painted at
-    // its true position within the (possibly larger) region.
+    // A touch-target-floor region (the native handle expands the same way to
+    // kMinInteractiveDimension). The glyph is painted at its true position
+    // within the (possibly larger) region.
     final hitWidth = math.max(_kMinTouchTarget, size.width);
     final hitHeight = math.max(_kMinTouchTarget, size.height);
     final hpad = (hitWidth - size.width) / 2;
+    // The COLLAPSED caret handle must NOT extend up into the text line — it hangs
+    // below the caret, and the line above it stays tappable (tap the caret to
+    // re-place it or summon its menu). So all its vertical slack goes downward
+    // (top inset 0). The left/right selection bulbs centre on the glyph as
+    // before (no caret-tap conflict on a range).
     final vpad = (hitHeight - size.height) / 2;
+    final topInset = type == TextSelectionHandleType.collapsed ? 0.0 : vpad;
 
     return Positioned(
       left: topLeft.dx - hpad,
-      top: topLeft.dy - vpad,
+      top: topLeft.dy - topInset,
       width: hitWidth,
       height: hitHeight,
       // RawGestureDetector mounts an EagerGestureRecognizer so a pointer-down on
@@ -257,8 +294,7 @@ class _SelectionHandle extends StatelessWidget {
         },
         child: Listener(
           behavior: HitTestBehavior.opaque,
-          onPointerDown: (event) =>
-              interactor.handleHandlePointerDown(event, kind),
+          onPointerDown: onPointerDown,
           // No move/up handlers: the interactor owns the pointer route from the
           // down, so move/up arrive there even after this widget unmounts (G11).
           child: Stack(
@@ -266,7 +302,7 @@ class _SelectionHandle extends StatelessWidget {
             children: [
               Positioned(
                 left: hpad,
-                top: vpad,
+                top: topInset,
                 child: SizedBox.fromSize(
                   size: size,
                   child: controls.buildHandle(context, type, lineHeight),

@@ -405,6 +405,58 @@ void main() {
       expect(bulbs(), findsNWidgets(2));
     });
 
+    // Native Android: a collapsed caret from a tap shows a draggable teardrop
+    // handle below it; dragging it repositions the caret. (Test default platform
+    // is Android.)
+    testWidgets('a tap shows the collapsed caret handle; dragging moves the '
+        'caret', (tester) async {
+      await pumpEditor(tester, [para('a', 'hello world foo')]);
+      await tester.tapAt(
+        pointFor(tester, 'a', 2),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      await tester.pump(); // caret handle lays out post-frame
+
+      expect(controller.selection!.isCollapsed, isTrue);
+      expect(bulbs(), findsOneWidget, reason: 'one collapsed caret handle');
+
+      final interactor = stateOf(tester).touchInteractorForTest;
+      final caret = interactor.collapsedCaretRectGlobal()!;
+      // The handle hangs below the line; grab just under the caret.
+      final grab = await tester.startGesture(
+        caret.bottomCenter + const Offset(0, 6),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      expect(interactor.isDragging, isTrue, reason: 'caret handle grabbed');
+      await grab.moveTo(pointFor(tester, 'a', 9)); // into "world"
+      await tester.pump();
+      await grab.up();
+      await tester.pump();
+
+      expect(controller.selection!.isCollapsed, isTrue);
+      expect(
+        controller.selection!.extent.offset,
+        greaterThan(5),
+        reason: 'the caret moved with the handle',
+      );
+    });
+
+    testWidgets('no collapsed caret handle on iOS', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await pumpEditor(tester, [para('a', 'hello world')]);
+      await tester.tapAt(
+        pointFor(tester, 'a', 2),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(controller.selection!.isCollapsed, isTrue);
+      expect(bulbs(), findsNothing, reason: 'iOS shows no caret drag-handle');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     // A mid-document line keeps the toolbar (above the selection) clear of the
     // END handle (below it) — a headless layout-collision avoidance.
     testWidgets('dragging the end handle changes the extent', (tester) async {
@@ -836,6 +888,40 @@ void main() {
         // copy/cut/paste presence which proves the button set wired through.
       },
     );
+
+    // Native Android: re-tapping a collapsed caret (a separate single tap, NOT a
+    // double-tap) toggles a Paste / Select-all menu — no Copy/Cut (nothing
+    // selected). Tap counting keys off the pointer-down's timeStamp, which
+    // tester gestures leave at zero; drive raw events with explicit, far-apart
+    // timestamps so each is a fresh single tap, not a word-selecting double-tap.
+    testWidgets('re-tapping the caret toggles the paste menu', (tester) async {
+      await pumpEditor(tester, [para('a', 'hello world')]);
+      final p = pointFor(tester, 'a', 4);
+      final interactor = stateOf(tester).touchInteractorForTest;
+
+      Future<void> singleTapAt(Duration when) async {
+        final pointer = TestPointer(1, PointerDeviceKind.touch);
+        await tester.sendEventToBinding(pointer.down(p, timeStamp: when));
+        await tester.sendEventToBinding(
+          pointer.up(timeStamp: when + const Duration(milliseconds: 1)),
+        );
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await singleTapAt(Duration.zero); // place caret
+      expect(interactor.caretMenuShown, isFalse);
+      expect(find.text('Paste'), findsNothing);
+
+      await singleTapAt(const Duration(seconds: 1)); // re-tap → menu
+      expect(interactor.caretMenuShown, isTrue);
+      expect(find.text('Paste'), findsOneWidget);
+      expect(find.text('Copy'), findsNothing, reason: 'nothing selected to copy');
+
+      await singleTapAt(const Duration(seconds: 2)); // re-tap again → hide
+      expect(interactor.caretMenuShown, isFalse);
+      expect(find.text('Paste'), findsNothing);
+    });
 
     testWidgets('Copy puts the selection markdown on the clipboard', (
       tester,

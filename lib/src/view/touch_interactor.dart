@@ -49,6 +49,15 @@ class _HandleDrag extends _DragSession {
   final Offset fingerToAnchorDelta;
 }
 
+/// A caret (collapsed-handle) drag: the Android caret drag-handle moves the
+/// COLLAPSED caret to the (grab-compensated) finger — no anchor, the whole
+/// selection stays collapsed at the hit. [fingerToAnchorDelta] keeps the
+/// hit-test on the caret line, not a line below where the teardrop hangs.
+class _CaretDrag extends _DragSession {
+  _CaretDrag(super.focalPoint, this.fingerToAnchorDelta);
+  final Offset fingerToAnchorDelta;
+}
+
 /// Selection gestures for touch/stylus-kind pointers, on every platform
 /// (architecture §Gestures: per-kind dispatch, not platform-at-build — Android
 /// touch and web touch are launch surfaces). Mirrors [MouseInteractor]'s shape:
@@ -103,6 +112,8 @@ class TouchInteractor extends ChangeNotifier {
         final session = _session;
         if (session is _HandleDrag) {
           _moveActiveEndpointTo(hit);
+        } else if (session is _CaretDrag) {
+          _setSelection(DocSelection.collapsed(hit));
         } else if (session is _LongPressDrag) {
           _extendWordTo(hit);
         }
@@ -189,8 +200,16 @@ class TouchInteractor extends ChangeNotifier {
   bool get _isActiveRehitDrag {
     final session = _session;
     return session is _HandleDrag ||
+        session is _CaretDrag ||
         (session is _LongPressDrag && session.moved);
   }
+
+  /// Whether the user re-tapped a collapsed caret to summon its context menu
+  /// (native Android: tap the caret → Paste / Select-all). The toolbar reads
+  /// this to anchor a menu on the caret. Cleared whenever the caret moves or the
+  /// selection changes by any other path.
+  bool get caretMenuShown => _caretMenuShown;
+  bool _caretMenuShown = false;
 
   // ===========================================================================
   // Tap & long-press (driven by the interactor-owned recognizers in
@@ -248,9 +267,28 @@ class TouchInteractor extends ChangeNotifier {
     requestFocus();
     _lastPushed = null; // a keyboard/programmatic move may have changed it
     final hit = hitTestDocPosition(registry, globalPosition);
-    _touchSelectionActive = false; // a single tap collapses to a caret: no chrome
-    if (hit != null) _setSelection(DocSelection.collapsed(hit));
-    // The selection changed under the model, not us: refresh overlays.
+    if (hit == null) {
+      _touchSelectionActive = false;
+      notifyListeners();
+      return;
+    }
+    // Re-tap ON the existing collapsed caret → toggle its context menu (native
+    // Android: tap the caret for Paste / Select-all), leaving the caret put.
+    final current = selectionOf();
+    if (current != null && current.isCollapsed && current.extent == hit) {
+      _touchSelectionActive = true;
+      _caretMenuShown = !_caretMenuShown;
+      notifyListeners();
+      return;
+    }
+    // Otherwise place/move the caret. Touch-driven, so the Android caret
+    // drag-handle shows. Push FIRST — the controller's synchronous
+    // selection-change callback runs `onSelectionChanged`, which (no live drag to
+    // shield it) resets the touch-chrome flag; set it after so the caret handle
+    // stays. `onSelectionChanged` also clears the caret menu, which is what we
+    // want when the caret moves.
+    _setSelection(DocSelection.collapsed(hit));
+    _touchSelectionActive = true;
     notifyListeners();
   }
 
@@ -429,8 +467,31 @@ class TouchInteractor extends ChangeNotifier {
     return true;
   }
 
-  /// The pointer route for an active handle drag. Owned by this always-mounted
-  /// object (not the handle widget), so the gesture outlives the handle's
+  /// Begins a CARET drag from the Android collapsed-caret handle: the whole
+  /// (collapsed) selection follows the grab-compensated finger. Same pointer-
+  /// route ownership as [handleHandlePointerDown] (G11). Refuses when the caret
+  /// isn't laid out.
+  bool handleCaretHandlePointerDown(PointerDownEvent event) {
+    final rect = collapsedCaretRectGlobal();
+    if (rect == null) return false;
+    // The collapsed teardrop attaches at the caret's bottom-center; compensate
+    // so the hit-test lands on the caret line, not the line the glyph hangs into.
+    final glyphGlobal = rect.bottomCenter;
+    _session = _CaretDrag(glyphGlobal, glyphGlobal - event.position);
+    _handleGestureActive = true;
+    _touchSelectionActive = true;
+    _caretMenuShown = false; // dragging the caret dismisses its menu
+    GestureBinding.instance.pointerRouter.addRoute(
+      event.pointer,
+      _onHandlePointerEvent,
+    );
+    HapticFeedback.selectionClick();
+    notifyListeners();
+    return true;
+  }
+
+  /// The pointer route for an active handle/caret drag. Owned by this always-
+  /// mounted object (not the handle widget), so the gesture outlives the handle's
   /// `OverlayPortal` unmounting when its anchor scrolls away (G11).
   void _onHandlePointerEvent(PointerEvent event) {
     if (event is PointerMoveEvent) {
@@ -450,17 +511,27 @@ class TouchInteractor extends ChangeNotifier {
     }
   }
 
+  // Grab-offset compensation: both routed drags hit-test at the glyph's
+  // projected anchor, not the raw finger (the teardrop hangs a line off the
+  // caret/endpoint). A handle drag moves its endpoint; a caret drag re-collapses
+  // the whole selection onto the hit.
   void _moveHandleTo(Offset fingerPosition) {
     final session = _session;
-    if (session is! _HandleDrag) return;
-    // Grab-offset compensation: hit-test at the anchor's projected position,
-    // not the raw finger (the bulb hangs a line off the anchor).
-    final compensated = fingerPosition + session.fingerToAnchorDelta;
-    session.focalPoint = compensated;
-    final hit = hitTestDocPosition(registry, compensated);
-    if (hit != null) _moveActiveEndpointTo(hit);
-    _autoScroller.update(compensated);
-    notifyListeners();
+    if (session is _HandleDrag) {
+      final compensated = fingerPosition + session.fingerToAnchorDelta;
+      session.focalPoint = compensated;
+      final hit = hitTestDocPosition(registry, compensated);
+      if (hit != null) _moveActiveEndpointTo(hit);
+      _autoScroller.update(compensated);
+      notifyListeners();
+    } else if (session is _CaretDrag) {
+      final compensated = fingerPosition + session.fingerToAnchorDelta;
+      session.focalPoint = compensated;
+      final hit = hitTestDocPosition(registry, compensated);
+      if (hit != null) _setSelection(DocSelection.collapsed(hit));
+      _autoScroller.update(compensated);
+      notifyListeners();
+    }
   }
 
   /// The selection changed by some path other than this interactor's own push
@@ -472,8 +543,9 @@ class TouchInteractor extends ChangeNotifier {
     if (_session != null) return; // a live drag already notifies on each move
     // A selection change from a non-touch path (mouse drag-select, keyboard,
     // an app call) is not touch chrome's selection — drop the flag so handles /
-    // magnifier / toolbar don't appear over it.
+    // magnifier / toolbar don't appear over it, and dismiss any caret menu.
     _touchSelectionActive = false;
+    _caretMenuShown = false;
     notifyListeners();
   }
 
@@ -590,6 +662,12 @@ class TouchInteractor extends ChangeNotifier {
   /// context-menu anchor — or null when no selected block is visible.
   Rect? selectionBoundsGlobal() =>
       selectionBoundsRect(registry, _doc, selectionOf(), isVoid);
+
+  /// The caret rect (global) of a collapsed caret — the anchor for the Android
+  /// caret drag-handle and the re-tap caret menu. Null unless collapsed + laid
+  /// out.
+  Rect? collapsedCaretRectGlobal() =>
+      collapsedCaretRect(registry, _doc, selectionOf());
 
   /// The loupe geometry (extent caret rect + its block bounds, global) for the
   /// live drag — what the magnifier centers on. Null when no drag is active or
