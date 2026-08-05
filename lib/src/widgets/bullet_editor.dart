@@ -30,6 +30,7 @@ class BulletEditor<B extends Object, S extends Object, E extends Object>
     this.readOnly = false,
     this.autofocus = false,
     this.expands = false,
+    this.textCapitalization = TextCapitalization.sentences,
   });
 
   final EditorController<B, S, E> controller;
@@ -46,6 +47,12 @@ class BulletEditor<B extends Object, S extends Object, E extends Object>
   final bool readOnly;
   final bool autofocus;
   final bool expands;
+
+  /// How to capitalize text entered via the keyboard.
+  ///
+  /// Defaults to [TextCapitalization.sentences] so mobile keyboards
+  /// auto-engage shift at the start of each sentence.
+  final TextCapitalization textCapitalization;
 
   @override
   State<BulletEditor<B, S, E>> createState() => _BulletEditorState<B, S, E>();
@@ -202,6 +209,7 @@ class _BulletEditorState<B extends Object, S extends Object, E extends Object>
             expands: widget.expands,
             keyboardType: TextInputType.multiline,
             textInputAction: TextInputAction.newline,
+            textCapitalization: widget.textCapitalization,
             decoration:
                 widget.decoration ??
                 InputDecoration(

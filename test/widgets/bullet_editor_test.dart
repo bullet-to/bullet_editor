@@ -510,4 +510,69 @@ void main() {
       expect(controller.document.allBlocks.first.plainText, contains('X'));
     });
   });
+
+  group('BulletEditor text capitalization', () {
+    testWidgets('defaults to sentences so keyboards auto-capitalize', (
+      tester,
+    ) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(controller: controller),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final textField = tester.widget<TextField>(find.byType(TextField));
+      expect(textField.textCapitalization, TextCapitalization.sentences);
+    });
+
+    testWidgets('threads an explicit textCapitalization to the TextField', (
+      tester,
+    ) async {
+      final controller = EditorController(
+        schema: EditorSchema.standard(),
+        document: Document([
+          TextBlock(
+            id: 'a',
+            blockType: BlockType.paragraph,
+            segments: [const StyledSegment('hello')],
+          ),
+        ]),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: BulletEditor(
+                controller: controller,
+                textCapitalization: TextCapitalization.none,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final textField = tester.widget<TextField>(find.byType(TextField));
+      expect(textField.textCapitalization, TextCapitalization.none);
+    });
+  });
 }

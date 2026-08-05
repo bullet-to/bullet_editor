@@ -1,3 +1,12 @@
+## 0.2.1
+
+### Fixes
+- The editor's TextField now sets `textCapitalization`, defaulting to
+  `TextCapitalization.sentences`, so mobile keyboards auto-capitalize the
+  start of each sentence. Previously it defaulted to `none`, which told
+  iOS/Android not to auto-engage shift. Expose it as a `BulletEditor`
+  constructor parameter for hosts that want a different mode.
+
 ## 0.2.0
 
 ### API changes
